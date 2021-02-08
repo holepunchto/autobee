@@ -147,6 +147,7 @@ module.exports = class Autobee extends ManifestBase {
 
   async _reduce ({ node }) {
     const op = Op.decode(node.value)
+
     const apply = async (b, op) => {
       switch (op.type) {
         case Op.Type.Put:
@@ -159,11 +160,13 @@ module.exports = class Autobee extends ManifestBase {
           throw new Error('Unsupported operation type')
       }
     }
+
     if (op.batch) {
       if (!this._batch) this._batch = []
       this._batch.push(op)
       if (this._batch.length < op.batch) return []
     }
+
     const b = this._db.batch()
     if (this._batch) {
       for (const op of this._batch) {
@@ -174,6 +177,7 @@ module.exports = class Autobee extends ManifestBase {
       await apply(b, op)
     }
     await b.flush()
+
     return this._db.feed.commit()
   }
 
