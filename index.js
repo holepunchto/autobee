@@ -5,7 +5,6 @@ const debounceify = require('debounceify')
 const Hyperbee = require('hyperbee')
 
 const Autobase = require('autobase')
-const MemCore = require('autobase/lib/memory-hypercore')
 
 const { Op } = require('./lib/messages')
 
@@ -136,7 +135,7 @@ module.exports = class Autobee extends ManifestBase {
   }
 
   _init (core) {
-    this._db = new Hyperbee(this.base.decodeIndex(new MemCore(core), {
+    this._db = new Hyperbee(this.base.decodeIndex(core, {
       includeInputNodes: false,
       unwrap: true
     }), {
@@ -157,7 +156,8 @@ module.exports = class Autobee extends ManifestBase {
           await b.del(op.key, op.value)
           break
         default:
-          throw new Error('Unsupported operation type')
+          // Unsupported message types should be gracefully skipped.
+          break
       }
     }
 
