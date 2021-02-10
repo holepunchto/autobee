@@ -1,79 +1,11 @@
-const { EventEmitter } = require('events')
-
 const codecs = require('codecs')
-const debounceify = require('debounceify')
 const Hyperbee = require('hyperbee')
-
-const Autobase = require('autobase')
 
 const { Op } = require('./lib/messages')
 
-class ManifestBase extends EventEmitter {
-  constructor (manifest, key, opts = {}) {
-    super()
+const Omega = require('./omega')
 
-    if (typeof key === 'object' && !Buffer.isBuffer(key)) {
-      opts = key
-      key = null
-    }
-
-    this.key = key
-    this.opts = opts
-    this.localInput = manifest.localInput
-    this.localOutput = manifest.localOutput
-    this.inputs = manifest.inputs
-    this.outputs = manifest.outputs
-    this.description = manifest.description
-    this.opts = opts
-
-    this.base = new Autobase(this.inputs)
-
-    // TODO: How to handle append-triggered refreshes?
-    this.refresh = debounceify(this._refresh.bind(this))
-    this.base.on('input-append', () => {
-      this.refresh().catch(err => this.emit('rebase-error', err))
-    })
-  }
-
-  get input () {
-    return this._input ? this._input(this.localInput, this.opts) : this.localInput
-  }
-
-  get output () {
-    return this._output ? this._output(this.localOutput, this.opts) : this.localOutput
-  }
-
-  async _remoteRefresh (opts) {
-    const result = await this.base.remoteRebase(this.outputs, opts)
-    const stats = { ...result, output: undefined }
-    return {
-      stats,
-      output: this.base.decodeIndex(result.index, opts)
-    }
-  }
-
-  async _localRefresh (opts) {
-    const stats = await this.base.localRebase(this.localOutput, opts)
-    return {
-      stats,
-      output: this.base.decodeIndex(this.localOutput, opts)
-    }
-  }
-
-  async _refresh (opts = {}) {
-    opts = {
-      ...opts,
-      includeInputNodes: true,
-      unwrap: false,
-      reduce: this._reduce.bind(this),
-      init: this._init.bind(this)
-    }
-    if (this.outputs.length > 1) return this._remoteRefresh(opts)
-    return this._localRefresh(opts)
-  }
-}
-
-class Input {
+class AutobeeInput {
   constructor (base, core, opts = {}) {
     this.base = base
     this.core = core
@@ -119,7 +51,7 @@ class Input {
   }
 
   batch (opts = {}) {
-    return new Input(this.base, this.core, {
+    return new AutobeeInput(this.base, this.core, {
       keyEncoding: this.keyEncoding,
       valueEncoding: this.valueEncoding,
       batch: []
@@ -127,7 +59,7 @@ class Input {
   }
 }
 
-module.exports = class Autobee extends ManifestBase {
+module.exports = class Autobee extends Omega {
   constructor (manifest, key, opts = {}) {
     super(manifest, key, opts)
     this._batch = null
@@ -182,7 +114,7 @@ module.exports = class Autobee extends ManifestBase {
   }
 
   _input () {
-    return new Input(this.base, this.localInput)
+    return new AutobeeInput(this.base, this.localInput)
   }
 
   _output () {

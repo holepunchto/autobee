@@ -1,12 +1,12 @@
 const test = require('tape')
 const ram = require('random-access-memory')
-const Omega = require('omega')
+const OmegaCore = require('omega')
 
 const Autobee = require('..')
 
 test('simple single-writer', async t => {
-  const input = new Omega(ram)
-  const output = new Omega(ram)
+  const input = new OmegaCore(ram)
+  const output = new OmegaCore(ram)
   const manifest = {
     inputs: [input],
     outputs: [output],
@@ -35,10 +35,10 @@ test('simple single-writer', async t => {
 })
 
 test('simple multi-writer', async t => {
-  const input1 = new Omega(ram)
-  const input2 = new Omega(ram)
-  const output1 = new Omega(ram)
-  const output2 = new Omega(ram)
+  const input1 = new OmegaCore(ram)
+  const input2 = new OmegaCore(ram)
+  const output1 = new OmegaCore(ram)
+  const output2 = new OmegaCore(ram)
 
   const sharedManifest = {
     inputs: [input1, input2],
