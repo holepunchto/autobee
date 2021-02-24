@@ -26,7 +26,7 @@ class OmegaState extends EventEmitter {
     this._output = this._output || opts.output
 
     // TODO: How to handle append-triggered refreshes?
-    this.refresh = debounceify(this.refresh.bind(this))
+    this.refresh = debounceify(this._refresh.bind(this))
     if (this.eagerUpdate) {
       this.base.on('input-append', () => {
         this.refresh().catch(err => this.emit('refresh-error', err))
@@ -35,11 +35,11 @@ class OmegaState extends EventEmitter {
   }
 
   get input () {
-    return this._input ? this._input(this.localInput, this.opts) : this.localInput
+    return this._input ? this._input() : this.localInput
   }
 
   get output () {
-    return this._output ? this._output(this.localOutput, this.opts) : this.localOutput
+    return this._output ? this._output() : this.localOutput
   }
 
   async _remoteRefresh (opts) {
@@ -104,8 +104,8 @@ module.exports = class Omega extends EventEmitter {
 
   _deflate () {
     if (!this.state) throw new Error('Omega is not yet initialized with a manifest')
-    const sortedInputs = [...this.state.manifest.inputs].sort((i1, i2) => Buffer.compare(i1.key, i2.key))
-    const sortedOutputs = [...this.state.manifest.outputs].sort((o1, o2) => Buffer.compare(o1.key, o2.key))
+    const sortedInputs = [...this.manifest.inputs].sort((i1, i2) => Buffer.compare(i1.key, i2.key))
+    const sortedOutputs = [...this.manifest.outputs].sort((o1, o2) => Buffer.compare(o1.key, o2.key))
     return JSON.stringify({
       description: this.opts.description,
       inputs: sortedInputs.map(i => i.key.toString('hex')),
@@ -138,6 +138,10 @@ module.exports = class Omega extends EventEmitter {
     let localOutput = null
 
     const load = async (key) => {
+      if (isCore(key)) {
+        await key.ready()
+        return key
+      }
       key = Buffer.isBuffer(key) ? key : Buffer.from(key, 'hex')
       const core = this.store.get({ key })
       await core.ready()
@@ -160,7 +164,13 @@ module.exports = class Omega extends EventEmitter {
       outputs,
       localInput,
       localOutput
-    }, this.opts)
+    }, {
+      input: this._input,
+      output: this._output,
+      reduce: this._reduce,
+      init: this._init,
+      ...this.opts
+    })
     this.state.on('refresh-error', e => this.emit('refresh-error', e))
   }
 
@@ -189,6 +199,10 @@ function hash (input) {
   const output = Buffer.alloc(sodium.crypto_generichash_BYTES)
   sodium.crypto_generichash(output, input)
   return output
+}
+
+function isCore (c) {
+  return c.get && c.append && c.replicate
 }
 
 function noop () { }

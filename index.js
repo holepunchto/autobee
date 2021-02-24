@@ -60,8 +60,8 @@ class AutobeeInput {
 }
 
 module.exports = class Autobee extends Omega {
-  constructor (manifest, key, opts = {}) {
-    super(manifest, key, opts)
+  constructor (store, manifest, key, opts = {}) {
+    super(store, manifest, key, opts)
     this._batch = null
     this._db = null
   }
