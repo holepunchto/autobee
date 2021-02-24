@@ -25,12 +25,14 @@
     "protocol-buffers": "^4.2.0",
     "random-access-memory": "^3.1.2",
     "standard": "^16.0.3",
-    "tape": "^5.1.1"
+    "tape": "^5.1.1",
+    "corestore": "github:andrewosh/neocorestore#omega"
   },
   "dependencies": {
     "autobase": "github:mafintosh/autobase",
     "codecs": "^2.2.0",
     "hyperbee": "^1.5.3",
+    "hypercore-crypto": "^2.2.0",
     "omega": "github:mafintosh/omega",
     "protocol-buffers-encodings": "^1.1.1"
   },
