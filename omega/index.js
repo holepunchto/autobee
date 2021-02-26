@@ -183,14 +183,44 @@ module.exports = class Omega extends EventEmitter {
     return this.state.refresh()
   }
 
-  static async createLocal (store) {
+  static async create (store, opts) {
+    const input = store.get({ name: INPUT_NAME })
+    const output = store.get({ name: OUTPUT_NAME })
+    const manifest = {
+      inputs: [input],
+      outputs: [output],
+      localInput: input,
+      localOutput: output
+    }
+    const omega = new this(store, manifest, opts)
+    await omega.ready()
+    return omega
+  }
+
+  static async join (store, other, opts) {
+    const existingManifest = other.manifest
     const input = store.get({ name: INPUT_NAME })
     const output = store.get({ name: OUTPUT_NAME })
     await Promise.allSettled([input.ready(), output.ready()])
-    return {
-      input,
-      output
+
+    let addInput = true
+    let addOutput = true
+    for (const i of existingManifest.inputs) {
+      if (i.key.equals(input.key)) addInput = false
     }
+    for (const o of existingManifest.outputs) {
+      if (o.key.equals(output.key)) addOutput = false
+    }
+
+    const manifest = {
+      inputs: addInput ? [...existingManifest.inputs, input] : existingManifest.inputs,
+      outputs: addOutput ? [...existingManifest.outputs, output] : existingManifest.outputs,
+      localInput: input,
+      localOutput: output
+    }
+    const omega = new this(store, manifest, opts)
+    await omega.ready()
+    return omega
   }
 }
 

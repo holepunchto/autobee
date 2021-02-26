@@ -6,21 +6,10 @@ const Autobee = require('..')
 
 test('simple single-writer', async t => {
   const store = new Corestore(ram)
-
-  const input = store.get({ name: 'input1' })
-  const output = store.get({ name: 'output1' })
-  const manifest = {
-    inputs: [input],
-    outputs: [output],
-    localInput: input,
-    localOutput: output
-  }
-
-  const bee = new Autobee(store, manifest, {
+  const bee = await Autobee.create(store, {
     keyEncoding: 'utf-8',
     valueEncoding: 'utf-8'
   })
-  await bee.ready()
 
   const b = bee.input.batch()
   await b.put('a', 'b')
@@ -41,51 +30,25 @@ test('simple single-writer', async t => {
 test('simple multi-writer', async t => {
   const store = new Corestore(ram)
 
-  const input1 = store.get({ name: 'input1' })
-  const input2 = store.get({ name: 'input2' })
-  const output1 = store.get({ name: 'output1' })
-  const output2 = store.get({ name: 'output2' })
+  const bee1 = await Autobee.create(store.namespace('bee1'), {
+    keyEncoding: 'utf-8',
+    valueEncoding: 'utf-8'
+  })
+  const bee2 = await Autobee.join(store.namespace('bee2'), bee1, {
+    keyEncoding: 'utf-8',
+    valueEncoding: 'utf-8'
+  })
 
-  const sharedManifest = {
-    inputs: [input1, input2],
-    outputs: [output1, output2]
+  await bee1.input.put('a', 'b')
+  await bee2.input.put('c', 'd')
+  await bee2.refresh()
+
+  const buf = []
+  for await (const { key, value } of bee2.output.createReadStream()) {
+    buf.push([key, value])
   }
 
-  {
-    const manifest = {
-      ...sharedManifest,
-      localInput: input1,
-      localOutput: output1
-    }
-    const bee = new Autobee(store, manifest, {
-      keyEncoding: 'utf-8',
-      valueEncoding: 'utf-8'
-    })
-    await bee.ready()
-    await bee.input.put('a', 'b')
-  }
-
-  {
-    const manifest = {
-      ...sharedManifest,
-      localInput: input2,
-      localOutput: output2
-    }
-    const bee = new Autobee(store, manifest, {
-      keyEncoding: 'utf-8',
-      valueEncoding: 'utf-8'
-    })
-    await bee.ready()
-    await bee.input.put('c', 'd')
-    await bee.refresh()
-
-    const buf = []
-    for await (const { key, value } of bee.output.createReadStream()) {
-      buf.push([key, value])
-    }
-
-    t.same(buf, [['a', 'b'], ['c', 'd']])
-  }
+  t.same(buf, [['a', 'b'], ['c', 'd']])
 
   t.end()
 })
