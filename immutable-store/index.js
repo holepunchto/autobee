@@ -5,7 +5,6 @@ const { Message } = require('./lib/messages')
 const VERSION = 'v1'
 const CAP_NAMESPACE = Buffer.from(`immutable store capability ${VERSION}`)
 const EXTENSION_NAME = `immutable-store/${VERSION}`
-// How long to wait for a reply.
 const DEFAULT_TIMEOUT = 2.5 * 1000
 
 class MapDb {
@@ -14,13 +13,11 @@ class MapDb {
   }
 
   put (key, val) {
-    if (Buffer.isBuffer(key)) key = key.toString('hex')
-    this.m.set(key, val)
+    this.m.set(key.toString('hex'), val)
   }
 
   get (key) {
-    if (Buffer.isBuffer(key)) key = key.toString('hex')
-    return this.m.get(key)
+    return this.m.get(key.toString('hex'))
   }
 }
 
@@ -37,9 +34,10 @@ module.exports = class ImmutableStore {
 
     this._debug = opts.debug
     this._onerror = opts.onerror
-    this._timeout = opts.timeout || DEFAULT_TIMEOUT
+
     this._exts = new Map()
     this._pending = new Map()
+    this._timeout = opts.timeout || DEFAULT_TIMEOUT
   }
 
   _verifyCapability (stream, hash, cap) {

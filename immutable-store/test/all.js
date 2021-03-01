@@ -128,6 +128,39 @@ test('empty response scenarios', async t => {
   t.end()
 })
 
+test('parallel gets should only trigger one request', async t => {
+  const o1 = Omega.createProtocolStream(true)
+  const o2 = Omega.createProtocolStream(false)
+  o1.pipe(o2).pipe(o1)
+
+  let received = 0
+  const store1 = new ImmutableStore({
+    timeout: 50,
+    debug: {
+      onmessage () {
+        received++
+      }
+    }
+  })
+  const store2 = new ImmutableStore()
+
+  store1.register(o1)
+  store2.register(o2)
+
+  const h1 = await store1.put(Buffer.from('a'))
+
+  const promises = []
+  for (let i = 0; i < 5; i++) {
+    promises.push(store2.get(h1))
+  }
+
+  const results = await Promise.all(promises)
+  t.same(Buffer.concat(results), Buffer.from('aaaaa'))
+  t.same(received, 1)
+
+  t.end()
+})
+
 function randomBytes (len) {
   const buf = Buffer.allocUnsafe(len)
   sodium.randombytes_buf(buf)
