@@ -20,22 +20,18 @@ const Request = {
 const Response = {
   preencode (state, rsp) {
     c.buffer.preencode(state, rsp.discoveryKey)
+    c.bool.preencode(state, !!rsp.hash)
     if (rsp.hash) {
-      c.bool.preencode(state, 1)
       c.buffer.preencode(state, rsp.hash)
       c.buffer.preencode(state, rsp.value)
-    } else {
-      c.bool.preencode(state, 0)
     }
   },
   encode (state, rsp) {
     c.buffer.encode(state, rsp.discoveryKey)
+    c.bool.encode(state, !!rsp.hash)
     if (rsp.hash) {
-      c.bool.encode(state, 1)
       c.buffer.encode(state, rsp.hash)
       c.buffer.encode(state, rsp.value)
-    } else {
-      c.bool.encode(state, 0)
     }
   },
   decode (state) {

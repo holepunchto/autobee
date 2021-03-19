@@ -113,8 +113,8 @@ module.exports = class Autobee extends Omega {
     return this._db.feed.commit()
   }
 
-  _input () {
-    return new AutobeeInput(this.base, this.localInput)
+  _input (base, core) {
+    return new AutobeeInput(base, core)
   }
 
   _output () {

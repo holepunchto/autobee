@@ -1,29 +1,110 @@
 const { EventEmitter } = require('events')
-
-const crypto = require('hypercore-crypto')
-const sodium = require('sodium-universal')
 const debounceify = require('debounceify')
 const Autobase = require('autobase')
+
+const { Manifest: ManifestEncoding, User: UserEncoding } = require('./lib/messages')
 
 const INPUT_NAME = '@omega/input'
 const OUTPUT_NAME = '@omega/output'
 
-class OmegaState extends EventEmitter {
-  constructor (manifest, opts = {}) {
-    super()
-    this.opts = opts
+class User {
+  constructor (data) {
+    this._data = Buffer.isBuffer(data) ? UserEncoding.fullDecode(data) : data
+    this._inflated = null
+  }
 
-    this.localInput = manifest.localInput
-    this.localOutput = manifest.localOutput
-    this.inputs = manifest.inputs
-    this.outputs = manifest.outputs
-    this.description = manifest.description
-    this.base = new Autobase(this.inputs)
+  get input () {
+    return this._inflated && this._inflated.input
+  }
+
+  get output () {
+    return this._inflated && this._inflated.output
+  }
+
+  encode () {
+    return UserEncoding.fullEncode(this.deflate())
+  }
+
+  deflate () {
+    return {
+      input: isCore(this._data.input) ? this._data.input.key : this._data.input,
+      output: isCore(this._data.output) ? this._data.output.key : this._data.output
+    }
+  }
+
+  inflate (store) {
+    // TODO: If inflating can only happen once, `store` should probably be a constructor arg.
+    if (this._inflated) return this._inflated
+    this._inflated = {
+      input: isCore(this._data.input) ? this._data.input : store.get({ key: this._data.input }),
+      output: isCore(this._data.output) ? this._data.output : store.get({ key: this._data.output })
+    }
+    return this._inflated
+  }
+}
+
+class Manifest {
+  constructor (data) {
+    this._data = Buffer.isBuffer(data) ? ManifestEncoding.fullDecode(data) : data
+    this._inflated = null
+  }
+
+  get inputs () {
+    return this._inflated && this._inflated.users.map(u => u.input)
+  }
+
+  get outputs () {
+    return this._inflated && this._inflated.users.map(u => u.output)
+  }
+
+  encode () {
+    return ManifestEncoding.fullEncode(this.deflate())
+  }
+
+  deflate () {
+    return {
+      users: this._data.users.map(u => u.deflate())
+    }
+  }
+
+  inflate (store) {
+    // TODO: If inflating can only happen once, `store` should probably be a constructor arg.
+    if (this._inflated) return this._inflated
+    this._inflated = {
+      users: this._data.users.map(u => u.inflate(store))
+    }
+    return this._inflated
+  }
+}
+
+class DefaultInput {
+  constructor (base, core) {
+    this.base = base
+    this.core = core
+  }
+
+  async append (block) {
+    return this.base.append(this.core, block, await this.base.latest())
+  }
+}
+
+module.exports = class Omega extends EventEmitter {
+  constructor (corestore, manifest, user, opts = {}) {
+    super()
+    this.corestore = corestore
+    this.manifest = new Manifest(manifest)
+    this.user = new User(user)
+    // Set when opened.
+    this.base = null
 
     this._init = this._init || opts.init
     this._reduce = this._reduce || opts.reduce
     this._input = this._input || opts.input
     this._output = this._output || opts.output
+
+    this.opened = false
+    this.opening = this._open()
+    this.opening.catch(noop)
 
     // TODO: How to handle append-triggered refreshes?
     this.refresh = debounceify(this._refresh.bind(this))
@@ -34,16 +115,26 @@ class OmegaState extends EventEmitter {
     }
   }
 
+  ready () {
+    return this.opening
+  }
+
   get input () {
-    return this._input ? this._input() : this.localInput
+    return this._input ? this._input(this.base, this.user?.input) : new DefaultInput(this.base, this.user?.input)
   }
 
   get output () {
-    return this._output ? this._output() : this.localOutput
+    return this._output ? this._output(this.base, this.user?.output) : this.base.decodeIndex(this.user?.output, { includeInputNodes: false, unwrap: true })
+  }
+
+  async _open () {
+    if (this.user) await this.user.inflate(this.corestore)
+    await this.manifest.inflate(this.corestore)
+    this.base = new Autobase(this.manifest.inputs)
   }
 
   async _remoteRefresh (opts) {
-    const result = await this.base.remoteRebase(this.outputs, opts)
+    const result = await this.base.remoteRebase(this.manifest.outputs, opts)
     const stats = { ...result, output: undefined }
     return {
       stats,
@@ -52,10 +143,10 @@ class OmegaState extends EventEmitter {
   }
 
   async _localRefresh (opts) {
-    const stats = await this.base.localRebase(this.localOutput, opts)
+    const stats = await this.base.localRebase(this.user.output, opts)
     return {
       stats,
-      output: this.base.decodeIndex(this.localOutput, opts)
+      output: this.base.decodeIndex(this.user.output, opts)
     }
   }
 
@@ -67,172 +158,41 @@ class OmegaState extends EventEmitter {
       reduce: this._reduce.bind(this),
       init: this._init.bind(this)
     }
-    if (!this.localOutput) return this._remoteRefresh(opts)
+    if (!this.user) return this._remoteRefresh(opts)
     return this._localRefresh(opts)
-  }
-}
-
-module.exports = class Omega extends EventEmitter {
-  constructor (store, manifest, key, opts = {}) {
-    super()
-
-    if (key instanceof Object && !Buffer.isBuffer(key)) {
-      opts = key
-      key = null
-    }
-
-    this.key = key
-    this.discoveryKey = key ? crypto.discoveryKey(key) : null
-
-    this.store = store
-    this.manifest = manifest
-    this.opts = opts
-    this.state = null
-
-    this.inflated = null
-    this.opening = this.ready()
-    this.opening.catch(noop)
-  }
-
-  get input () {
-    return this.state && this.state.input
-  }
-
-  get output () {
-    return this.state && this.state.output
-  }
-
-  _deflate () {
-    if (!this.state) throw new Error('Omega is not yet initialized with a manifest')
-    const sortedInputs = [...this.manifest.inputs].sort((i1, i2) => Buffer.compare(i1.key, i2.key))
-    const sortedOutputs = [...this.manifest.outputs].sort((o1, o2) => Buffer.compare(o1.key, o2.key))
-    return JSON.stringify({
-      description: this.opts.description,
-      inputs: sortedInputs.map(i => i.key.toString('hex')),
-      outputs: sortedOutputs.map(o => o.key.toString('hex'))
-    })
-  }
-
-  async _generateKeys () {
-    if (this.key) {
-      this.discoveryKey = crypto.discoveryKey(this.key)
-    } else {
-      await this.inflate(this.manifest)
-      this.key = hash(this._deflate())
-      this.discoveryKey = crypto.discoveryKey(this.key)
-    }
-  }
-
-  async ready () {
-    if (!this.key && !this.manifest) throw new Error('Either a key or a manifest must be provided')
-    await this._generateKeys()
-  }
-
-  async inflate (manifest, opts = {}) {
-    if (this.state) return
-    this.manifest = manifest
-
-    const inputs = []
-    const outputs = []
-    let localInput = null
-    let localOutput = null
-
-    const load = async (key) => {
-      if (isCore(key)) {
-        await key.ready()
-        return key
-      }
-      key = Buffer.isBuffer(key) ? key : Buffer.from(key, 'hex')
-      const core = this.store.get({ key })
-      await core.ready()
-      return core
-    }
-
-    for (const input of manifest.inputs) {
-      const core = await load(input)
-      if (core.writable) localInput = core
-      inputs.push(core)
-    }
-    for (const output of manifest.outputs) {
-      const core = await load(output)
-      if (core.writable) localOutput = core
-      outputs.push(core)
-    }
-
-    this.state = new OmegaState({
-      inputs,
-      outputs,
-      localInput,
-      localOutput
-    }, {
-      input: this._input,
-      output: this._output,
-      reduce: this._reduce,
-      init: this._init,
-      ...this.opts
-    })
-    this.state.on('refresh-error', e => this.emit('refresh-error', e))
   }
 
   replicate (isInitiator, opts = {}) {
-    return this.store.replicate(isInitiator, opts)
+    return this.corestore.replicate(isInitiator, opts)
   }
 
-  async refresh () {
-    if (!this.state) throw new Error('Omega is not yet initialized with a manifest')
-    return this.state.refresh()
+  static async createUser (store) {
+    const user = new User({
+      input: store.get({ name: INPUT_NAME }),
+      output: store.get({ name: OUTPUT_NAME })
+    })
+    await user.inflate(store)
+    await Promise.allSettled([user.input.ready(), user.output.ready()])
+    return user
   }
 
-  static async create (store, opts) {
-    const input = store.get({ name: INPUT_NAME })
-    const output = store.get({ name: OUTPUT_NAME })
+  static async create (store, users, opts) {
+    users = users.map(u => ({
+      input: store.get({ key: u.input }),
+      output: store.get({ key: u.output })
+    }))
+    const localUser = this.createUser(store)
     const manifest = {
-      inputs: [input],
-      outputs: [output],
-      localInput: input,
-      localOutput: output
+      users: [...users, localUser]
     }
-    const omega = new this(store, manifest, opts)
+    const omega = new this(store, manifest, localUser, opts)
     await omega.ready()
     return omega
   }
-
-  static async join (store, other, opts) {
-    const existingManifest = other.manifest
-    const input = store.get({ name: INPUT_NAME })
-    const output = store.get({ name: OUTPUT_NAME })
-    await Promise.allSettled([input.ready(), output.ready()])
-
-    let addInput = true
-    let addOutput = true
-    for (const i of existingManifest.inputs) {
-      if (i.key.equals(input.key)) addInput = false
-    }
-    for (const o of existingManifest.outputs) {
-      if (o.key.equals(output.key)) addOutput = false
-    }
-
-    const manifest = {
-      inputs: addInput ? [...existingManifest.inputs, input] : existingManifest.inputs,
-      outputs: addOutput ? [...existingManifest.outputs, output] : existingManifest.outputs,
-      localInput: input,
-      localOutput: output
-    }
-    const omega = new this(store, manifest, opts)
-    await omega.ready()
-    return omega
-  }
-}
-
-function hash (input) {
-  input = Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf-8')
-  const output = Buffer.alloc(sodium.crypto_generichash_BYTES)
-  sodium.crypto_generichash(output, input)
-  return output
 }
 
 function isCore (c) {
-  return c.get && c.append && c.replicate
+  return c && c.get && c.append && c.replicate
 }
 
 function noop () { }

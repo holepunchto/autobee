@@ -135,7 +135,6 @@ test('parallel gets should only trigger one request', async t => {
 
   let received = 0
   const store1 = new ImmutableStore({
-    timeout: 50,
     debug: {
       onmessage () {
         received++

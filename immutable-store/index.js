@@ -133,7 +133,7 @@ module.exports = class ImmutableStore {
   async get (hash, opts = {}) {
     const discoveryKey = deriveHash(hash)
     const existing = await this.db.get(discoveryKey)
-    if (existing || opts.local || !this._exts.size) return existing.value
+    if (existing || opts.local || !this._exts.size) return existing && existing.value
 
     const id = keyString(discoveryKey)
     const keys = { hash, discoveryKey, id }
