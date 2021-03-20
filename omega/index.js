@@ -47,6 +47,9 @@ class Manifest {
   constructor (data) {
     this._data = Buffer.isBuffer(data) ? ManifestEncoding.fullDecode(data) : data
     this._inflated = null
+    if (this._data.users) {
+      this._data.users = this._data.users.map(u => (u instanceof User) ? u : new User(u))
+    }
   }
 
   get inputs () {
@@ -55,6 +58,10 @@ class Manifest {
 
   get outputs () {
     return this._inflated && this._inflated.users.map(u => u.output)
+  }
+
+  get users () {
+    return this._inflated && this._inflated.users
   }
 
   encode () {
@@ -71,7 +78,11 @@ class Manifest {
     // TODO: If inflating can only happen once, `store` should probably be a constructor arg.
     if (this._inflated) return this._inflated
     this._inflated = {
-      users: this._data.users.map(u => u.inflate(store))
+      users: this._data.users.map(u => {
+        if (!(u instanceof User)) u = new User(u)
+        u.inflate(store)
+        return u
+      })
     }
     return this._inflated
   }
@@ -83,8 +94,8 @@ class DefaultInput {
     this.core = core
   }
 
-  async append (block) {
-    return this.base.append(this.core, block, await this.base.latest())
+  async append (block, links) {
+    return this.base.append(this.core, block, links)
   }
 }
 
@@ -92,8 +103,8 @@ module.exports = class Omega extends EventEmitter {
   constructor (corestore, manifest, user, opts = {}) {
     super()
     this.corestore = corestore
-    this.manifest = new Manifest(manifest)
-    this.user = new User(user)
+    this.manifest = (manifest instanceof Manifest) ? manifest : new Manifest(manifest)
+    this.user = user ? (user instanceof User) ? user : new User(user) : null
     // Set when opened.
     this.base = null
 
@@ -155,8 +166,8 @@ module.exports = class Omega extends EventEmitter {
       ...opts,
       includeInputNodes: true,
       unwrap: false,
-      reduce: this._reduce.bind(this),
-      init: this._init.bind(this)
+      reduce: this._reduce && this._reduce.bind(this),
+      init: this._init && this._init.bind(this)
     }
     if (!this.user) return this._remoteRefresh(opts)
     return this._localRefresh(opts)
@@ -174,20 +185,6 @@ module.exports = class Omega extends EventEmitter {
     await user.inflate(store)
     await Promise.allSettled([user.input.ready(), user.output.ready()])
     return user
-  }
-
-  static async create (store, users, opts) {
-    users = users.map(u => ({
-      input: store.get({ key: u.input }),
-      output: store.get({ key: u.output })
-    }))
-    const localUser = this.createUser(store)
-    const manifest = {
-      users: [...users, localUser]
-    }
-    const omega = new this(store, manifest, localUser, opts)
-    await omega.ready()
-    return omega
   }
 }
 
