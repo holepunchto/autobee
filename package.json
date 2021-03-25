@@ -4,12 +4,11 @@
   "description": "A multi-writer KV-store built with Autobase and Hyperbee",
   "main": "index.js",
   "scripts": {
-    "build": "protocol-buffers -o lib/messages.js lib/schema.proto",
     "test": "standard && tape test/*.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/andrewosh/autobee.git"
+    "url": "git+https://github.com/hypercore-skunkworks/autobee.git"
   },
   "keywords": [
     "autobase",
@@ -18,25 +17,22 @@
   "author": "Andrew Osheroff <andrewosh@gmail.com>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/andrewosh/autobee/issues"
+    "url": "https://github.com/hypercore-skunkworks/autobee/issues"
   },
-  "homepage": "https://github.com/andrewosh/autobee#readme",
+  "homepage": "https://github.com/hypercore-skunkworks/autobee#readme",
   "devDependencies": {
-    "protocol-buffers": "^4.2.0",
     "random-access-memory": "^3.1.2",
     "standard": "^16.0.3",
     "tape": "^5.1.1",
     "corestore": "github:andrewosh/neocorestore#omega",
-    "immutable-store": "./immutable-store"
+    "immutable-store-extension": "github:hypercore-skunkworks/immutable-store-extension"
   },
   "dependencies": {
-    "autobase": "github:mafintosh/autobase",
+    "omega": "github:hypercore-skunkworks/omega",
+    "autobase": "github:hypercore-skunkworks/autobase",
     "codecs": "^2.2.0",
     "compact-encoding": "^2.0.0",
-    "hyperbee": "^1.5.3",
-    "hypercore-crypto": "^2.2.0",
-    "omega": "github:mafintosh/omega",
-    "protocol-buffers-encodings": "^1.1.1"
+    "hyperbee": "^1.5.3"
   },
   "standard": {
     "ignore": [

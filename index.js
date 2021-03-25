@@ -1,9 +1,8 @@
 const codecs = require('codecs')
 const Hyperbee = require('hyperbee')
+const Omega = require('omega')
 
 const { Op } = require('./lib/messages')
-
-const Omega = require('./omega')
 
 class AutobeeInput {
   constructor (base, core, opts = {}) {
