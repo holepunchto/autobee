@@ -21,7 +21,7 @@
   },
   "homepage": "https://github.com/hypercore-skunkworks/autobee#readme",
   "devDependencies": {
-    "corestore": "github:andrewosh/neocorestore#omega",
+    "corestore": "github:hypercore-skunkworks/neocorestore#omega",
     "immutable-store-extension": "github:hypercore-skunkworks/immutable-store-extension",
     "random-access-memory": "^3.1.2",
     "standard": "^16.0.3",
