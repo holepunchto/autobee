@@ -21,7 +21,7 @@ class AutobeeInput {
       value: this.valueEncoding.encode(op.value)
     }
     if (this._batch) return this._batch.push(record)
-    return this.base.append(this.core, Op.encode(record), await this.base.latest())
+    return this.base.append(this.core, Op.fullEncode(record), await this.base.latest())
   }
 
   put (key, value, opts = {}) {
@@ -46,7 +46,7 @@ class AutobeeInput {
     for (const record of tmp) {
       record.batch = tmp.length
     }
-    const encoded = tmp.map(r => Op.encode(r))
+    const encoded = tmp.map(r => Op.fullEncode(r))
     return this.base.append(this.core, encoded, await this.base.latest())
   }
 
@@ -60,10 +60,19 @@ class AutobeeInput {
 }
 
 module.exports = class Autobee extends Omega {
-  constructor (store, manifest, key, opts = {}) {
-    super(store, manifest, key, opts)
+  constructor (store, manifest, user, opts = {}) {
+    super(store, manifest, user, opts)
+    this.opts = opts
     this._batch = null
     this._db = null
+  }
+
+  _input (base, core) {
+    return new AutobeeInput(base, core)
+  }
+
+  _output () {
+    return this._db
   }
 
   _init (core) {
@@ -77,20 +86,12 @@ module.exports = class Autobee extends Omega {
   }
 
   async _reduce ({ node }) {
-    const op = Op.decode(node.value)
-
-    const apply = async (b, op) => {
-      switch (op.type) {
-        case Op.Type.Put:
-          await b.put(op.key, op.value)
-          break
-        case Op.Type.Del:
-          await b.del(op.key, op.value)
-          break
-        default:
-          // Unsupported message types should be gracefully skipped.
-          break
-      }
+    let op = null
+    try {
+      op = Op.fullDecode(node.value)
+    } catch (err) {
+      // Gracefully discard malformed messages
+      return []
     }
 
     if (op.batch) {
@@ -110,14 +111,20 @@ module.exports = class Autobee extends Omega {
     }
     await b.flush()
 
-    return this._db.feed.commit()
-  }
+    return this._db.feed.changes
 
-  _input (base, core) {
-    return new AutobeeInput(base, core)
-  }
-
-  _output () {
-    return this._db
+    async function apply (b, op) {
+      switch (op.type) {
+        case Op.Type.Put:
+          await b.put(op.key, op.value)
+          break
+        case Op.Type.Del:
+          await b.del(op.key, op.value)
+          break
+        default:
+          // Unsupported message types should be gracefully skipped.
+          break
+      }
+    }
   }
 }

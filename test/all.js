@@ -4,12 +4,17 @@ const Corestore = require('corestore')
 
 const Autobee = require('..')
 
-test('simple single-writer', async t => {
+test.only('simple single-writer', async t => {
   const store = new Corestore(ram)
-  const bee = await Autobee.create(store, {
+  const user = await Autobee.createUser(store)
+  const manifest = {
+    users: [user]
+  }
+  const bee = new Autobee(store, manifest, user, {
     keyEncoding: 'utf-8',
     valueEncoding: 'utf-8'
   })
+  await bee.ready()
 
   const b = bee.input.batch()
   await b.put('a', 'b')

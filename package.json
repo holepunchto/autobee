@@ -32,6 +32,7 @@
   "dependencies": {
     "autobase": "github:mafintosh/autobase",
     "codecs": "^2.2.0",
+    "compact-encoding": "^2.0.0",
     "hyperbee": "^1.5.3",
     "hypercore-crypto": "^2.2.0",
     "omega": "github:mafintosh/omega",

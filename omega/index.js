@@ -144,8 +144,8 @@ module.exports = class Omega extends EventEmitter {
     this.base = new Autobase(this.manifest.inputs)
   }
 
-  async _remoteRefresh (opts) {
-    const result = await this.base.remoteRebase(this.manifest.outputs, opts)
+  async _rebasedView (opts) {
+    const result = await this.base.rebasedView(this.manifest.outputs, opts)
     const stats = { ...result, output: undefined }
     return {
       stats,
@@ -153,8 +153,8 @@ module.exports = class Omega extends EventEmitter {
     }
   }
 
-  async _localRefresh (opts) {
-    const stats = await this.base.localRebase(this.user.output, opts)
+  async _rebaseInto (opts) {
+    const stats = await this.base.rebaseInto(this.user.output, opts)
     return {
       stats,
       output: this.base.decodeIndex(this.user.output, opts)
@@ -169,8 +169,8 @@ module.exports = class Omega extends EventEmitter {
       reduce: this._reduce && this._reduce.bind(this),
       init: this._init && this._init.bind(this)
     }
-    if (!this.user) return this._remoteRefresh(opts)
-    return this._localRefresh(opts)
+    if (!this.user) return this._rebasedView(opts)
+    return this._rebaseInto(opts)
   }
 
   replicate (isInitiator, opts = {}) {
