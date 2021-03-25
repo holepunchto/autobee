@@ -21,15 +21,14 @@
   },
   "homepage": "https://github.com/hypercore-skunkworks/autobee#readme",
   "devDependencies": {
+    "corestore": "github:andrewosh/neocorestore#omega",
+    "immutable-store-extension": "github:hypercore-skunkworks/immutable-store-extension",
     "random-access-memory": "^3.1.2",
     "standard": "^16.0.3",
-    "tape": "^5.1.1",
-    "corestore": "github:andrewosh/neocorestore#omega",
-    "immutable-store-extension": "github:hypercore-skunkworks/immutable-store-extension"
+    "tape": "^5.1.1"
   },
   "dependencies": {
     "omega": "github:hypercore-skunkworks/omega",
-    "autobase": "github:hypercore-skunkworks/autobase",
     "codecs": "^2.2.0",
     "compact-encoding": "^2.0.0",
     "hyperbee": "^1.5.3"
