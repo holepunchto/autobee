@@ -46,7 +46,6 @@ module.exports = class Autobee {
     const b = this._writer.batch({ update: false })
     for (const node of batch) {
       const op = AutobeeMessage.decode({ start: 0, end: node.value.length, buffer: node.value })
-      // TODO: Handle deletions
       switch (op.type) {
         case AutobeeMessageTypes.Put:
           await b.put(op.key, op.value)
