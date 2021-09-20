@@ -1,7 +1,10 @@
 const Hyperbee = require('hyperbee')
 const cenc = require('compact-encoding')
+const codecs = require('codecs')
+const pump = require('pump')
+const { Transform } = require('streamx')
 
-const { AutobeeMessage, AutobeeMessageTypes } = require('./messages')
+const { AutobeeMessage, AutobeeMessageTypes } = require('./lib/messages')
 
 module.exports = class Autobee {
   constructor (autobase, opts = {}) {
@@ -14,15 +17,20 @@ module.exports = class Autobee {
     })
     this._writer = new Hyperbee(index, {
       ...opts,
-      keyEncoding: 'utf-8',
+      keyEncoding: 'binary',
+      valueEncoding: 'binary',
       prefix: null,
       extension: false
     })
-    this._reader = this.bee
+    this._reader = this._writer
+    this._keyEncoding = codecs(opts.keyEncoding || 'binary')
+    this._valueEncoding = codecs(opts.valueEncoding || 'binary')
 
-    this.prefix = opts.prefix || ''
+    this.prefix = opts.prefix
+    this._prefixBuf = null
     if (this.prefix) {
       this._reader = this._writer.sub(this.prefix)
+      this._prefixBuf = Buffer.concat(this.prefix, this._writer.sep)
     }
 
     this._opening = this._open()
@@ -53,35 +61,58 @@ module.exports = class Autobee {
     return b.flush()
   }
 
-  put (key, value) {
+  _encodeKey (key) {
+    if (!this.prefix) return this._keyEncoding.encode(key)
+    return Buffer.concat(this._prefixBuf, this._keyEncoding.encode(key))
+  }
+
+  _decodeKey (buf) {
+    if (!this.prefix) return this._keyEncoding.decode(buf)
+    return this._keyEncoding.decode(buf.slice(this._prefixBuf.length))
+  }
+
+  async put (key, value) {
+    await this.ready()
     const op = cenc.encode(AutobeeMessage, {
       type: AutobeeMessageTypes.Put,
-      key: this.prefix ? this.prefix + this._writer.sep + key : key,
-      value
+      key: this._encodeKey(key),
+      value: this._valueEncoding.encode(value)
     })
     return this.autobase.append(op)
   }
 
-  del (key) {
+  async del (key) {
+    await this.ready()
     const op = cenc.encode(AutobeeMessage, {
       type: AutobeeMessageTypes.Del,
-      key: this.prefix ? this.prefix + this._writer.sep + key : key
+      key: this._encodeKey(key)
     })
     return this.autobase.append(op)
   }
 
   async get (key) {
+    await this.ready()
     return this._reader.get(key)
   }
 
   sub (prefix) {
     return new Autobee(this.autobase, {
-      prefix: this.prefix + this._writer.sep + prefix
+      prefix: this._encodeKey(prefix)
     })
   }
 
-  createReadStream (...args) {
-    return this._reader.createReadStream(...args)
+  createReadStream (opts = {}) {
+    if (opts.gt) opts.gt = this._encodeKey(opts.gt)
+    if (opts.gte) opts.gte = this._encodeKey(opts.gte)
+    if (opts.lt) opts.lt = this._encodeKey(opts.lt)
+    if (opts.lte) opts.lte = this._encodeKey(opts.lte)
+    return pump(this._reader.createReadStream(opts), new Transform({
+      transform: (node, cb) => {
+        node.key = this._decodeKey(node.key)
+        node.value = this._valueEncoding.decode(node.value)
+        return cb(null, node)
+      }
+    }))
   }
 }
 
