@@ -1,0 +1,41 @@
+{
+  "name": "autobee",
+  "version": "0.0.0",
+  "description": "Hyperbee on top of an Autobase",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "standardx && tape test/*.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hypercore-skunkworks/autobee.git"
+  },
+  "keywords": [
+    "hyperbee",
+    "autobase",
+    "autobee"
+  ],
+  "author": "Andrew Osheroff <andrewosh@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/hypercore-skunkworks/autobee/issues"
+  },
+  "homepage": "https://github.com/hypercore-skunkworks/autobee#readme",
+  "dependencies": {
+    "codecs": "^2.2.0",
+    "compact-encoding": "^2.4.1",
+    "hyperbee": "^1.6.3",
+    "pump": "^3.0.0",
+    "streamx": "^2.11.1"
+  },
+  "devDependencies": {
+    "autobase": "github:hypercore-skunkworks/autobase",
+    "corestore": "github:hypercore-skunkworks/neocorestore",
+    "random-access-memory": "^3.1.2",
+    "standardx": "^7.0.0",
+    "tape": "^5.3.1"
+  }
+}
