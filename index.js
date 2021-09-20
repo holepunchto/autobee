@@ -1,129 +1,88 @@
-const codecs = require('codecs')
 const Hyperbee = require('hyperbee')
-const Omega = require('omega')
+const cenc = require('compact-encoding')
 
-const { Op } = require('./lib/messages')
+const { AutobeeMessage, AutobeeMessageTypes } = require('./messages')
 
-class AutobeeInput {
-  constructor (base, core, opts = {}) {
-    this.base = base
-    this.core = core
-    this.keyEncoding = codecs(opts.keyEncoding || 'binary')
-    this.valueEncoding = codecs(opts.valueEncoding || 'binary')
-    this._batch = opts.batch
-  }
+module.exports = class Autobee {
+  constructor (autobase, opts = {}) {
+    this.autobase = autobase
 
-  async _push (op) {
-    const record = {
-      type: op.type,
-      key: this.keyEncoding.encode(op.key),
-      value: this.valueEncoding.encode(op.value)
-    }
-    if (this._batch) return this._batch.push(record)
-    return this.base.append(this.core, Op.fullEncode(record), await this.base.latest())
-  }
-
-  put (key, value, opts = {}) {
-    return this._push({
-      type: Op.Type.Put,
-      key,
-      value
+    const index = this.autobase.createRebasedIndex({
+      ...opts,
+      unwrap: true,
+      apply: this._apply.bind(this)
     })
-  }
-
-  del (key, opts = {}) {
-    return this._push({
-      type: Op.Type.Del,
-      key
-    })
-  }
-
-  async flush () {
-    if (!this._batch) return
-    const tmp = this._batch
-    this._batch = null
-    for (const record of tmp) {
-      record.batch = tmp.length
-    }
-    const encoded = tmp.map(r => Op.fullEncode(r))
-    return this.base.append(this.core, encoded, await this.base.latest())
-  }
-
-  batch (opts = {}) {
-    return new AutobeeInput(this.base, this.core, {
-      keyEncoding: this.keyEncoding,
-      valueEncoding: this.valueEncoding,
-      batch: []
-    })
-  }
-}
-
-module.exports = class Autobee extends Omega {
-  constructor (store, manifest, user, opts = {}) {
-    super(store, manifest, user, opts)
-    this.opts = opts
-    this._batch = null
-    this._db = null
-  }
-
-  _input (base, core) {
-    return new AutobeeInput(base, core)
-  }
-
-  _output () {
-    return this._db
-  }
-
-  _init (core) {
-    this._db = new Hyperbee(this.base.decodeIndex(core, {
-      includeInputNodes: false,
-      unwrap: true
-    }), {
-      ...this.opts,
+    this._writer = new Hyperbee(index, {
+      ...opts,
+      keyEncoding: 'utf-8',
+      prefix: null,
       extension: false
     })
+    this._reader = this.bee
+
+    this.prefix = opts.prefix || ''
+    if (this.prefix) {
+      this._reader = this._writer.sub(this.prefix)
+    }
+
+    this._opening = this._open()
+    this._opening.catch(noop)
+    this.ready = () => this._opening
   }
 
-  async _reduce ({ node }) {
-    let op = null
-    try {
-      op = Op.fullDecode(node.value)
-    } catch (err) {
-      // Gracefully discard malformed messages
-      return []
-    }
+  _open () {
+    return this.autobase.ready()
+  }
 
-    if (op.batch) {
-      if (!this._batch) this._batch = []
-      this._batch.push(op)
-      if (this._batch.length < op.batch) return []
-    }
-
-    const b = this._db.batch()
-    if (this._batch) {
-      for (const op of this._batch) {
-        await apply(b, op)
-      }
-      this._batch = null
-    } else {
-      await apply(b, op)
-    }
-    await b.flush()
-
-    return this._db.feed.changes
-
-    async function apply (b, op) {
+  async _apply (batch, index) {
+    const b = this._writer.batch({ update: false })
+    for (const node of batch) {
+      const op = AutobeeMessage.decode({ start: 0, end: node.value.length, buffer: node.value })
+      // TODO: Handle deletions
       switch (op.type) {
-        case Op.Type.Put:
+        case AutobeeMessageTypes.Put:
           await b.put(op.key, op.value)
           break
-        case Op.Type.Del:
-          await b.del(op.key, op.value)
+        case AutobeeMessageTypes.Del:
+          await b.del(op.key)
           break
         default:
-          // Unsupported message types should be gracefully skipped.
-          break
+          // Ignore unsupported op types
       }
     }
+    return b.flush()
+  }
+
+  put (key, value) {
+    const op = cenc.encode(AutobeeMessage, {
+      type: AutobeeMessageTypes.Put,
+      key: this.prefix ? this.prefix + this._writer.sep + key : key,
+      value
+    })
+    return this.autobase.append(op)
+  }
+
+  del (key) {
+    const op = cenc.encode(AutobeeMessage, {
+      type: AutobeeMessageTypes.Del,
+      key: this.prefix ? this.prefix + this._writer.sep + key : key
+    })
+    return this.autobase.append(op)
+  }
+
+  async get (key) {
+    return this._reader.get(key)
+  }
+
+  sub (prefix) {
+    return new Autobee(this.autobase, {
+      prefix: this.prefix + this._writer.sep + prefix
+    })
+  }
+
+  createReadStream (...args) {
+    return this._reader.createReadStream(...args)
   }
 }
+
+function noop () {}
