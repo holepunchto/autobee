@@ -30,7 +30,7 @@ module.exports = class Autobee {
     this._prefixBuf = null
     if (this.prefix) {
       this._reader = this._writer.sub(this.prefix)
-      this._prefixBuf = Buffer.concat(this.prefix, this._writer.sep)
+      this._prefixBuf = Buffer.concat([this._keyEncoding.encode(this.prefix), this._writer.sep])
     }
 
     this._opening = this._open()
@@ -62,11 +62,12 @@ module.exports = class Autobee {
 
   _encodeKey (key) {
     if (!this.prefix) return this._keyEncoding.encode(key)
-    return Buffer.concat(this._prefixBuf, this._keyEncoding.encode(key))
+    return Buffer.concat([this._prefixBuf, this._keyEncoding.encode(key)])
   }
 
   _decodeKey (buf) {
     if (!this.prefix) return this._keyEncoding.decode(buf)
+    console.log('DECODING BUF:', buf, 'prefix buf:', this._prefixBuf)
     return this._keyEncoding.decode(buf.slice(this._prefixBuf.length))
   }
 
@@ -96,6 +97,8 @@ module.exports = class Autobee {
 
   sub (prefix) {
     return new Autobee(this.autobase, {
+      keyEncoding: this._keyEncoding,
+      valueEncoding: this._valueEncoding,
       prefix: this._encodeKey(prefix)
     })
   }
@@ -107,7 +110,17 @@ module.exports = class Autobee {
     if (opts.lte) opts.lte = this._encodeKey(opts.lte)
     return pump(this._reader.createReadStream(opts), new Transform({
       transform: (node, cb) => {
-        node.key = this._decodeKey(node.key)
+        node.key = this._keyEncoding.decode(node.key)
+        node.value = this._valueEncoding.decode(node.value)
+        return cb(null, node)
+      }
+    }))
+  }
+
+  createHistoryStream (opts = {}) {
+    return pump(this._reader.createHistoryStream(opts), new Transform({
+      transform: (node, cb) => {
+        node.key = this._keyEncoding.decode(node.key)
         node.value = this._valueEncoding.decode(node.value)
         return cb(null, node)
       }
