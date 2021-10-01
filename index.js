@@ -67,7 +67,6 @@ module.exports = class Autobee {
 
   _decodeKey (buf) {
     if (!this.prefix) return this._keyEncoding.decode(buf)
-    console.log('DECODING BUF:', buf, 'prefix buf:', this._prefixBuf)
     return this._keyEncoding.decode(buf.slice(this._prefixBuf.length))
   }
 
@@ -125,6 +124,19 @@ module.exports = class Autobee {
         node.key = this._decodeKey(node.key)
         node.value = this._valueEncoding.decode(node.value)
         return cb(null, node)
+      }
+    }))
+  }
+
+  createAutobaseReadStream (opts = {}) {
+    return pump(this.autobase.createReadStream(opts), new Transform({
+      transform: (inputNode, cb) => {
+        const decoded = cenc.decode(AutobeeMessage, inputNode.value)
+        return cb(null, {
+          type: decoded.type,
+          key: this._decodeKey(decoded.key),
+          value: this._valueEncoding.decode(decoded.value)
+        })
       }
     }))
   }
