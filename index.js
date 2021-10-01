@@ -120,7 +120,7 @@ module.exports = class Autobee {
   createHistoryStream (opts = {}) {
     return pump(this._reader.createHistoryStream(opts), new Transform({
       transform: (node, cb) => {
-        node.key = this._keyEncoding.decode(node.key)
+        node.key = this._decodeKey(node.key)
         node.value = this._valueEncoding.decode(node.value)
         return cb(null, node)
       }
