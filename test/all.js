@@ -147,6 +147,38 @@ test('simple sub', async function (t) {
   t.end()
 })
 
+test('empty read stream', async function (t) {
+  const store = new Corestore(ram)
+
+  const input1 = store.get({ name: 'input-1' })
+  const input2 = store.get({ name: 'input-2' })
+  const index1 = store.get({ name: 'index-1' })
+  const index2 = store.get({ name: 'index-2' })
+
+  const base1 = new Autobase([input1, input2], {
+    input: input1,
+    index: index1
+  })
+  const base2 = new Autobase([input1, input2], {
+    input: input2,
+    index: index2
+  })
+
+  const bee1 = new Autobee(base1, {
+    keyEncoding: 'utf-8',
+    valueEncoding: 'utf-8'
+  })
+  const bee2 = new Autobee(base2, {
+    keyEncoding: 'utf-8',
+    valueEncoding: 'utf-8'
+  })
+
+  await validateReadStream(t, [], bee2.createReadStream())
+  await validateReadStream(t, [], bee1.createReadStream())
+
+  t.end()
+})
+
 async function validateReadStream (t, expected, stream) {
   const vals = []
   for await (const node of stream) {
