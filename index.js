@@ -15,7 +15,7 @@ module.exports = class Autobee {
       unwrap: true,
       apply: this._apply.bind(this)
     })
-    this._writer = opts._writer || new Hyperbee(index, {
+    this._writer = opts._writer || new Hyperbee(this.index, {
       ...opts,
       keyEncoding: 'binary',
       valueEncoding: 'binary',
