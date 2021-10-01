@@ -10,7 +10,7 @@ module.exports = class Autobee {
   constructor (autobase, opts = {}) {
     this.autobase = autobase
 
-    const index = opts.index || this.autobase.createRebasedIndex({
+    this.index = opts.index || this.autobase.createRebasedIndex({
       ...opts,
       unwrap: true,
       apply: this._apply.bind(this)
