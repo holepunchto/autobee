@@ -25,16 +25,16 @@
   },
   "homepage": "https://github.com/hypercore-skunkworks/autobee#readme",
   "dependencies": {
-    "codecs": "^2.2.0",
-    "compact-encoding": "^2.4.1",
-    "hyperbee": "^1.6.3",
+    "codecs": "^3.0.0",
+    "compact-encoding": "^2.11.0",
+    "hyperbee": "^2.4.2",
     "pump": "^3.0.0",
-    "streamx": "^2.11.1"
+    "streamx": "^2.13.2"
   },
   "devDependencies": {
-    "autobase": "github:hypercore-skunkworks/autobase",
-    "corestore": "github:hypercore-skunkworks/neocorestore",
-    "random-access-memory": "^3.1.2",
+    "autobase": "github:holepunchto/autobase",
+    "corestore": "^6.5.1",
+    "random-access-memory": "^6.1.0",
     "standardx": "^7.0.0",
     "tape": "^5.3.1"
   }

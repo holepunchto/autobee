@@ -14,13 +14,15 @@ test('simple get/put', async function (t) {
   const index1 = store.get({ name: 'index-1' })
   const index2 = store.get({ name: 'index-2' })
 
-  const base1 = new Autobase([input1, input2], {
-    input: input1,
-    index: index1
+  const base1 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input1,
+    outputs: [index1]
   })
-  const base2 = new Autobase([input1, input2], {
-    input: input2,
-    index: index2
+  const base2 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input2,
+    outputs: [index2]
   })
 
   const bee1 = new Autobee(base1, {
@@ -64,13 +66,15 @@ test('simple history stream', async function (t) {
   const index1 = store.get({ name: 'index-1' })
   const index2 = store.get({ name: 'index-2' })
 
-  const base1 = new Autobase([input1, input2], {
-    input: input1,
-    index: index1
+  const base1 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input1,
+    outputs: [index1]
   })
-  const base2 = new Autobase([input1, input2], {
-    input: input2,
-    index: index2
+  const base2 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input2,
+    outputs: [index2]
   })
 
   const bee1 = new Autobee(base1, {
@@ -116,13 +120,15 @@ test('simple sub', async function (t) {
   const index1 = store.get({ name: 'index-1' })
   const index2 = store.get({ name: 'index-2' })
 
-  const base1 = new Autobase([input1, input2], {
-    input: input1,
-    index: index1
+  const base1 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input1,
+    outputs: [index1]
   })
-  const base2 = new Autobase([input1, input2], {
-    input: input2,
-    index: index2
+  const base2 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input2,
+    outputs: [index2]
   })
 
   const bee1 = new Autobee(base1, {
@@ -155,13 +161,15 @@ test('empty read stream', async function (t) {
   const index1 = store.get({ name: 'index-1' })
   const index2 = store.get({ name: 'index-2' })
 
-  const base1 = new Autobase([input1, input2], {
-    input: input1,
-    index: index1
+  const base1 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input1,
+    outputs: [index1]
   })
-  const base2 = new Autobase([input1, input2], {
-    input: input2,
-    index: index2
+  const base2 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input2,
+    outputs: [index2]
   })
 
   const bee1 = new Autobee(base1, {
@@ -187,13 +195,15 @@ test('autobase read stream for live updates', async function (t) {
   const index1 = store.get({ name: 'index-1' })
   const index2 = store.get({ name: 'index-2' })
 
-  const base1 = new Autobase([input1, input2], {
-    input: input1,
-    index: index1
+  const base1 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input1,
+    outputs: [index1]
   })
-  const base2 = new Autobase([input1, input2], {
-    input: input2,
-    index: index2
+  const base2 = new Autobase({
+    inputs: [input1, input2],
+    localInput: input2,
+    outputs: [index2]
   })
 
   const bee1 = new Autobee(base1, {

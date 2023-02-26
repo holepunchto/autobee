@@ -10,18 +10,32 @@ module.exports = class Autobee {
   constructor (autobase, opts = {}) {
     this.autobase = autobase
 
-    this.index = opts.index || this.autobase.createRebasedIndex({
-      ...opts,
-      unwrap: true,
-      apply: this._apply.bind(this)
-    })
-    this._writer = opts._writer || new Hyperbee(this.index, {
-      ...opts,
-      keyEncoding: 'binary',
-      valueEncoding: 'binary',
-      prefix: null,
-      extension: false
-    })
+    // if (opts.index && !opts._writer || !opts.index && opts._writer) throw new Error('Both index and writer needed')
+
+    this.index = opts.index || this.autobase.view
+
+    if (!this.index) {
+      this.autobase.start({
+        ...opts,
+        unwrap: true,
+        apply: this._apply.bind(this),
+        view: core => {
+          return new Hyperbee(core.unwrap(), {
+            ...opts,
+            keyEncoding: 'binary',
+            valueEncoding: 'binary',
+            prefix: null,
+            extension: false
+          })
+        }
+      })
+
+      this.index = this.autobase.view
+    }
+
+    // console.log(this.autobase.view.feed._debugStack) // + why does this contains an error stack?
+
+    this._writer = opts._writer || this.index
     this._reader = this._writer
     this._keyEncoding = codecs(opts.keyEncoding || 'binary')
     this._valueEncoding = codecs(opts.valueEncoding || 'binary')
@@ -42,10 +56,12 @@ module.exports = class Autobee {
     return this.autobase.ready()
   }
 
-  async _apply (batch, index) {
-    const b = this._writer.batch({ update: false })
+  async _apply (bee, batch) {
+    const b = bee.batch({ update: false }) // + this._writer.batch?
+
     for (const node of batch) {
       const op = AutobeeMessage.decode({ start: 0, end: node.value.length, buffer: node.value })
+
       switch (op.type) {
         case AutobeeMessageTypes.Put:
           await b.put(op.key, op.value)
@@ -57,6 +73,7 @@ module.exports = class Autobee {
           // Ignore unsupported op types
       }
     }
+
     return b.flush()
   }
 
