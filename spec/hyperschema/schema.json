@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "schema": [
+    {
+      "name": "system-info",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "view",
+          "required": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "heads",
+          "required": true,
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "system-writer",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "isIndexer",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isRemoved",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isOplog",
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "link",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "oplog",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "links",
+          "required": true,
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    }
+  ]
+}
