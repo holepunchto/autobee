@@ -7,10 +7,17 @@ const opts = {
       const data = JSON.parse(node.value)
       // console.log(view.name, data)
       if (data.add) auto.system.addWriter(Buffer.from(data.add, 'hex'))
+
+      const clock = await view.get(Buffer.from('clock'))
+      const c = clock ? Number(clock.value.toString()) + 1 : 0
+      const oplog = node.key.toString('hex') + '.' + node.length
+
       const w = view.write()
-      w.tryPut(Buffer.from(node.key.toString('hex') + '.' + node.length), Buffer.from('inserted'))
+
+      w.tryPut(Buffer.from('clock'), Buffer.from('' + c))
+      w.tryPut(Buffer.from('#' + c.toString().padStart(6, '0')), Buffer.from(oplog))
+
       await w.flush()
-      console.log(auto.name, 'insert', node.key.toString('hex') + '.' + node.length)
     }
   }
 }
@@ -73,24 +80,24 @@ if (1) {
   // await auto.append(JSON.stringify({ add: other.local.key.toString('hex') }))
 
   await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
+  // await auto.append(JSON.stringify({ hello: 'world2' }))
 
   await other._bump()
   await auto._bump()
@@ -145,19 +152,9 @@ if (1) {
 
 console.log()
 for await (const data of auto.bee.createReadStream()) {
-  console.log(auto.name, data.key.toString())
-}
-auto.bee.cache.empty()
-console.log()
-for await (const data of auto.bee.createReadStream()) {
-  console.log(auto.name, data.key.toString())
+  console.log(auto.name, data.key.toString(), data.value.toString())
 }
 console.log()
 for await (const data of other.bee.createReadStream()) {
-  console.log(other.name, data.key.toString())
-}
-console.log()
-other.bee.cache.empty()
-for await (const data of other.bee.createReadStream()) {
-  console.log(other.name, data.key.toString())
+  console.log(other.name, data.key.toString(), data.value.toString())
 }

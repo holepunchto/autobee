@@ -127,23 +127,25 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bump() {
-    if (this.bumping !== 0) return
     this.bumping++
 
-    let updated = true
+    while (this.bumping === 1) {
+      let updated = true
 
-    while (updated) {
-      updated = false
-      for (const w of this.writers.values()) {
-        if (w === this.localWriter) continue
-        const batch = await w.next(this.system, b4a.equals(this.key, w.core.key))
-        if (batch === null) continue
-        await this._processBatch(batch)
-        updated = true
+      while (updated) {
+        updated = false
+        for (const w of this.writers.values()) {
+          if (w === this.localWriter) continue
+          const batch = await w.next(this.system, b4a.equals(this.key, w.core.key))
+          if (batch === null) continue
+          await this._processBatch(batch)
+          updated = true
+        }
       }
-    }
 
-    this.bumping = 0
+      if (this.bumping === 1) this.bumping = 0
+      else this.bumping = 1
+    }
   }
 
   async _addWriter(key) {
@@ -186,7 +188,6 @@ module.exports = class Autobee extends ReadyResource {
     if (typeof value === 'string') value = b4a.from(value)
 
     await this._systemBooting
-    await this._writersBooting // TODO: remove
 
     await this.local.ready()
     const links = this.system.getLinks(this.local.key)
