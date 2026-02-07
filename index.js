@@ -91,8 +91,10 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = new Map()
     this.localWriter = null
     this.lock = new ScopeLock()
-    this.booting = null
     this.bumping = 0
+
+    this._writersBooting = null
+    this._systemBooting = null
 
     this._userApply = apply
   }
@@ -110,11 +112,13 @@ module.exports = class Autobee extends ReadyResource {
       await this._addWriter(this.key)
     }
 
-    this.booting = this._boot() // bg
+    this._systemBooting = this.system.boot(this.bee)
+    this._writersBooting = this._boot() // bg
   }
 
   async _boot() {
-    await this.system.reset()
+    await this._systemBooting
+
     for await (const node of this.system.list()) {
       const id = b4a.toString(node.key, 'hex')
       await this._addWriter(node.key)
@@ -156,9 +160,13 @@ module.exports = class Autobee extends ReadyResource {
     await this.lock.lock()
 
     try {
-      const batches = await this.system.prepare(batch, this.bee, this.name)
+      const t = await this.system.prepare(batch, this.name)
 
-      for (const batch of batches) {
+      if (t.view) {
+        this.bee.move(t.view)
+      }
+
+      for (const batch of t.tip) {
         await this._userApply(this, this.bee, batch)
 
         const changed = await this.system.flush(batch, this.bee, this.name)
@@ -177,7 +185,8 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.opened) await this.ready()
     if (typeof value === 'string') value = b4a.from(value)
 
-    await this.booting
+    await this._systemBooting
+    await this._writersBooting // TODO: remove
 
     await this.local.ready()
     const links = this.system.getLinks(this.local.key)

@@ -2,11 +2,15 @@ import Autobee from './index.js'
 import Corestore from 'corestore'
 
 const opts = {
-  apply(auto, view, batch) {
+  async apply(auto, view, batch) {
     for (const node of batch) {
       const data = JSON.parse(node.value)
       // console.log(view.name, data)
       if (data.add) auto.system.addWriter(Buffer.from(data.add, 'hex'))
+      const w = view.write()
+      w.tryPut(Buffer.from(node.key.toString('hex') + '.' + node.length), Buffer.from('inserted'))
+      await w.flush()
+      console.log(auto.name, 'insert', node.key.toString('hex') + '.' + node.length)
     }
   }
 }
@@ -59,16 +63,14 @@ function repl() {
   }
 }
 
-if (true) {
+if (1) {
   const stop = repl()
 
   await other.booting
 
   await auto.append(JSON.stringify({ hello: 'world2' }))
   await auto.append(JSON.stringify({ add: other.local.key.toString('hex') }))
-  await auto.append(JSON.stringify({ add: other.local.key.toString('hex') }))
-
-  console.log('?')
+  // await auto.append(JSON.stringify({ add: other.local.key.toString('hex') }))
 
   await auto.append(JSON.stringify({ hello: 'world2' }))
   await auto.append(JSON.stringify({ hello: 'world2' }))
@@ -139,4 +141,23 @@ if (true) {
   console.log(auto.name, 'view', auto.system.view)
   console.log(auto.name, 'heads', auto.system.heads)
   console.log()
+}
+
+console.log()
+for await (const data of auto.bee.createReadStream()) {
+  console.log(auto.name, data.key.toString())
+}
+auto.bee.cache.empty()
+console.log()
+for await (const data of auto.bee.createReadStream()) {
+  console.log(auto.name, data.key.toString())
+}
+console.log()
+for await (const data of other.bee.createReadStream()) {
+  console.log(other.name, data.key.toString())
+}
+console.log()
+other.bee.cache.empty()
+for await (const data of other.bee.createReadStream()) {
+  console.log(other.name, data.key.toString())
 }
