@@ -78,11 +78,37 @@
       ]
     },
     {
+      "name": "batch",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "start",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "end",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "oplog",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": 2,
+      "flagsPosition": 4,
       "fields": [
+        {
+          "name": "version",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
         {
           "name": "timestamp",
           "required": true,
@@ -90,10 +116,21 @@
           "version": 1
         },
         {
+          "name": "batch",
+          "required": true,
+          "type": "@autobee/batch",
+          "version": 1
+        },
+        {
           "name": "links",
           "required": true,
           "array": true,
           "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "optimistic",
+          "type": "bool",
           "version": 1
         },
         {

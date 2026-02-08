@@ -82,33 +82,63 @@ const encoding2 = {
   }
 }
 
-// @autobee/oplog
+// @autobee/batch
 const encoding3 = {
   preencode(state, m) {
+    c.uint.preencode(state, m.start)
+    c.uint.preencode(state, m.end)
+  },
+  encode(state, m) {
+    c.uint.encode(state, m.start)
+    c.uint.encode(state, m.end)
+  },
+  decode(state) {
+    const r0 = c.uint.decode(state)
+    const r1 = c.uint.decode(state)
+
+    return {
+      start: r0,
+      end: r1
+    }
+  }
+}
+
+// @autobee/oplog
+const encoding4 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.version)
     c.uint.preencode(state, m.timestamp)
-    encoding3_1.preencode(state, m.links)
-    state.end++ // max flag is 1 so always one byte
+    encoding3.preencode(state, m.batch)
+    encoding4_3.preencode(state, m.links)
+    state.end++ // max flag is 2 so always one byte
 
     if (m.value) c.buffer.preencode(state, m.value)
   },
   encode(state, m) {
-    const flags = m.value ? 1 : 0
+    const flags = (m.optimistic ? 1 : 0) | (m.value ? 2 : 0)
 
+    c.uint.encode(state, m.version)
     c.uint.encode(state, m.timestamp)
-    encoding3_1.encode(state, m.links)
+    encoding3.encode(state, m.batch)
+    encoding4_3.encode(state, m.links)
     c.uint.encode(state, flags)
 
     if (m.value) c.buffer.encode(state, m.value)
   },
   decode(state) {
     const r0 = c.uint.decode(state)
-    const r1 = encoding3_1.decode(state)
+    const r1 = c.uint.decode(state)
+    const r2 = encoding3.decode(state)
+    const r3 = encoding4_3.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      timestamp: r0,
-      links: r1,
-      value: (flags & 1) !== 0 ? c.buffer.decode(state) : null
+      version: r0,
+      timestamp: r1,
+      batch: r2,
+      links: r3,
+      optimistic: (flags & 1) !== 0,
+      value: (flags & 2) !== 0 ? c.buffer.decode(state) : null
     }
   }
 }
@@ -116,7 +146,7 @@ const encoding3 = {
 // @autobee/system-info.heads, deferred due to recusive use
 const encoding0_1 = c.array(encoding2)
 // @autobee/oplog.links, deferred due to recusive use
-const encoding3_1 = encoding0_1
+const encoding4_3 = encoding0_1
 
 function setVersion(v) {
   version = v
@@ -147,8 +177,10 @@ function getEncoding(name) {
       return encoding1
     case '@autobee/link':
       return encoding2
-    case '@autobee/oplog':
+    case '@autobee/batch':
       return encoding3
+    case '@autobee/oplog':
+      return encoding4
     default:
       throw new Error('Encoder not found ' + name)
   }

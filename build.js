@@ -66,11 +66,38 @@ auto.register({
 })
 
 auto.register({
+  name: 'batch',
+  compact: true,
+  fields: [
+    {
+      name: 'start',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'end',
+      type: 'uint',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'oplog',
   fields: [
     {
+      name: 'version',
+      type: 'uint',
+      required: true
+    },
+    {
       name: 'timestamp',
       type: 'uint',
+      required: true
+    },
+    {
+      name: 'batch',
+      type: '@autobee/batch',
       required: true
     },
     {
@@ -78,6 +105,10 @@ auto.register({
       type: '@autobee/link',
       array: true,
       required: true
+    },
+    {
+      name: 'optimistic',
+      type: 'bool'
     },
     {
       name: 'value',

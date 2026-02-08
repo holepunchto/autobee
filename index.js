@@ -4,68 +4,7 @@ const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
 const System = require('./lib/system.js')
 const encoding = require('./lib/encoding.js')
-
-class Writer {
-  constructor(core) {
-    this.core = core
-    this.pending = []
-    this.id = b4a.toString(core.key, 'hex')
-  }
-
-  async next(system, bootstrapping) {
-    const info = await system.get(this.core.key)
-    const batch = []
-
-    if (!info && !bootstrapping) return null
-
-    let length = info ? info.length : 0
-
-    while (length < this.core.length) {
-      const data = await this.core.get(length++)
-      const oplog = encoding.decodeOplog(data)
-      const node = {
-        core: this.core,
-        key: this.core.key,
-        length,
-        timestamp: oplog.timestamp,
-        links: oplog.links,
-        value: oplog.value
-      }
-
-      for (const link of node.links) {
-        const node = await system.get(link.key)
-        if (!node || node.length < link.length) return null
-      }
-
-      batch.push(node)
-      return batch // todo batching
-    }
-
-    return null
-  }
-
-  append(value, links) {
-    const node = {
-      core: this.core,
-      key: this.core.key,
-      length: this.core.length + this.pending.length + 1,
-      timestamp: Date.now(),
-      links,
-      value
-    }
-
-    this.pending.push(node)
-
-    return node
-  }
-
-  flush() {
-    const buffers = []
-    for (const node of this.pending) buffers.push(encoding.encodeOplog(node))
-    this.pending = []
-    return this.core.append(buffers)
-  }
-}
+const { Writer } = require('./lib/writers.js')
 
 module.exports = class Autobee extends ReadyResource {
   constructor(store, key = null, opts = {}) {
@@ -183,16 +122,30 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async append(value) {
+  async append(values) {
+    if (!Array.isArray(values)) values = [values]
+
     if (!this.opened) await this.ready()
-    if (typeof value === 'string') value = b4a.from(value)
 
     await this._systemBooting
-
     await this.local.ready()
+
     const links = this.system.getLinks(this.local.key)
-    const node = this.localWriter.append(value, links)
-    await this._processBatch([node])
+    const batch = []
+    const t = Date.now()
+
+    for (let i = 0; i < values.length; i++) {
+      const value = values[i]
+      const buffer = typeof value === 'string' ? b4a.from(value) : value
+      const lnk = i === 0 ? links : []
+      const b = { start: i, end: values.length - 1 - i }
+
+      const node = this.localWriter.append(buffer, t, b, lnk)
+      batch.push(node)
+    }
+
+    await this._processBatch(batch)
+
     await this.localWriter.flush()
     await this._bump()
   }
