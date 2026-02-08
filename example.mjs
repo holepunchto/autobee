@@ -80,10 +80,7 @@ if (1) {
   // await auto.append(JSON.stringify({ add: other.local.key.toString('hex') }))
 
   await auto.append(JSON.stringify({ hello: 'world2' }))
-  await auto.append([
-    JSON.stringify({ hello: 'world2' }),
-    JSON.stringify({ hello: 'world3' })
-  ])
+  await auto.append([JSON.stringify({ hello: 'world2' }), JSON.stringify({ hello: 'world3' })])
   // await auto.append(JSON.stringify({ hello: 'world2' }))
   // await auto.append(JSON.stringify({ hello: 'world2' }))
   // await auto.append(JSON.stringify({ hello: 'world2' }))

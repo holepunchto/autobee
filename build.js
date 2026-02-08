@@ -16,6 +16,11 @@ auto.register({
       type: '@autobee/link',
       array: true,
       required: true
+    },
+    {
+      name: 'indexers',
+      type: '@autobee/link',
+      array: true // just for compat
     }
   ]
 })
@@ -83,6 +88,23 @@ auto.register({
 })
 
 auto.register({
+  name: 'views',
+  compact: true,
+  fields: [
+    {
+      name: 'system',
+      type: '@autobee/link',
+      required: true
+    },
+    {
+      name: 'view',
+      type: '@autobee/link',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'oplog',
   fields: [
     {
@@ -105,6 +127,10 @@ auto.register({
       type: '@autobee/link',
       array: true,
       required: true
+    },
+    {
+      name: 'views',
+      type: '@autobee/views'
     },
     {
       name: 'optimistic',

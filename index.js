@@ -2,40 +2,50 @@ const ReadyResource = require('ready-resource')
 const b4a = require('b4a')
 const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
+const ID = require('hypercore-id-encoding')
 const System = require('./lib/system.js')
-const encoding = require('./lib/encoding.js')
+const ApplyCalls = require('./lib/apply-calls.js')
 const { Writer } = require('./lib/writers.js')
 
 module.exports = class Autobee extends ReadyResource {
-  constructor(store, key = null, opts = {}) {
+  constructor(store, key = null, handlers = {}) {
     super()
 
     if (isObject(key)) {
-      opts = key
+      handlers = key
       key = null
     }
 
-    const { apply = noop, name = null } = opts
+    const { name = null } = handlers
+
+    const bee = new Hyperbee(store.namespace('view'))
 
     this.store = store
-    this.key = key
+    this.key = key ? ID.decode(key) : null
+    this.discoveryKey = null
+    this.id = null
 
-    this.system = new System(store.namespace('system'))
-    this.bee = new Hyperbee(store.namespace('view'))
-    this.view = null
+    this.system = new System(store.namespace('system'), name)
+    this.bee = bee.snapshot()
+    this.view = handlers.open ? handlers.open(this.bee) : this.bee
 
     this.name = name // for debugging
 
-    this.local = store.get({ name: 'local' })
+    this.local = store.get({ name: 'local', exclusive: true })
     this.writers = new Map()
     this.localWriter = null
     this.lock = new ScopeLock()
     this.bumping = 0
 
+    this._workingBee = bee
+    this._workingView = handlers.open ? handlers.open(this._workingBee) : this._workingBee
     this._writersBooting = null
     this._systemBooting = null
 
-    this._userApply = apply
+    this._handlers = handlers
+    this._hasApply = !!handlers.apply
+    this._needsUpdate = false
+    this._host = new ApplyCalls(this)
   }
 
   async _open() {
@@ -45,14 +55,35 @@ module.exports = class Autobee extends ReadyResource {
     this.localWriter = new Writer(this.local)
     this.writers.set(this.localWriter.id, this.localWriter)
 
-    if (!this.key) this.key = this.local.key
+    if (!this.key) {
+      this.key = this.local.key
+      this.discoveryKey = this.local.discoveryKey
+      this.id = this.local.id
+    }
 
     if (!b4a.equals(this.local.key, this.key)) {
-      await this._addWriter(this.key)
+      const bootstrap = await this._addWriter(this.key)
+      this.key = bootstrap.core.key
+      this.discoveryKey = bootstrap.core.discoveryKey
+      this.id = bootstrap.core.id
     }
 
     this._systemBooting = this.system.boot(this.bee)
     this._writersBooting = this._boot() // bg
+  }
+
+  async _close() {
+    if (this._handlers.open) await this._handlers.close(this.view)
+
+    await this.local.close()
+    await this.system.close()
+    await this._workingBee.close()
+    await this.bee.close()
+    await this.store.close()
+  }
+
+  replicate(...args) {
+    return this.store.replicate(...args)
   }
 
   async _boot() {
@@ -78,39 +109,48 @@ module.exports = class Autobee extends ReadyResource {
           const batch = await w.next(this.system, b4a.equals(this.key, w.core.key))
           if (batch === null) continue
           await this._processBatch(batch)
-          updated = true
+          this._needsUpdate = updated = true
         }
       }
 
       if (this.bumping === 1) this.bumping = 0
       else this.bumping = 1
     }
+
+    if (this._needsUpdate) await this._update()
+  }
+
+  _update() {
+    this._needsUpdate = false
+    this.bee.update(this._workingBee.root)
   }
 
   async _addWriter(key) {
     const id = b4a.toString(key, 'hex')
-    if (this.writers.has(id)) return false
+    let w = this.writers.get(id)
+    if (w) return w
     const core = this.store.get(key)
     await core.ready()
     core.on('append', () => this._bump())
-    this.writers.set(id, new Writer(core))
-    return true
+    w = new Writer(core)
+    this.writers.set(id, w)
+    return w
   }
 
   async _processBatch(batch) {
     await this.lock.lock()
 
     try {
-      const t = await this.system.prepare(batch, this.name)
+      const t = await this.system.prepare(batch)
 
       if (t.view) {
-        this.bee.move(t.view)
+        this._workingBee.move(t.view)
       }
 
       for (const batch of t.tip) {
-        await this._userApply(this, this.bee, batch)
+        if (this._hasApply) await this._handlers.apply(batch, this._workingView, this._host)
 
-        const changed = await this.system.flush(batch, this.bee, this.name)
+        const changed = await this.system.flush(batch, this._workingBee)
 
         for (const { key, added } of changed) {
           if (added) await this._addWriter(key)
@@ -145,13 +185,12 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     await this._processBatch(batch)
+    this._needsUpdate = true
 
     await this.localWriter.flush()
     await this._bump()
   }
 }
-
-function noop() {}
 
 function isObject(o) {
   return typeof o === 'object' && o && !b4a.isBuffer(o)

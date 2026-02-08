@@ -1,0 +1,150 @@
+const Autobee = require('../../index.js')
+const Corestore = require('corestore')
+const b4a = require('b4a')
+
+exports.create = create
+exports.sync = sync
+exports.same = same
+exports.replicate = replicate
+exports.replicateAndSync = replicateAndSync
+exports.apply = apply
+exports.encode = encode
+exports.decode = decode
+exports.dump = dump
+
+function encode(val) {
+  return b4a.from(JSON.stringify(val))
+}
+
+function decode(val) {
+  return JSON.parse(b4a.toString(val))
+}
+
+async function same(...bees) {
+  for (let i = 0; i < bees.length - 1; i++) {
+    const a = bees[i]
+    const b = bees[i + 1]
+
+    if ((await dump(a)) !== (await dump(b))) {
+      return false
+    }
+  }
+
+  return true
+}
+
+async function dump(bee, enc = 'hex') {
+  let all = ''
+  for await (const data of bee.bee.createReadStream()) {
+    all += 'key: ' + b4a.toString(data.key, enc) + '\n'
+    all += 'value: ' + b4a.toString(data.value, enc) + '\n'
+  }
+  return all
+}
+
+async function apply(nodes, view, host) {
+  for (const node of nodes) {
+    const data = decode(node.value)
+
+    if (data.addWriter) {
+      host.addWriter(data.addWriter)
+    }
+
+    const clock = await view.get(b4a.from('clock'))
+    const c = clock ? Number(b4a.toString(clock.value)) + 1 : 0
+    const oplog = b4a.toString(node.key, 'hex') + '.' + node.length
+
+    const w = view.write()
+
+    w.tryPut(b4a.from('clock'), b4a.from('' + c))
+    w.tryPut(b4a.from('latest'), node.value)
+    w.tryPut(b4a.from('#' + c.toString().padStart(6, '0')), b4a.from(oplog))
+
+    await w.flush()
+  }
+}
+
+async function create(t, key, opts) {
+  if (key && !b4a.isBuffer(key) && typeof key !== 'string') return create(t, null, key)
+
+  // hack, should land in brittle
+  if (!t.tick) t.tick = 0
+
+  const auto = new Autobee(new Corestore(await t.tmp()), key, {
+    name: '#' + t.tick++,
+    apply,
+    ...opts
+  })
+
+  t.teardown(() => auto.close())
+  await auto.ready()
+
+  if (!opts || !opts.name) {
+    auto.name += '-' + auto.local.id
+    auto.system.name = auto.name
+  }
+
+  return auto
+}
+
+function replicate(...bees) {
+  const teardowns = []
+
+  for (let i = 0; i < bees.length - 1; i++) {
+    const a = bees[i]
+    const b = bees[i + 1]
+
+    const s1 = a.replicate(true)
+    const s2 = b.replicate(false)
+
+    s1.pipe(s2).pipe(s1)
+
+    s1.on('error', console.error)
+    s2.on('error', console.error)
+
+    teardowns.push(async () => {
+      s1.destroy()
+      s2.destroy()
+      await Promise.all([
+        new Promise((resolve) => s1.once('close', resolve)),
+        new Promise((resolve) => s2.once('close', resolve))
+      ])
+    })
+  }
+
+  return async () => {
+    for (const teardown of teardowns) await teardown()
+  }
+}
+
+async function sync(...bees) {
+  const scale = [10, 10, 20, 30, 40, 50]
+
+  while (true) {
+    if (await check()) {
+      for (const a of bees) await a._bump()
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, scale.shift() || 100))
+  }
+
+  async function check() {
+    for (const a of bees) {
+      for (const b of bees) {
+        if (a === b) continue
+
+        const info = await b.system.get(a.local.key)
+        const length = info ? info.length : 0
+        if (length !== a.local.length) return false
+      }
+    }
+
+    return true
+  }
+}
+
+async function replicateAndSync(...bees) {
+  const done = replicate(...bees)
+  await sync(...bees)
+  await done()
+}
