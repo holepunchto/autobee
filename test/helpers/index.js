@@ -50,6 +50,10 @@ async function apply(nodes, view, host) {
       host.addWriter(data.addWriter)
     }
 
+    if (data.removeWriter) {
+      host.removeWriter(data.removeWriter)
+    }
+
     const clock = await view.get(b4a.from('clock'))
     const c = clock ? Number(b4a.toString(clock.value)) + 1 : 0
     const oplog = b4a.toString(node.key, 'hex') + '.' + node.length

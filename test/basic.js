@@ -54,3 +54,15 @@ test('basic fork and replication', async function (t) {
 
   t.ok(await same(auto1, auto2))
 })
+
+test('basic removal', async function (t) {
+  const auto = await create(t)
+
+  await auto.append(encode({ hello: 'world' }))
+
+  t.ok(auto.writable)
+
+  await auto.append(encode({ removeWriter: auto.local.id }))
+
+  t.absent(auto.writable)
+})

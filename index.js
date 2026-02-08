@@ -28,6 +28,7 @@ module.exports = class Autobee extends ReadyResource {
     this.system = new System(store.namespace('system'), name)
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee) : this.bee
+    this.writable = false
 
     this.name = name // for debugging
 
@@ -39,8 +40,8 @@ module.exports = class Autobee extends ReadyResource {
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee) : this._workingBee
-    this._writersBooting = null
     this._systemBooting = null
+    this._booting = null
 
     this._handlers = handlers
     this._hasApply = !!handlers.apply
@@ -68,8 +69,8 @@ module.exports = class Autobee extends ReadyResource {
       this.id = bootstrap.core.id
     }
 
-    this._systemBooting = this.system.boot(this.bee)
-    this._writersBooting = this._boot() // bg
+    this._systemBooting = this._bootSystem()
+    this._booting = this._boot() // bg
   }
 
   async _close() {
@@ -86,6 +87,17 @@ module.exports = class Autobee extends ReadyResource {
     return this.store.replicate(...args)
   }
 
+  async flush() {
+    await this._systemBooting
+    await this._booting
+    await this.lock.flush()
+  }
+
+  async _bootSystem() {
+    await this.system.boot(this.bee, this._workingBee)
+    await this._updateLocalState()
+  }
+
   async _boot() {
     await this._systemBooting
 
@@ -100,21 +112,26 @@ module.exports = class Autobee extends ReadyResource {
     this.bumping++
 
     while (this.bumping === 1) {
-      let updated = true
+      await this.lock.lock()
 
-      while (updated) {
-        updated = false
-        for (const w of this.writers.values()) {
-          if (w === this.localWriter) continue
-          const batch = await w.next(this.system, b4a.equals(this.key, w.core.key))
-          if (batch === null) continue
-          await this._processBatch(batch)
-          this._needsUpdate = updated = true
+      try {
+        let updated = true
+
+        while (updated) {
+          updated = false
+          for (const w of this.writers.values()) {
+            if (w === this.localWriter) continue
+            const batch = await w.next(this.system, this.key)
+            if (batch === null) continue
+            await this._processBatch(batch)
+            this._needsUpdate = updated = true
+          }
         }
+      } finally {
+        if (this.bumping === 1) this.bumping = 0
+        else this.bumping = 1
+        this.lock.unlock()
       }
-
-      if (this.bumping === 1) this.bumping = 0
-      else this.bumping = 1
     }
 
     if (this._needsUpdate) await this._update()
@@ -126,9 +143,12 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _addWriter(key) {
+    if (b4a.equals(key, this.local.key)) await this._updateLocalState()
+
     const id = b4a.toString(key, 'hex')
     let w = this.writers.get(id)
     if (w) return w
+
     const core = this.store.get(key)
     await core.ready()
     core.on('append', () => this._bump())
@@ -137,28 +157,47 @@ module.exports = class Autobee extends ReadyResource {
     return w
   }
 
+  async _removeWriter(key) {
+    if (b4a.equals(key, this.local.key)) await this._updateLocalState()
+
+    const id = b4a.toString(key, 'hex')
+    const w = this.writers.get(id)
+    if (!w) return
+
+    this.writers.delete(id)
+    if (w !== this.localWriter) await w.close()
+  }
+
+  async _updateLocalState() {
+    const w = this.localWriter
+    const bootstrapping = w.core.length === 0 && b4a.equals(this.key, w.core.key)
+    const info = await this.system.get(this.local.key)
+    const writable = this.writable
+
+    this.writable = info ? !info.isRemoved : bootstrapping
+
+    if (writable === this.writable) return
+
+    this.emit(this.writable ? 'writable' : 'unwritable')
+    this.emit('update')
+  }
+
   async _processBatch(batch) {
-    await this.lock.lock()
+    const t = await this.system.prepare(batch)
 
-    try {
-      const t = await this.system.prepare(batch)
+    if (t.view) {
+      this._workingBee.move(t.view)
+    }
 
-      if (t.view) {
-        this._workingBee.move(t.view)
+    for (const batch of t.tip) {
+      if (this._hasApply) await this._handlers.apply(batch, this._workingView, this._host)
+
+      const changed = await this.system.flush(batch, this._workingBee)
+
+      for (const { key, added } of changed) {
+        if (added) await this._addWriter(key)
+        else await this._removeWriter(key)
       }
-
-      for (const batch of t.tip) {
-        if (this._hasApply) await this._handlers.apply(batch, this._workingView, this._host)
-
-        const changed = await this.system.flush(batch, this._workingBee)
-
-        for (const { key, added } of changed) {
-          if (added) await this._addWriter(key)
-          else await this._removeWriter(key)
-        }
-      }
-    } finally {
-      this.lock.unlock()
     }
   }
 
@@ -184,10 +223,16 @@ module.exports = class Autobee extends ReadyResource {
       batch.push(node)
     }
 
-    await this._processBatch(batch)
-    this._needsUpdate = true
+    await this.lock.lock()
 
-    await this.localWriter.flush()
+    try {
+      await this._processBatch(batch)
+      this._needsUpdate = true
+      await this.localWriter.flush()
+    } finally {
+      this.lock.unlock()
+    }
+
     await this._bump()
   }
 }
