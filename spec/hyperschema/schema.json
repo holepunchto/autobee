@@ -5,7 +5,7 @@
       "name": "system-info",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": -1,
+      "flagsPosition": 2,
       "fields": [
         {
           "name": "view",
@@ -16,6 +16,12 @@
         {
           "name": "heads",
           "required": true,
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "indexers",
           "array": true,
           "type": "@autobee/link",
           "version": 1
@@ -98,6 +104,26 @@
       ]
     },
     {
+      "name": "views",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "system",
+          "required": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "view",
+          "required": false,
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "oplog",
       "namespace": "autobee",
       "compact": false,
@@ -126,6 +152,11 @@
           "required": true,
           "array": true,
           "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "views",
+          "type": "@autobee/views",
           "version": 1
         },
         {

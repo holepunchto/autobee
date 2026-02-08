@@ -99,7 +99,7 @@ auto.register({
     {
       name: 'view',
       type: '@autobee/link',
-      required: true
+      required: false
     }
   ]
 })

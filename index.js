@@ -7,6 +7,8 @@ const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const { Writer } = require('./lib/writers.js')
 
+const EMPTY_HEAD = { length: 0, key: null }
+
 module.exports = class Autobee extends ReadyResource {
   constructor(store, key = null, handlers = {}) {
     super()
@@ -108,7 +110,16 @@ module.exports = class Autobee extends ReadyResource {
 
   async _bootSystem() {
     await this._bootingState
-    await this.system.boot(this.bee, this._workingBee)
+
+    const oplog = await this.localWriter.getLatest()
+    const views = oplog ? oplog.views : null
+    const system = views ? views.system : EMPTY_HEAD
+
+    await this.system.boot(system)
+
+    this._workingBee.move(system.view)
+    this.bee.move(system.view)
+
     await this._updateLocalState()
   }
 
@@ -239,10 +250,15 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.lock.lock()
 
+    if (!this.writable) {
+      this.localWriter.clear()
+      throw new Error('Not writable')
+    }
+
     try {
       await this._processBatch(batch)
       this._needsUpdate = true
-      await this.localWriter.flush()
+      await this.localWriter.flush(this.system.bee.head(), this._workingBee.head())
     } finally {
       this.lock.unlock()
     }

@@ -16,18 +16,28 @@ const encoding0 = {
   preencode(state, m) {
     encoding2.preencode(state, m.view)
     encoding0_1.preencode(state, m.heads)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.indexers) encoding0_2.preencode(state, m.indexers)
   },
   encode(state, m) {
+    const flags = m.indexers ? 1 : 0
+
     encoding2.encode(state, m.view)
     encoding0_1.encode(state, m.heads)
+    c.uint.encode(state, flags)
+
+    if (m.indexers) encoding0_2.encode(state, m.indexers)
   },
   decode(state) {
     const r0 = encoding2.decode(state)
     const r1 = encoding0_1.decode(state)
+    const flags = c.uint.decode(state)
 
     return {
       view: r0,
-      heads: r1
+      heads: r1,
+      indexers: (flags & 1) !== 0 ? encoding0_2.decode(state) : null
     }
   }
 }
@@ -103,33 +113,62 @@ const encoding3 = {
   }
 }
 
-// @autobee/oplog
+// @autobee/views
 const encoding4 = {
+  preencode(state, m) {
+    encoding2.preencode(state, m.system)
+    state.end++ // flags are fixed size
+
+    if (m.view) encoding2.preencode(state, m.view)
+  },
+  encode(state, m) {
+    const flags = m.view ? 1 : 0
+
+    encoding2.encode(state, m.system)
+    c.uint8.encode(state, flags)
+
+    if (m.view) encoding2.encode(state, m.view)
+  },
+  decode(state) {
+    const r0 = encoding2.decode(state)
+    const flags = c.uint8.decode(state)
+
+    return {
+      system: r0,
+      view: (flags & 1) !== 0 ? encoding2.decode(state) : null
+    }
+  }
+}
+
+// @autobee/oplog
+const encoding5 = {
   preencode(state, m) {
     c.uint.preencode(state, m.version)
     c.uint.preencode(state, m.timestamp)
     encoding3.preencode(state, m.batch)
-    encoding4_3.preencode(state, m.links)
-    state.end++ // max flag is 2 so always one byte
+    encoding5_3.preencode(state, m.links)
+    state.end++ // max flag is 4 so always one byte
 
+    if (m.views) encoding4.preencode(state, m.views)
     if (m.value) c.buffer.preencode(state, m.value)
   },
   encode(state, m) {
-    const flags = (m.optimistic ? 1 : 0) | (m.value ? 2 : 0)
+    const flags = (m.views ? 1 : 0) | (m.optimistic ? 2 : 0) | (m.value ? 4 : 0)
 
     c.uint.encode(state, m.version)
     c.uint.encode(state, m.timestamp)
     encoding3.encode(state, m.batch)
-    encoding4_3.encode(state, m.links)
+    encoding5_3.encode(state, m.links)
     c.uint.encode(state, flags)
 
+    if (m.views) encoding4.encode(state, m.views)
     if (m.value) c.buffer.encode(state, m.value)
   },
   decode(state) {
     const r0 = c.uint.decode(state)
     const r1 = c.uint.decode(state)
     const r2 = encoding3.decode(state)
-    const r3 = encoding4_3.decode(state)
+    const r3 = encoding5_3.decode(state)
     const flags = c.uint.decode(state)
 
     return {
@@ -137,16 +176,19 @@ const encoding4 = {
       timestamp: r1,
       batch: r2,
       links: r3,
-      optimistic: (flags & 1) !== 0,
-      value: (flags & 2) !== 0 ? c.buffer.decode(state) : null
+      views: (flags & 1) !== 0 ? encoding4.decode(state) : null,
+      optimistic: (flags & 2) !== 0,
+      value: (flags & 4) !== 0 ? c.buffer.decode(state) : null
     }
   }
 }
 
 // @autobee/system-info.heads, deferred due to recusive use
 const encoding0_1 = c.array(encoding2)
+// @autobee/system-info.indexers, deferred due to recusive use
+const encoding0_2 = encoding0_1
 // @autobee/oplog.links, deferred due to recusive use
-const encoding4_3 = encoding0_1
+const encoding5_3 = encoding0_1
 
 function setVersion(v) {
   version = v
@@ -179,8 +221,10 @@ function getEncoding(name) {
       return encoding2
     case '@autobee/batch':
       return encoding3
-    case '@autobee/oplog':
+    case '@autobee/views':
       return encoding4
+    case '@autobee/oplog':
+      return encoding5
     default:
       throw new Error('Encoder not found ' + name)
   }
