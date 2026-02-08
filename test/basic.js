@@ -15,7 +15,7 @@ test('basic', async function (t) {
   t.alike(node.value, val)
 })
 
-test('basic replication', async function (t) {
+test('basic - replication', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
@@ -27,7 +27,7 @@ test('basic replication', async function (t) {
   t.ok(await same(auto1, auto2))
 })
 
-test('basic replication (batch)', async function (t) {
+test('basic - replication (batch)', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
@@ -40,7 +40,7 @@ test('basic replication (batch)', async function (t) {
   t.ok(await same(auto1, auto2))
 })
 
-test('basic fork and replication', async function (t) {
+test('basic - fork and replication', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
@@ -57,7 +57,7 @@ test('basic fork and replication', async function (t) {
   t.ok(await same(auto1, auto2))
 })
 
-test('basic removal', async function (t) {
+test('basic - removal', async function (t) {
   const auto = await create(t)
 
   await auto.append(encode({ hello: 'world' }))
@@ -69,7 +69,7 @@ test('basic removal', async function (t) {
   t.absent(auto.writable)
 })
 
-test('basic restart', async function (t) {
+test('basic - restart', async function (t) {
   const storage = await t.tmp()
 
   {
