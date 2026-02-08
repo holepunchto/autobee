@@ -29,11 +29,6 @@ auto.register({
   name: 'system-writer',
   fields: [
     {
-      name: 'key',
-      type: 'fixed32',
-      required: true
-    },
-    {
       name: 'length',
       type: 'uint',
       required: true

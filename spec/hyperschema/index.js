@@ -45,25 +45,21 @@ const encoding0 = {
 // @autobee/system-writer
 const encoding1 = {
   preencode(state, m) {
-    c.fixed32.preencode(state, m.key)
     c.uint.preencode(state, m.length)
     state.end++ // max flag is 4 so always one byte
   },
   encode(state, m) {
     const flags = (m.isIndexer ? 1 : 0) | (m.isRemoved ? 2 : 0) | (m.isOplog ? 4 : 0)
 
-    c.fixed32.encode(state, m.key)
     c.uint.encode(state, m.length)
     c.uint.encode(state, flags)
   },
   decode(state) {
-    const r0 = c.fixed32.decode(state)
-    const r1 = c.uint.decode(state)
+    const r0 = c.uint.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      key: r0,
-      length: r1,
+      length: r0,
       isIndexer: (flags & 1) !== 0,
       isRemoved: (flags & 2) !== 0,
       isOplog: (flags & 4) !== 0

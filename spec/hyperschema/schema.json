@@ -32,14 +32,8 @@
       "name": "system-writer",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": 2,
+      "flagsPosition": 1,
       "fields": [
-        {
-          "name": "key",
-          "required": true,
-          "type": "fixed32",
-          "version": 1
-        },
         {
           "name": "length",
           "required": true,
