@@ -74,7 +74,7 @@ async function create(t, key, opts) {
   // hack, should land in brittle
   if (!t.tick) t.tick = 0
 
-  const storage = (opts && opts.storage) || await t.tmp()
+  const storage = (opts && opts.storage) || (await t.tmp())
   const auto = new Autobee(new Corestore(storage), key, {
     name: '#' + t.tick++,
     apply,
