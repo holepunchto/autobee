@@ -1,6 +1,8 @@
 const test = require('brittle')
 const b4a = require('b4a')
-const { create, replicateAndSync, same, encode } = require('./helpers')
+const Corestore = require('corestore')
+const { create, replicateAndSync, same, encode, apply } = require('./helpers')
+const Autobee = require('../index.js')
 
 test('basic', async function (t) {
   const auto = await create(t)
@@ -65,4 +67,27 @@ test('basic removal', async function (t) {
   await auto.append(encode({ removeWriter: auto.local.id }))
 
   t.absent(auto.writable)
+})
+
+test('basic restart', async function (t) {
+  const storage = await t.tmp()
+
+  {
+    const auto = await create(t, { storage })
+
+    await auto.append(encode({ hello: 'world' }))
+    await auto.append(encode({ hej: 'verden' }))
+
+    await auto.close()
+  }
+
+  {
+    const auto = new Autobee(new Corestore(storage), { apply })
+
+    const node = await auto.view.get(b4a.from('latest'))
+
+    t.alike(node.value, encode({ hej: 'verden' }))
+
+    await auto.close()
+  }
 })

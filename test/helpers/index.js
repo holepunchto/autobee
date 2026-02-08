@@ -20,10 +20,10 @@ function decode(val) {
   return JSON.parse(b4a.toString(val))
 }
 
-async function same(...bees) {
-  for (let i = 0; i < bees.length - 1; i++) {
-    const a = bees[i]
-    const b = bees[i + 1]
+async function same(...autos) {
+  for (let i = 0; i < autos.length - 1; i++) {
+    const a = autos[i]
+    const b = autos[i + 1]
 
     if ((await dump(a)) !== (await dump(b))) {
       return false
@@ -33,9 +33,9 @@ async function same(...bees) {
   return true
 }
 
-async function dump(bee, enc = 'hex') {
+async function dump(auto, enc = 'hex') {
   let all = ''
-  for await (const data of bee.bee.createReadStream()) {
+  for await (const data of auto.bee.createReadStream()) {
     all += 'key: ' + b4a.toString(data.key, enc) + '\n'
     all += 'value: ' + b4a.toString(data.value, enc) + '\n'
   }
@@ -74,7 +74,8 @@ async function create(t, key, opts) {
   // hack, should land in brittle
   if (!t.tick) t.tick = 0
 
-  const auto = new Autobee(new Corestore(await t.tmp()), key, {
+  const storage = (opts && opts.storage) || await t.tmp()
+  const auto = new Autobee(new Corestore(storage), key, {
     name: '#' + t.tick++,
     apply,
     ...opts
@@ -91,12 +92,12 @@ async function create(t, key, opts) {
   return auto
 }
 
-function replicate(...bees) {
+function replicate(...autos) {
   const teardowns = []
 
-  for (let i = 0; i < bees.length - 1; i++) {
-    const a = bees[i]
-    const b = bees[i + 1]
+  for (let i = 0; i < autos.length - 1; i++) {
+    const a = autos[i]
+    const b = autos[i + 1]
 
     const s1 = a.replicate(true)
     const s2 = b.replicate(false)
@@ -121,20 +122,20 @@ function replicate(...bees) {
   }
 }
 
-async function sync(...bees) {
+async function sync(...autos) {
   const scale = [10, 10, 20, 30, 40, 50]
 
   while (true) {
     if (await check()) {
-      for (const a of bees) await a._bump()
+      for (const a of autos) await a._bump()
       return
     }
     await new Promise((resolve) => setTimeout(resolve, scale.shift() || 100))
   }
 
   async function check() {
-    for (const a of bees) {
-      for (const b of bees) {
+    for (const a of autos) {
+      for (const b of autos) {
         if (a === b) continue
 
         const info = await b.system.get(a.local.key)
@@ -147,8 +148,8 @@ async function sync(...bees) {
   }
 }
 
-async function replicateAndSync(...bees) {
-  const done = replicate(...bees)
-  await sync(...bees)
+async function replicateAndSync(...autos) {
+  const done = replicate(...autos)
+  await sync(...autos)
   await done()
 }

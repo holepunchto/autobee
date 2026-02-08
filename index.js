@@ -18,7 +18,13 @@ module.exports = class Autobee extends ReadyResource {
 
     const { name = null } = handlers
 
-    const bee = new Hyperbee(store.namespace('view'))
+    const bee = new Hyperbee(store.namespace('view'), {
+      // defer one tick to ensure consistent state, then return state prom
+      preload: async () => {
+        await 1
+        await this._bootingState
+      }
+    })
 
     this.store = store
     this.key = key ? ID.decode(key) : null
@@ -40,37 +46,25 @@ module.exports = class Autobee extends ReadyResource {
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee) : this._workingBee
-    this._systemBooting = null
-    this._booting = null
+
+    this._bootingState = null
+    this._bootingSystem = null
+    this._bootingAll = null
 
     this._handlers = handlers
     this._hasApply = !!handlers.apply
     this._needsUpdate = false
     this._host = new ApplyCalls(this)
+
+    this.ready().catch(noop)
   }
 
   async _open() {
-    await this.local.ready()
+    this._bootingState = this._bootState()
+    this._bootingSystem = this._bootSystem()
+    this._bootingAll = this._bootAll() // bg
+
     await this.bee.ready()
-
-    this.localWriter = new Writer(this.local)
-    this.writers.set(this.localWriter.id, this.localWriter)
-
-    if (!this.key) {
-      this.key = this.local.key
-      this.discoveryKey = this.local.discoveryKey
-      this.id = this.local.id
-    }
-
-    if (!b4a.equals(this.local.key, this.key)) {
-      const bootstrap = await this._addWriter(this.key)
-      this.key = bootstrap.core.key
-      this.discoveryKey = bootstrap.core.discoveryKey
-      this.id = bootstrap.core.id
-    }
-
-    this._systemBooting = this._bootSystem()
-    this._booting = this._boot() // bg
   }
 
   async _close() {
@@ -88,18 +82,38 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async flush() {
-    await this._systemBooting
-    await this._booting
+    await this._bootingAll
     await this.lock.flush()
   }
 
+  async _bootState() {
+    await this.local.ready()
+
+    this.localWriter = new Writer(this.local)
+    this.writers.set(this.localWriter.id, this.localWriter)
+
+    if (!this.key) {
+      this.key = this.local.key
+      this.discoveryKey = this.local.discoveryKey
+      this.id = this.local.id
+    }
+
+    if (!b4a.equals(this.local.key, this.key)) {
+      const bootstrap = await this._addWriter(this.key)
+      this.key = bootstrap.core.key
+      this.discoveryKey = bootstrap.core.discoveryKey
+      this.id = bootstrap.core.id
+    }
+  }
+
   async _bootSystem() {
+    await this._bootingState
     await this.system.boot(this.bee, this._workingBee)
     await this._updateLocalState()
   }
 
-  async _boot() {
-    await this._systemBooting
+  async _bootAll() {
+    await this._bootingSystem
 
     for await (const node of this.system.list()) {
       const id = b4a.toString(node.key, 'hex')
@@ -206,7 +220,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!this.opened) await this.ready()
 
-    await this._systemBooting
+    await this._bootingSystem
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
@@ -240,3 +254,5 @@ module.exports = class Autobee extends ReadyResource {
 function isObject(o) {
   return typeof o === 'object' && o && !b4a.isBuffer(o)
 }
+
+function noop() {}
