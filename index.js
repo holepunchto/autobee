@@ -214,6 +214,11 @@ module.exports = class Autobee extends ReadyResource {
       this._workingBee.move(t.view)
     }
 
+    // first writer is always added with full permissions
+    if (this.system.isGenesis()) {
+      this._host.addWriter(t.tip[0][0].key)
+    }
+
     for (const batch of t.tip) {
       if (this._hasApply) await this._handlers.apply(batch, this._workingView, this._host)
 
