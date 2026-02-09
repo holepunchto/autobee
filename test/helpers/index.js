@@ -127,8 +127,8 @@ async function sync(...autos) {
 
   while (true) {
     if (await check()) {
-      for (const a of autos) await a._bump()
-      return
+      for (const a of autos) await a.flush()
+      if (await check()) return
     }
     await new Promise((resolve) => setTimeout(resolve, scale.shift() || 100))
   }
