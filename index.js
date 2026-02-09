@@ -3,6 +3,7 @@ const b4a = require('b4a')
 const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
+const asserts = require('./lib/asserts.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
@@ -208,6 +209,41 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('update')
   }
 
+  async _optimisticBatch(batch) {
+    const rollbackSystem = this.system.bee.head()
+    const rollbackView = this._workingBee.head()
+
+    const t = await this.system.prepare(batch)
+
+    if (t.view) {
+      this._workingBee.move(t.view)
+    }
+
+    asserts.assert(batch === t.tip[0])
+
+    let failed = false
+
+    try {
+      await this._applyBatch(batch)
+    } catch {
+      failed = true
+    }
+
+    const w = failed ? null : await this.system.get(batch[0].key)
+    if (!w || w.length < batch[0].length) {
+      this._workingBee.move(rollbackView)
+      this.system.bee.move(rollbackSystem)
+      await this.system.reset()
+      return false
+    }
+
+    for (let i = 1; i < t.tip.length; i++) {
+      await this._applyBatch(t.tip[i])
+    }
+
+    return true
+  }
+
   async _processBatch(batch) {
     const t = await this.system.prepare(batch)
 
@@ -220,17 +256,21 @@ module.exports = class Autobee extends ReadyResource {
       this._host.addWriter(t.tip[0][0].key)
     }
 
-    for (const batch of t.tip) {
-      this._host.applying = batch
-      if (this._hasApply) await this._handlers.apply(batch, this._workingView, this._host)
-      this._host.applying = null
+    for (let i = 0; i < t.tip.length; i++) {
+      await this._applyBatch(t.tip[i])
+    }
+  }
 
-      const changed = await this.system.flush(batch, this._workingBee)
+  async _applyBatch(batch) {
+    this._host.applying = batch
+    if (this._hasApply) await this._handlers.apply(batch, this._workingView, this._host)
+    this._host.applying = null
 
-      for (const { key, added } of changed) {
-        if (added) await this._addWriter(key)
-        else await this._removeWriter(key)
-      }
+    const changed = await this.system.flush(batch, this._workingBee)
+
+    for (const { key, added } of changed) {
+      if (added) await this._addWriter(key)
+      else await this._removeWriter(key)
     }
   }
 
