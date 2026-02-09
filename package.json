@@ -5,6 +5,11 @@
   "license": "Apache-2.0",
   "author": "Holepunch Inc.",
   "main": "index.js",
+  "files": [
+    "index.js",
+    "lib/*.js",
+    "spec"
+  ],
   "scripts": {
     "format": "prettier . --write",
     "lint": "lunte && prettier . --check",
