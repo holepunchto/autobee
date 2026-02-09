@@ -140,45 +140,70 @@ const encoding4 = {
   }
 }
 
+// @autobee/views (inline)
+const encoding4_inline = {
+  preencode(state, m) {
+    encoding2.preencode(state, m.system)
+
+    if (m.view) encoding2.preencode(state, m.view)
+  },
+  encode(state, m) {
+    encoding2.encode(state, m.system)
+
+    if (m.view) encoding2.encode(state, m.view)
+  },
+  decode(state, inlining) {
+    const r0 = encoding2.decode(state)
+    const flags = inlining
+
+    return {
+      system: r0,
+      view: (flags & 1) !== 0 ? encoding2.decode(state) : null
+    }
+  }
+}
+
 // @autobee/oplog
 const encoding5 = {
   preencode(state, m) {
     c.uint.preencode(state, m.version)
     c.uint.preencode(state, m.timestamp)
-    encoding3.preencode(state, m.batch)
-    encoding5_3.preencode(state, m.links)
-    state.end++ // max flag is 4 so always one byte
+    encoding5_2.preencode(state, m.links)
+    state.end++ // max flag is 16 so always one byte
 
-    if (m.views) encoding4.preencode(state, m.views)
+    if (m.batch) encoding3.preencode(state, m.batch)
+    if (m.views) encoding4_inline.preencode(state, m.views)
     if (m.value) c.buffer.preencode(state, m.value)
   },
   encode(state, m) {
-    const flags = (m.views ? 1 : 0) | (m.optimistic ? 2 : 0) | (m.value ? 4 : 0)
+    let flags = (m.batch ? 1 : 0) | (m.views ? 2 : 0) | (m.optimistic ? 8 : 0) | (m.value ? 16 : 0)
+    if (m.views) {
+      flags |= m.views.view ? 4 : 0
+    }
 
     c.uint.encode(state, m.version)
     c.uint.encode(state, m.timestamp)
-    encoding3.encode(state, m.batch)
-    encoding5_3.encode(state, m.links)
+    encoding5_2.encode(state, m.links)
     c.uint.encode(state, flags)
 
-    if (m.views) encoding4.encode(state, m.views)
+    if (m.batch) encoding3.encode(state, m.batch)
+    if (m.views) encoding4_inline.encode(state, m.views)
     if (m.value) c.buffer.encode(state, m.value)
   },
   decode(state) {
     const r0 = c.uint.decode(state)
     const r1 = c.uint.decode(state)
-    const r2 = encoding3.decode(state)
-    const r3 = encoding5_3.decode(state)
+    const r2 = encoding5_2.decode(state)
     const flags = c.uint.decode(state)
 
     return {
       version: r0,
       timestamp: r1,
-      batch: r2,
-      links: r3,
-      views: (flags & 1) !== 0 ? encoding4.decode(state) : null,
-      optimistic: (flags & 2) !== 0,
-      value: (flags & 4) !== 0 ? c.buffer.decode(state) : null
+      links: r2,
+      batch: (flags & 1) !== 0 ? encoding3.decode(state) : null,
+      views: (flags & 2) !== 0 ? encoding4_inline.decode(state, flags >>> 2) : null,
+      optimistic: (flags & 8) !== 0,
+      value: (flags & 16) !== 0 ? c.buffer.decode(state) : null
     }
   }
 }
@@ -188,7 +213,7 @@ const encoding0_2 = c.array(encoding2)
 // @autobee/system-info.indexers, deferred due to recusive use
 const encoding0_3 = encoding0_2
 // @autobee/oplog.links, deferred due to recusive use
-const encoding5_3 = encoding0_2
+const encoding5_2 = encoding0_2
 
 function setVersion(v) {
   version = v

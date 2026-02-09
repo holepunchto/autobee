@@ -118,19 +118,19 @@ auto.register({
       required: true
     },
     {
-      name: 'batch',
-      type: '@autobee/batch',
-      required: true
-    },
-    {
       name: 'links',
       type: '@autobee/link',
       array: true,
       required: true
     },
     {
+      name: 'batch',
+      type: '@autobee/batch'
+    },
+    {
       name: 'views',
-      type: '@autobee/views'
+      type: '@autobee/views',
+      inline: true
     },
     {
       name: 'optimistic',

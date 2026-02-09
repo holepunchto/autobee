@@ -3,6 +3,7 @@ const b4a = require('b4a')
 const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
+const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const { Writer } = require('./lib/writers.js')
@@ -220,7 +221,9 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     for (const batch of t.tip) {
+      this._host.applying = batch
       if (this._hasApply) await this._handlers.apply(batch, this._workingView, this._host)
+      this._host.applying = null
 
       const changed = await this.system.flush(batch, this._workingBee)
 
@@ -231,7 +234,15 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async append(values) {
+  static decodeValue(buf, opts) {
+    return encoding.decodeValue(buf, opts)
+  }
+
+  static encodeValue(value, opts) {
+    return encoding.encodeValue(value, opts)
+  }
+
+  async append(values, { force = false } = {}) {
     if (!Array.isArray(values)) values = [values]
 
     if (!this.opened) await this.ready()
@@ -255,7 +266,7 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.lock.lock()
 
-    if (!this.writable) {
+    if (!this.writable && !force) {
       this.localWriter.clear()
       throw new Error('Not writable')
     }

@@ -127,7 +127,7 @@
       "name": "oplog",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": 4,
+      "flagsPosition": 3,
       "fields": [
         {
           "name": "version",
@@ -142,12 +142,6 @@
           "version": 1
         },
         {
-          "name": "batch",
-          "required": true,
-          "type": "@autobee/batch",
-          "version": 1
-        },
-        {
           "name": "links",
           "required": true,
           "array": true,
@@ -155,7 +149,13 @@
           "version": 1
         },
         {
+          "name": "batch",
+          "type": "@autobee/batch",
+          "version": 1
+        },
+        {
           "name": "views",
+          "inline": true,
           "type": "@autobee/views",
           "version": 1
         },
