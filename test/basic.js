@@ -40,7 +40,7 @@ test('basic - replication (batch)', async function (t) {
   t.ok(await same(auto1, auto2))
 })
 
-test.solo('basic - fork and replication', async function (t) {
+test('basic - fork and replication', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
