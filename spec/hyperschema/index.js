@@ -14,30 +14,34 @@ let version = VERSION
 // @autobee/system-info
 const encoding0 = {
   preencode(state, m) {
+    c.uint.preencode(state, m.version)
     encoding2.preencode(state, m.view)
-    encoding0_1.preencode(state, m.heads)
+    encoding0_2.preencode(state, m.heads)
     state.end++ // max flag is 1 so always one byte
 
-    if (m.indexers) encoding0_2.preencode(state, m.indexers)
+    if (m.indexers) encoding0_3.preencode(state, m.indexers)
   },
   encode(state, m) {
     const flags = m.indexers ? 1 : 0
 
+    c.uint.encode(state, m.version)
     encoding2.encode(state, m.view)
-    encoding0_1.encode(state, m.heads)
+    encoding0_2.encode(state, m.heads)
     c.uint.encode(state, flags)
 
-    if (m.indexers) encoding0_2.encode(state, m.indexers)
+    if (m.indexers) encoding0_3.encode(state, m.indexers)
   },
   decode(state) {
-    const r0 = encoding2.decode(state)
-    const r1 = encoding0_1.decode(state)
+    const r0 = c.uint.decode(state)
+    const r1 = encoding2.decode(state)
+    const r2 = encoding0_2.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      view: r0,
-      heads: r1,
-      indexers: (flags & 1) !== 0 ? encoding0_2.decode(state) : null
+      version: r0,
+      view: r1,
+      heads: r2,
+      indexers: (flags & 1) !== 0 ? encoding0_3.decode(state) : null
     }
   }
 }
@@ -180,11 +184,11 @@ const encoding5 = {
 }
 
 // @autobee/system-info.heads, deferred due to recusive use
-const encoding0_1 = c.array(encoding2)
+const encoding0_2 = c.array(encoding2)
 // @autobee/system-info.indexers, deferred due to recusive use
-const encoding0_2 = encoding0_1
+const encoding0_3 = encoding0_2
 // @autobee/oplog.links, deferred due to recusive use
-const encoding5_3 = encoding0_1
+const encoding5_3 = encoding0_2
 
 function setVersion(v) {
   version = v

@@ -7,6 +7,11 @@ auto.register({
   name: 'system-info',
   fields: [
     {
+      name: 'version',
+      type: 'uint',
+      required: true
+    },
+    {
       name: 'view',
       type: '@autobee/link',
       required: true

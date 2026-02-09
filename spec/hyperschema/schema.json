@@ -5,8 +5,14 @@
       "name": "system-info",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": 2,
+      "flagsPosition": 3,
       "fields": [
+        {
+          "name": "version",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
         {
           "name": "view",
           "required": true,
