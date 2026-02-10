@@ -15,33 +15,37 @@ let version = VERSION
 const encoding0 = {
   preencode(state, m) {
     c.uint.preencode(state, m.version)
+    c.uint.preencode(state, m.timestamp)
     encoding2.preencode(state, m.view)
-    encoding0_2.preencode(state, m.heads)
+    encoding0_3.preencode(state, m.heads)
     state.end++ // max flag is 1 so always one byte
 
-    if (m.indexers) encoding0_3.preencode(state, m.indexers)
+    if (m.indexers) encoding0_4.preencode(state, m.indexers)
   },
   encode(state, m) {
     const flags = m.indexers ? 1 : 0
 
     c.uint.encode(state, m.version)
+    c.uint.encode(state, m.timestamp)
     encoding2.encode(state, m.view)
-    encoding0_2.encode(state, m.heads)
+    encoding0_3.encode(state, m.heads)
     c.uint.encode(state, flags)
 
-    if (m.indexers) encoding0_3.encode(state, m.indexers)
+    if (m.indexers) encoding0_4.encode(state, m.indexers)
   },
   decode(state) {
     const r0 = c.uint.decode(state)
-    const r1 = encoding2.decode(state)
-    const r2 = encoding0_2.decode(state)
+    const r1 = c.uint.decode(state)
+    const r2 = encoding2.decode(state)
+    const r3 = encoding0_3.decode(state)
     const flags = c.uint.decode(state)
 
     return {
       version: r0,
-      view: r1,
-      heads: r2,
-      indexers: (flags & 1) !== 0 ? encoding0_3.decode(state) : null
+      timestamp: r1,
+      view: r2,
+      heads: r3,
+      indexers: (flags & 1) !== 0 ? encoding0_4.decode(state) : null
     }
   }
 }
@@ -209,11 +213,11 @@ const encoding5 = {
 }
 
 // @autobee/system-info.heads, deferred due to recusive use
-const encoding0_2 = c.array(encoding2)
+const encoding0_3 = c.array(encoding2)
 // @autobee/system-info.indexers, deferred due to recusive use
-const encoding0_3 = encoding0_2
+const encoding0_4 = encoding0_3
 // @autobee/oplog.links, deferred due to recusive use
-const encoding5_2 = encoding0_2
+const encoding5_2 = encoding0_3
 
 function setVersion(v) {
   version = v

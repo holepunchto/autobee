@@ -5,10 +5,16 @@
       "name": "system-info",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": 3,
+      "flagsPosition": 4,
       "fields": [
         {
           "name": "version",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "timestamp",
           "required": true,
           "type": "uint",
           "version": 1

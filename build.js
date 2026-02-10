@@ -12,6 +12,11 @@ auto.register({
       required: true
     },
     {
+      name: 'timestamp',
+      type: 'uint',
+      required: true
+    },
+    {
       name: 'view',
       type: '@autobee/link',
       required: true
