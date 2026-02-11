@@ -314,7 +314,8 @@ module.exports = class Autobee extends ReadyResource {
     try {
       await this._processBatch(batch)
       this._needsUpdate = true
-      await this.localWriter.flush(this.system.bee.head(), this._workingBee.head())
+      // analyze is worth the trade off adding the view here also (technically not needed)
+      await this.localWriter.flush(this.system, this._workingBee.head())
     } finally {
       this.lock.unlock()
     }

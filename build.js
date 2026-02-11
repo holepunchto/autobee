@@ -107,6 +107,11 @@ auto.register({
       required: true
     },
     {
+      name: 'flushes',
+      type: 'uint',
+      required: true
+    },
+    {
       name: 'view',
       type: '@autobee/link',
       required: false

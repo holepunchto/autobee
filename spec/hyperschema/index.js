@@ -16,36 +16,40 @@ const encoding0 = {
   preencode(state, m) {
     c.uint.preencode(state, m.version)
     c.uint.preencode(state, m.timestamp)
+    c.uint.preencode(state, m.flushes)
     encoding2.preencode(state, m.view)
-    encoding0_3.preencode(state, m.heads)
+    encoding0_4.preencode(state, m.heads)
     state.end++ // max flag is 1 so always one byte
 
-    if (m.indexers) encoding0_4.preencode(state, m.indexers)
+    if (m.indexers) encoding0_5.preencode(state, m.indexers)
   },
   encode(state, m) {
     const flags = m.indexers ? 1 : 0
 
     c.uint.encode(state, m.version)
     c.uint.encode(state, m.timestamp)
+    c.uint.encode(state, m.flushes)
     encoding2.encode(state, m.view)
-    encoding0_3.encode(state, m.heads)
+    encoding0_4.encode(state, m.heads)
     c.uint.encode(state, flags)
 
-    if (m.indexers) encoding0_4.encode(state, m.indexers)
+    if (m.indexers) encoding0_5.encode(state, m.indexers)
   },
   decode(state) {
     const r0 = c.uint.decode(state)
     const r1 = c.uint.decode(state)
-    const r2 = encoding2.decode(state)
-    const r3 = encoding0_3.decode(state)
+    const r2 = c.uint.decode(state)
+    const r3 = encoding2.decode(state)
+    const r4 = encoding0_4.decode(state)
     const flags = c.uint.decode(state)
 
     return {
       version: r0,
       timestamp: r1,
-      view: r2,
-      heads: r3,
-      indexers: (flags & 1) !== 0 ? encoding0_4.decode(state) : null
+      flushes: r2,
+      view: r3,
+      heads: r4,
+      indexers: (flags & 1) !== 0 ? encoding0_5.decode(state) : null
     }
   }
 }
@@ -121,6 +125,7 @@ const encoding3 = {
 const encoding4 = {
   preencode(state, m) {
     encoding2.preencode(state, m.system)
+    c.uint.preencode(state, m.flushes)
     state.end++ // flags are fixed size
 
     if (m.view) encoding2.preencode(state, m.view)
@@ -129,16 +134,19 @@ const encoding4 = {
     const flags = m.view ? 1 : 0
 
     encoding2.encode(state, m.system)
+    c.uint.encode(state, m.flushes)
     c.uint8.encode(state, flags)
 
     if (m.view) encoding2.encode(state, m.view)
   },
   decode(state) {
     const r0 = encoding2.decode(state)
+    const r1 = c.uint.decode(state)
     const flags = c.uint8.decode(state)
 
     return {
       system: r0,
+      flushes: r1,
       view: (flags & 1) !== 0 ? encoding2.decode(state) : null
     }
   }
@@ -148,20 +156,24 @@ const encoding4 = {
 const encoding4_inline = {
   preencode(state, m) {
     encoding2.preencode(state, m.system)
+    c.uint.preencode(state, m.flushes)
 
     if (m.view) encoding2.preencode(state, m.view)
   },
   encode(state, m) {
     encoding2.encode(state, m.system)
+    c.uint.encode(state, m.flushes)
 
     if (m.view) encoding2.encode(state, m.view)
   },
   decode(state, inlining) {
     const r0 = encoding2.decode(state)
+    const r1 = c.uint.decode(state)
     const flags = inlining
 
     return {
       system: r0,
+      flushes: r1,
       view: (flags & 1) !== 0 ? encoding2.decode(state) : null
     }
   }
@@ -213,11 +225,11 @@ const encoding5 = {
 }
 
 // @autobee/system-info.heads, deferred due to recusive use
-const encoding0_3 = c.array(encoding2)
+const encoding0_4 = c.array(encoding2)
 // @autobee/system-info.indexers, deferred due to recusive use
-const encoding0_4 = encoding0_3
+const encoding0_5 = encoding0_4
 // @autobee/oplog.links, deferred due to recusive use
-const encoding5_2 = encoding0_3
+const encoding5_2 = encoding0_4
 
 function setVersion(v) {
   version = v
