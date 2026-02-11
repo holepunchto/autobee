@@ -130,7 +130,6 @@ module.exports = class Autobee extends ReadyResource {
     await this._bootingSystem
 
     for await (const node of this.system.list()) {
-      const id = b4a.toString(node.key, 'hex')
       await this.writers.add(node.key)
     }
     await this._bump()
