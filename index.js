@@ -7,7 +7,7 @@ const asserts = require('./lib/asserts.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
-const { Writer } = require('./lib/writers.js')
+const { ActiveWriters } = require('./lib/writers.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 
@@ -38,13 +38,11 @@ module.exports = class Autobee extends ReadyResource {
     this.system = new System(store.namespace('system'), name)
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee) : this.bee
-    this.writable = false
 
     this.name = name // for debugging
 
     this.local = store.get({ name: 'local', exclusive: true })
-    this.writers = new Map()
-    this.localWriter = null
+    this.writers = null
     this.lock = new ScopeLock()
     this.bumping = 0
 
@@ -61,6 +59,10 @@ module.exports = class Autobee extends ReadyResource {
     this._host = new ApplyCalls(this)
 
     this.ready().catch(noop)
+  }
+
+  get writable() {
+    return this.writers.writable
   }
 
   async _open() {
@@ -93,8 +95,7 @@ module.exports = class Autobee extends ReadyResource {
   async _bootState() {
     await this.local.ready()
 
-    this.localWriter = new Writer(this.local)
-    this.writers.set(this.localWriter.id, this.localWriter)
+    this.writers = new ActiveWriters(this)
 
     if (!this.key) {
       this.key = this.local.key
@@ -103,7 +104,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (!b4a.equals(this.local.key, this.key)) {
-      const bootstrap = await this._addWriter(this.key)
+      const bootstrap = await this.writers.add(this.key)
       this.key = bootstrap.core.key
       this.discoveryKey = bootstrap.core.discoveryKey
       this.id = bootstrap.core.id
@@ -113,7 +114,7 @@ module.exports = class Autobee extends ReadyResource {
   async _bootSystem() {
     await this._bootingState
 
-    const oplog = await this.localWriter.getLatest()
+    const oplog = await this.writers.getLatestLocalOplog()
     const views = oplog ? oplog.views : null
     const system = views ? views.system : EMPTY_HEAD
 
@@ -122,7 +123,7 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee.move(system.view)
     this.bee.move(system.view)
 
-    await this._updateLocalState()
+    await this.writers.updateLocalState()
   }
 
   async _bootAll() {
@@ -130,7 +131,7 @@ module.exports = class Autobee extends ReadyResource {
 
     for await (const node of this.system.list()) {
       const id = b4a.toString(node.key, 'hex')
-      await this._addWriter(node.key)
+      await this.writers.add(node.key)
     }
     await this._bump()
   }
@@ -146,8 +147,7 @@ module.exports = class Autobee extends ReadyResource {
 
         while (updated) {
           updated = false
-          for (const w of this.writers.values()) {
-            if (w === this.localWriter) continue
+          for (const w of this.writers.external()) {
             const batch = await w.next(this.system, this.key)
             if (batch === null) continue
             await this._processBatch(batch)
@@ -167,46 +167,6 @@ module.exports = class Autobee extends ReadyResource {
   _update() {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
-  }
-
-  async _addWriter(key) {
-    if (b4a.equals(key, this.local.key)) await this._updateLocalState()
-
-    const id = b4a.toString(key, 'hex')
-    let w = this.writers.get(id)
-    if (w) return w
-
-    const core = this.store.get(key)
-    await core.ready()
-    core.on('append', () => this._bump())
-    w = new Writer(core)
-    this.writers.set(id, w)
-    return w
-  }
-
-  async _removeWriter(key) {
-    if (b4a.equals(key, this.local.key)) await this._updateLocalState()
-
-    const id = b4a.toString(key, 'hex')
-    const w = this.writers.get(id)
-    if (!w) return
-
-    this.writers.delete(id)
-    if (w !== this.localWriter) await w.close()
-  }
-
-  async _updateLocalState() {
-    const w = this.localWriter
-    const bootstrapping = w.core.length === 0 && b4a.equals(this.key, w.core.key)
-    const info = await this.system.get(this.local.key)
-    const writable = this.writable
-
-    this.writable = info ? !info.isRemoved : bootstrapping
-
-    if (writable === this.writable) return
-
-    this.emit(this.writable ? 'writable' : 'unwritable')
-    this.emit('update')
   }
 
   async _optimisticBatch(batch) {
@@ -269,8 +229,8 @@ module.exports = class Autobee extends ReadyResource {
     const changed = await this.system.flush(batch, this._workingBee)
 
     for (const { key, added } of changed) {
-      if (added) await this._addWriter(key)
-      else await this._removeWriter(key)
+      if (added) await this.writers.add(key)
+      else await this.writers.remove(key)
     }
   }
 
@@ -280,6 +240,10 @@ module.exports = class Autobee extends ReadyResource {
 
   static encodeValue(value, opts) {
     return encoding.encodeValue(value, opts)
+  }
+
+  wakeup({ key, length }) {
+
   }
 
   async append(values, { force = false } = {}) {
@@ -300,14 +264,14 @@ module.exports = class Autobee extends ReadyResource {
       const lnk = i === 0 ? links : []
       const b = { start: i, end: values.length - 1 - i }
 
-      const node = this.localWriter.append(buffer, t, b, lnk)
+      const node = this.writers.appendLocal(buffer, t, b, lnk)
       batch.push(node)
     }
 
     await this.lock.lock()
 
-    if (!this.writable && !force) {
-      this.localWriter.clear()
+    if (!this.writers.writable && !force) {
+      this.writers.clearLocal()
       throw new Error('Not writable')
     }
 
@@ -315,7 +279,7 @@ module.exports = class Autobee extends ReadyResource {
       await this._processBatch(batch)
       this._needsUpdate = true
       // analyze is worth the trade off adding the view here also (technically not needed)
-      await this.localWriter.flush(this.system, this._workingBee.head())
+      await this.writers.flushLocal(this._workingBee.head())
     } finally {
       this.lock.unlock()
     }
