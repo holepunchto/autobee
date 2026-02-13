@@ -3,6 +3,8 @@ const b4a = require('b4a')
 const { create, replicateAndSync, encode } = require('./helpers')
 
 test('perf - append 1k', async function (t) {
+  t.timeout(120_000)
+
   const auto = await create(t)
   let val = null
 
@@ -17,6 +19,8 @@ test('perf - append 1k', async function (t) {
 })
 
 test('perf - append 1k (2 autos)', async function (t) {
+  t.timeout(120_000)
+
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 

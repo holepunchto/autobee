@@ -70,6 +70,10 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingSystem = this._bootSystem()
     this._bootingAll = this._bootAll() // bg
 
+    this._bootingState.catch(noop)
+    this._bootingSystem.catch(noop)
+    this._bootingAll.catch(noop)
+
     await this.bee.ready()
   }
 
