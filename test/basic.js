@@ -1,7 +1,7 @@
 const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
-const { create, replicateAndSync, same, encode, apply } = require('./helpers')
+const { create, replicateAndSync, same, encode, apply, replicate, sync } = require('./helpers')
 const Autobee = require('../index.js')
 
 test('basic', async function (t) {
@@ -96,4 +96,21 @@ test('basic - encode/decode value', async function (t) {
   const buf = Autobee.encodeValue(b4a.from('hello'))
   const value = Autobee.decodeValue(buf)
   t.alike(value, b4a.from('hello'))
+})
+
+test('basic - optimistic', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto2.append(encode({ test: 42 }), { optimistic: true })
+
+  const done = replicate(auto1, auto2)
+
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  await sync(auto1, auto2)
+
+  done()
+
+  t.pass('applied')
 })

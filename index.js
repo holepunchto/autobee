@@ -135,6 +135,10 @@ module.exports = class Autobee extends ReadyResource {
     await this._bump()
   }
 
+  bumpSoon() {
+    this._bump().catch(noop)
+  }
+
   async _bump() {
     this.bumping++
 
@@ -147,7 +151,7 @@ module.exports = class Autobee extends ReadyResource {
         while (updated) {
           updated = false
           for (const w of this.writers.external()) {
-            const batch = await w.next(this.system, this.key)
+            const batch = await w.next(this.system)
             if (batch === null) continue
             await this._processBatch(batch)
             this._needsUpdate = updated = true
@@ -169,38 +173,44 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _optimisticBatch(batch) {
-    const rollbackSystem = this.system.bee.head()
-    const rollbackView = this._workingBee.head()
-
-    const t = await this.system.prepare(batch)
-
-    if (t.view) {
-      this._workingBee.move(t.view)
-    }
-
-    asserts.assert(batch === t.tip[0])
-
-    let failed = false
+    await this.lock.lock()
 
     try {
-      await this._applyBatch(batch)
-    } catch {
-      failed = true
-    }
+      const rollbackSystem = this.system.bee.head()
+      const rollbackView = this._workingBee.head()
 
-    const w = failed ? null : await this.system.get(batch[0].key)
-    if (!w || w.length < batch[0].length) {
-      this._workingBee.move(rollbackView)
-      this.system.bee.move(rollbackSystem)
-      await this.system.reset()
-      return false
-    }
+      const t = await this.system.prepare(batch)
 
-    for (let i = 1; i < t.tip.length; i++) {
-      await this._applyBatch(t.tip[i])
-    }
+      if (t.view) {
+        this._workingBee.move(t.view)
+      }
 
-    return true
+      asserts.assert(batch === t.tip[0], 'Batch must be first part of tip')
+
+      let failed = false
+
+      try {
+        await this._applyBatch(batch)
+      } catch {
+        failed = true
+      }
+
+      const w = failed ? null : await this.system.get(batch[0].key)
+      if (!w || w.length < batch[0].length) {
+        this._workingBee.move(rollbackView)
+        this.system.bee.move(rollbackSystem)
+        await this.system.reset()
+        return false
+      }
+
+      for (let i = 1; i < t.tip.length; i++) {
+        await this._applyBatch(t.tip[i])
+      }
+
+      return true
+    } finally {
+      this.lock.unlock()
+    }
   }
 
   async _processBatch(batch) {
@@ -241,11 +251,12 @@ module.exports = class Autobee extends ReadyResource {
     return encoding.encodeValue(value, opts)
   }
 
-  wakeup({ key, length }) {
-
+  async wakeup({ key, length }) {
+    await this._bootingSystem
+    return this.writers.wakeup(key, length)
   }
 
-  async append(values, { force = false } = {}) {
+  async append(values, { force = false, optimistic = false } = {}) {
     if (!Array.isArray(values)) values = [values]
 
     if (!this.opened) await this.ready()
@@ -263,19 +274,21 @@ module.exports = class Autobee extends ReadyResource {
       const lnk = i === 0 ? links : []
       const b = { start: i, end: values.length - 1 - i }
 
-      const node = this.writers.appendLocal(buffer, t, b, lnk)
+      const node = this.writers.appendLocal(buffer, t, b, lnk, optimistic)
       batch.push(node)
     }
 
     await this.lock.lock()
 
-    if (!this.writers.writable && !force) {
+    if (!this.writers.writable && !force && !optimistic) {
       this.writers.clearLocal()
       throw new Error('Not writable')
     }
 
     try {
-      await this._processBatch(batch)
+      if (!(optimistic && this.system.isGenesis())) {
+        await this._processBatch(batch)
+      }
       this._needsUpdate = true
       // analyze is worth the trade off adding the view here also (technically not needed)
       await this.writers.flushLocal(this._workingBee.head())
