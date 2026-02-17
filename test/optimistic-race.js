@@ -366,6 +366,9 @@ test('optimistic - replicate before optimistic append', async function (t) {
       }
     }
 
+    // Wait for sync before closing to avoid REQUEST_CANCELLED errors
+    await sync(auto1, auto2)
+    
     done()
     await auto1.close()
     await auto2.close()
