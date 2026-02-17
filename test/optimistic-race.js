@@ -366,6 +366,9 @@ test('optimistic - replicate before optimistic append', async function (t) {
       }
     }
 
+    // Call wakeup to trigger discovery and processing
+    await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+    
     // Wait for sync before closing to avoid REQUEST_CANCELLED errors
     await sync(auto1, auto2)
     
