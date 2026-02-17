@@ -9,6 +9,7 @@ async function runTests() {
 
   await import('./basic.js')
   await import('./perf.js')
+  await import('./optimistic-race.js')
 
   test.resume()
 }
