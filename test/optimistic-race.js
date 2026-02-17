@@ -4,10 +4,11 @@ const { create, replicate, sync, encode } = require('./helpers')
 
 test('optimistic - race condition exposure (run multiple times)', async function (t) {
   t.plan(1)
+  t.timeout(120000) // 2 minutes for more iterations
   
   let failures = 0
   let successes = 0
-  const iterations = 20
+  const iterations = 100
 
   for (let i = 0; i < iterations; i++) {
     const auto1 = await create(t)
@@ -20,8 +21,15 @@ test('optimistic - race condition exposure (run multiple times)', async function
 
     const done = replicate(auto1, auto2)
 
+    // Add small delay to widen race window
+    await new Promise(resolve => setTimeout(resolve, Math.random() * 10))
+
     // Wakeup and sync
     await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+    
+    // Add another small delay before sync
+    await new Promise(resolve => setTimeout(resolve, Math.random() * 5))
+    
     await sync(auto1, auto2)
 
     // Check if auto1 actually processed auto2's optimistic batch
@@ -107,4 +115,85 @@ test('optimistic - with explicit flush', async function (t) {
   
   t.ok(writerInfo && writerInfo.length >= auto2.local.length, 
     'auto1 should have processed auto2 batch after flush')
+})
+
+test('optimistic - stress test with concurrent operations', async function (t) {
+  t.timeout(60000)
+  
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+  const auto3 = await create(t, auto1.key)
+
+  await auto1.append(encode({ hello: 'world' }))
+
+  // Multiple optimistic appends
+  await Promise.all([
+    auto2.append(encode({ test: 2 }), { optimistic: true }),
+    auto3.append(encode({ test: 3 }), { optimistic: true })
+  ])
+
+  const done1 = replicate(auto1, auto2)
+  const done2 = replicate(auto1, auto3)
+
+  // Wakeup both
+  await Promise.all([
+    auto1.wakeup({ key: auto2.local.key, length: auto2.local.length }),
+    auto1.wakeup({ key: auto3.local.key, length: auto3.local.length })
+  ])
+
+  await sync(auto1, auto2)
+  await sync(auto1, auto3)
+
+  const writer2 = await auto1.system.get(auto2.local.key)
+  const writer3 = await auto1.system.get(auto3.local.key)
+
+  done1()
+  done2()
+
+  t.ok(writer2 && writer2.length >= auto2.local.length, 'auto2 batch processed')
+  t.ok(writer3 && writer3.length >= auto3.local.length, 'auto3 batch processed')
+})
+
+test('optimistic - check immediately after wakeup (no sync)', async function (t) {
+  t.timeout(60000)
+  
+  let failures = 0
+  const iterations = 50
+
+  for (let i = 0; i < iterations; i++) {
+    const auto1 = await create(t)
+    const auto2 = await create(t, auto1.key)
+
+    await auto1.append(encode({ hello: 'world' }))
+    await auto2.append(encode({ test: 42, iteration: i }), { optimistic: true })
+
+    const done = replicate(auto1, auto2)
+
+    await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+    
+    // Check immediately without sync - this should expose the race
+    const writerInfo = await auto1.system.get(auto2.local.key)
+    
+    if (!writerInfo || writerInfo.length < auto2.local.length) {
+      failures++
+      if (failures <= 5) {
+        console.log(`[${i}] RACE DETECTED: wakeup returned but batch not processed yet`)
+      }
+    }
+
+    // Now sync and verify it eventually works
+    await sync(auto1, auto2)
+    await auto1._bump() // Force bump
+    
+    const writerInfoAfter = await auto1.system.get(auto2.local.key)
+    t.ok(writerInfoAfter && writerInfoAfter.length >= auto2.local.length, 
+      `iteration ${i}: batch eventually processed`)
+
+    done()
+    await auto1.close()
+    await auto2.close()
+  }
+
+  console.log(`\nRace condition detected ${failures}/${iterations} times`)
+  t.comment(`This shows wakeup() doesn't wait for _bump() to complete`)
 })
