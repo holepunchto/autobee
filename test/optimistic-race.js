@@ -1,5 +1,4 @@
 const test = require('brittle')
-const b4a = require('b4a')
 const { create, replicate, sync, encode } = require('./helpers')
 
 test('optimistic - basic flow', async function (t) {
@@ -14,18 +13,17 @@ test('optimistic - basic flow', async function (t) {
   await sync(auto1, auto2)
 
   const writerInfo = await auto1.system.get(auto2.local.key)
-  
+
   done()
-  
-  t.ok(writerInfo && writerInfo.length >= auto2.local.length, 
-    'optimistic batch processed')
+
+  t.ok(writerInfo && writerInfo.length >= auto2.local.length, 'optimistic batch processed')
 })
 
 test('optimistic - stability test (multiple iterations)', async function (t) {
   t.timeout(60000)
-  
+
   const iterations = 20
-  
+
   for (let i = 0; i < iterations; i++) {
     const auto1 = await create(t)
     const auto2 = await create(t, auto1.key)
@@ -38,9 +36,8 @@ test('optimistic - stability test (multiple iterations)', async function (t) {
     await sync(auto1, auto2)
 
     const writerInfo = await auto1.system.get(auto2.local.key)
-    
-    t.ok(writerInfo && writerInfo.length >= auto2.local.length, 
-      `iteration ${i}: batch processed`)
+
+    t.ok(writerInfo && writerInfo.length >= auto2.local.length, `iteration ${i}: batch processed`)
 
     done()
     await auto1.close()
@@ -99,6 +96,6 @@ test('optimistic - multiple batches from one writer', async function (t) {
   const writerInfo = await auto1.system.get(auto2.local.key)
 
   done()
-  
+
   t.is(writerInfo.length, 10, 'all 10 batches processed')
 })
