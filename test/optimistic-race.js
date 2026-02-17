@@ -197,3 +197,180 @@ test('optimistic - check immediately after wakeup (no sync)', async function (t)
   console.log(`\nRace condition detected ${failures}/${iterations} times`)
   t.comment(`This shows wakeup() doesn't wait for _bump() to complete`)
 })
+
+test('optimistic - extreme stress with no wakeup', async function (t) {
+  t.timeout(120000)
+  
+  let raceDetected = 0
+  const iterations = 100
+
+  for (let i = 0; i < iterations; i++) {
+    const auto1 = await create(t)
+    const auto2 = await create(t, auto1.key)
+
+    await auto1.append(encode({ hello: 'world' }))
+    await auto2.append(encode({ test: i }), { optimistic: true })
+
+    const done = replicate(auto1, auto2)
+
+    // Don't use wakeup at all - let replication discover naturally
+    // This creates maximum race window
+    
+    // Wait just a tiny bit for replication to start
+    await new Promise(resolve => setImmediate(resolve))
+    
+    // Check immediately - before any sync
+    const writerInfo = await auto1.system.get(auto2.local.key)
+    
+    if (!writerInfo || writerInfo.length < auto2.local.length) {
+      raceDetected++
+      if (raceDetected <= 3) {
+        console.log(`[${i}] RACE: batch not yet processed (writerInfo: ${writerInfo ? writerInfo.length : 'null'})`)
+      }
+    }
+
+    done()
+    await auto1.close()
+    await auto2.close()
+  }
+
+  console.log(`\nRace detected ${raceDetected}/${iterations} times without wakeup()`)
+  t.comment(`Without wakeup(), replication must discover and process naturally`)
+})
+
+test('optimistic - interrupt during bump', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto2.append(encode({ test: 42 }), { optimistic: true })
+
+  const done = replicate(auto1, auto2)
+
+  // Start wakeup but don't await it
+  const wakeupPromise = auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  
+  // Immediately check before wakeup completes
+  const writerInfoDuring = await auto1.system.get(auto2.local.key)
+  console.log('During wakeup (not awaited):', writerInfoDuring)
+  
+  await wakeupPromise
+  
+  const writerInfoAfter = await auto1.system.get(auto2.local.key)
+  console.log('After wakeup completes:', writerInfoAfter)
+  
+  done()
+  
+  t.comment('Check if wakeup() actually waits for processing')
+})
+
+test('optimistic - multiple rapid optimistic appends', async function (t) {
+  t.timeout(60000)
+  
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ hello: 'world' }))
+
+  // Rapid fire optimistic appends
+  for (let i = 0; i < 10; i++) {
+    await auto2.append(encode({ rapid: i }), { optimistic: true })
+  }
+
+  console.log('auto2.local.length after rapid appends:', auto2.local.length)
+
+  const done = replicate(auto1, auto2)
+
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  
+  // Check immediately
+  const writerInfo1 = await auto1.system.get(auto2.local.key)
+  console.log('Immediately after wakeup:', writerInfo1)
+  
+  // Wait a bit
+  await new Promise(resolve => setTimeout(resolve, 100))
+  
+  const writerInfo2 = await auto1.system.get(auto2.local.key)
+  console.log('After 100ms:', writerInfo2)
+  
+  // Force bump
+  await auto1._bump()
+  
+  const writerInfo3 = await auto1.system.get(auto2.local.key)
+  console.log('After explicit bump:', writerInfo3)
+
+  done()
+  
+  t.ok(writerInfo3 && writerInfo3.length >= auto2.local.length, 
+    'Eventually all batches processed')
+})
+
+test('optimistic - check bumping counter during operations', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto2.append(encode({ test: 42 }), { optimistic: true })
+
+  console.log('auto1.bumping before replication:', auto1.bumping)
+
+  const done = replicate(auto1, auto2)
+
+  console.log('auto1.bumping after replication started:', auto1.bumping)
+
+  const wakeupPromise = auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  
+  console.log('auto1.bumping during wakeup (not awaited):', auto1.bumping)
+  
+  await wakeupPromise
+  
+  console.log('auto1.bumping after wakeup:', auto1.bumping)
+  
+  // The bumping counter should tell us if _bump() is running
+  await new Promise(resolve => setTimeout(resolve, 50))
+  
+  console.log('auto1.bumping after 50ms:', auto1.bumping)
+
+  done()
+  
+  t.pass('Observed bumping counter behavior')
+})
+
+test('optimistic - replicate before optimistic append', async function (t) {
+  t.timeout(60000)
+  
+  let raceDetected = 0
+  const iterations = 50
+
+  for (let i = 0; i < iterations; i++) {
+    const auto1 = await create(t)
+    const auto2 = await create(t, auto1.key)
+
+    await auto1.append(encode({ hello: 'world' }))
+    
+    // Start replication FIRST
+    const done = replicate(auto1, auto2)
+    
+    // Then do optimistic append while replication is active
+    await auto2.append(encode({ test: i }), { optimistic: true })
+
+    // Minimal delay
+    await new Promise(resolve => setImmediate(resolve))
+    
+    const writerInfo = await auto1.system.get(auto2.local.key)
+    
+    if (!writerInfo || writerInfo.length < auto2.local.length) {
+      raceDetected++
+      if (raceDetected <= 3) {
+        console.log(`[${i}] RACE: optimistic append during active replication not yet processed`)
+      }
+    }
+
+    done()
+    await auto1.close()
+    await auto2.close()
+  }
+
+  console.log(`\nRace detected ${raceDetected}/${iterations} times with replication-first`)
+  t.comment(`Optimistic append during active replication`)
+})
