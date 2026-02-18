@@ -257,7 +257,8 @@ module.exports = class Autobee extends ReadyResource {
 
   async wakeup({ key, length }) {
     await this._bootingSystem
-    return this.writers.wakeup(key, length)
+    await this.writers.wakeup(key, length)
+    await this._bump()
   }
 
   async append(values, { force = false, optimistic = false } = {}) {
