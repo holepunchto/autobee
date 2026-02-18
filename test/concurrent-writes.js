@@ -36,7 +36,7 @@ test('three-way fork and merge', async function (t) {
   t.comment('Phase 6: Verify merge completed - check final state')
   const node = await auto1.view.get(b4a.from('latest'))
   t.ok(node, 'final state exists')
-  
+
   // The test helper only stores the latest value, so we verify the merge happened
   // by checking that all nodes have the same state and local lengths increased
   t.is(auto1.local.length, 4, 'auto1 wrote 4 entries (initial + 2 addWriter + fork)')
@@ -94,7 +94,7 @@ test('sequential fork and merge - multiple rounds', async function (t) {
   t.comment('Phase 9: Verify final state')
   const node = await auto1.view.get(b4a.from('latest'))
   t.ok(node, 'final state exists')
-  
+
   // auto1: initial + addWriter + round1 + round2 + round3 = 5 entries
   // auto2: round1 + round2 + round3 = 3 entries
   t.is(auto1.local.length, 5, 'auto1 wrote 5 entries total')
