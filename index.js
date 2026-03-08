@@ -38,6 +38,7 @@ module.exports = class Autobee extends ReadyResource {
     this.system = new System(store.namespace('system'), name)
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee) : this.bee
+    this.optimistic = handlers.optimistic !== false // TODO: should default to false instead
 
     this.name = name // for debugging
 
@@ -164,65 +165,75 @@ module.exports = class Autobee extends ReadyResource {
     if (this._needsUpdate) await this._update()
   }
 
-  async _bumpPendingWriters() {
-    let updated = false
-
-    for (let i = this.writers.pending.length - 1; i >= 0; i--) {
-      const w = this.writers.pending[i]
-      const batch = await w.next()
-      if (batch === null) continue
-      await this._processBatch(batch)
-      updated = true
-      w.notify(batch)
-    }
-
-    return updated
-  }
-
   _update() {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
   }
 
+  async _bumpPendingWriters() {
+    let updated = false
+
+    for (let i = this.writers.pending.length - 1; i >= 0; i--) {
+      const w = this.writers.pending[i]
+
+      const batch = await w.next()
+      if (batch === null) continue
+
+      if (w.isAdded || (w.isRemoved && w.hasReferals())) {
+        await this._processBatch(batch)
+        w.notify(batch)
+        updated = true
+        continue
+      }
+
+      if (this.optimistic && !w.isRemoved && batch[0].optimistic) {
+        if (!(await this._optimisticBatch(batch))) {
+          w.removePending()
+          continue
+        }
+        w.notify(batch)
+        updated = true
+        continue
+      }
+    }
+
+    return updated
+  }
+
   async _optimisticBatch(batch) {
-    await this.lock.lock()
+    const rollbackSystem = this.system.bee.head()
+    const rollbackView = this._workingBee.head()
+
+    const t = await this.system.prepare(batch)
+
+    if (t.view) {
+      this._workingBee.move(t.view)
+    }
+
+    asserts.assert(batch === t.tip[0], 'Batch must be first part of tip')
+
+    let failed = true
 
     try {
-      const rollbackSystem = this.system.bee.head()
-      const rollbackView = this._workingBee.head()
-
-      const t = await this.system.prepare(batch)
-
-      if (t.view) {
-        this._workingBee.move(t.view)
-      }
-
-      asserts.assert(batch === t.tip[0], 'Batch must be first part of tip')
-
-      let failed = false
-
-      try {
+      if (await this.system.canApply(batch[0].key, true)) {
         await this._applyBatch(batch)
-      } catch {
-        failed = true
+        failed = false
       }
+    } catch {}
 
-      const w = failed ? null : await this.system.get(batch[0].key)
-      if (!w || w.length < batch[0].length) {
-        this._workingBee.move(rollbackView)
-        this.system.bee.move(rollbackSystem)
-        await this.system.reset()
-        return false
-      }
-
-      for (let i = 1; i < t.tip.length; i++) {
-        await this._applyBatch(t.tip[i])
-      }
-
-      return true
-    } finally {
-      this.lock.unlock()
+    const w = failed ? null : await this.system.get(batch[0].key)
+    if (!w || w.length < batch[0].length) {
+      this._workingBee.move(rollbackView)
+      this.system.bee.move(rollbackSystem)
+      await this.system.reset()
+      return false
     }
+
+    for (let i = 1; i < t.tip.length; i++) {
+      await this._applyBatch(t.tip[i])
+    }
+
+    return true
   }
 
   async _processBatch(batch) {
@@ -243,9 +254,11 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch) {
-    this._host.applying = batch
-    if (this._hasApply) await this._handlers.apply(batch, this._workingView, this._host)
-    this._host.applying = null
+    if (this._hasApply && (await this.system.canApply(batch[0].key, false))) {
+      this._host.applying = batch
+      await this._handlers.apply(batch, this._workingView, this._host)
+      this._host.applying = null
+    }
 
     const changed = await this.system.flush(batch, this._workingBee)
 
