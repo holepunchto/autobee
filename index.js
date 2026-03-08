@@ -150,16 +150,9 @@ module.exports = class Autobee extends ReadyResource {
       await this.lock.lock()
 
       try {
-        let updated = true
-
-        while (updated) {
-          updated = false
-          for (const w of this.writers.external()) {
-            const batch = await w.next(this.system)
-            if (batch === null) continue
-            await this._processBatch(batch)
-            this._needsUpdate = updated = true
-          }
+        while (!this.closing) {
+          if (!(await this._bumpPendingWriters())) break
+          this._needsUpdate = true
         }
       } finally {
         if (this.bumping === 1) this.bumping = 0
@@ -169,6 +162,21 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this._needsUpdate) await this._update()
+  }
+
+  async _bumpPendingWriters() {
+    let updated = false
+
+    for (let i = this.writers.pending.length - 1; i >= 0; i--) {
+      const w = this.writers.pending[i]
+      const batch = await w.next()
+      if (batch === null) continue
+      await this._processBatch(batch)
+      updated = true
+      w.notify(batch)
+    }
+
+    return updated
   }
 
   _update() {
