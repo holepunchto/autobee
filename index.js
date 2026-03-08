@@ -86,6 +86,10 @@ module.exports = class Autobee extends ReadyResource {
     await this._workingBee.close()
     await this.bee.close()
     await this.store.close()
+
+    try {
+      await this._bootingAll
+    } catch {}
   }
 
   replicate(...args) {
@@ -162,7 +166,7 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (this._needsUpdate) await this._update()
+    if (this._needsUpdate) this._update()
   }
 
   _update() {
@@ -179,7 +183,7 @@ module.exports = class Autobee extends ReadyResource {
       const batch = await w.next()
       if (batch === null) continue
 
-      if (w.isAdded || (w.isRemoved && w.hasReferals())) {
+      if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
         await this._processBatch(batch)
         w.notify(batch)
         updated = true
