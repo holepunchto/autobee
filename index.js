@@ -216,7 +216,7 @@ module.exports = class Autobee extends ReadyResource {
 
     try {
       if (await this.system.canApply(batch[0].key, true)) {
-        await this._applyBatch(batch)
+        await this._applyBatch(batch, true)
         failed = false
       }
     } catch {}
@@ -249,12 +249,12 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     for (let i = 0; i < t.tip.length; i++) {
-      await this._applyBatch(t.tip[i])
+      await this._applyBatch(t.tip[i], false)
     }
   }
 
-  async _applyBatch(batch) {
-    if (this._hasApply && (await this.system.canApply(batch[0].key, false))) {
+  async _applyBatch(batch, optimistic) {
+    if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
       this._host.applying = batch
       await this._handlers.apply(batch, this._workingView, this._host)
       this._host.applying = null
