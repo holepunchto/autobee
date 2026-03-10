@@ -162,6 +162,10 @@ test('writer-management - writer permissions persist after restart', async funct
 test('writer-management - remove self', async function (t) {
   const auto1 = await create(t)
 
+  // Bootstrap auto1 by writing first
+  await auto1.append(encode({ msg: 'bootstrap' }))
+  t.ok(auto1.writable, 'auto1 is initially writable')
+
   await auto1.append(encode({ removeWriter: auto1.local.id }))
 
   t.absent(auto1.writable, 'auto1 is no longer writable after removing self')
@@ -269,6 +273,8 @@ test('writer-management - indexer flag', async function (t) {
 })
 
 test('writer-management - concurrent remove and write from removed writer', async function (t) {
+  const { replicate, sync } = require('./helpers')
+
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
@@ -290,18 +296,40 @@ test('writer-management - concurrent remove and write from removed writer', asyn
   // auto2 writes MORE data, still not knowing it's removed
   await auto2.append(encode({ msg: 'from auto2 after removal but unaware' }))
 
-  // Now sync everything through auto3 which sees both sides
-  await replicateAndSync(auto1, auto2, auto3)
+  // Sync auto1 and auto3 first (they agree on the removal)
+  await replicateAndSync(auto1, auto3)
+
+  // Now replicate auto2's data to auto1 and let auto1 process what it can
+  const done = replicate(auto1, auto2)
+
+  // Wait for auto1 to see auto2's oplog, then flush
+  // We can't use sync() because auto1 will never fully index a removed writer's entries
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  await auto1.flush()
+  await auto2.flush()
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  await auto1.flush()
+
+  await done()
+
+  // auto2 should learn it's been removed
+  const done2 = replicate(auto1, auto2)
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  await auto2.flush()
+  await done2()
 
   t.absent(auto2.writable, 'auto2 is not writable after sync')
 
-  const writerInfo = await auto3.system.get(auto2.local.key)
-  t.ok(writerInfo, 'writer info exists on auto3')
-  t.ok(writerInfo.isRemoved, 'auto2 is marked as removed on auto3')
-
-  // Verify auto1 also sees auto2 as removed
   const writerInfo1 = await auto1.system.get(auto2.local.key)
+  t.ok(writerInfo1, 'writer info exists on auto1')
   t.ok(writerInfo1.isRemoved, 'auto2 is marked as removed on auto1')
+
+  // Sync auto3 to see the final state
+  await replicateAndSync(auto1, auto3)
+
+  const writerInfo3 = await auto3.system.get(auto2.local.key)
+  t.ok(writerInfo3, 'writer info exists on auto3')
+  t.ok(writerInfo3.isRemoved, 'auto2 is marked as removed on auto3')
 
   // auto3 should still be writable and unaffected
   t.ok(auto3.writable, 'auto3 is still writable')
