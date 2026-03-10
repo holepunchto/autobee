@@ -1,6 +1,5 @@
 const test = require('brittle')
-const b4a = require('b4a')
-const { create, replicate, replicateAndSync, sync, encode, decode, same } = require('./helpers')
+const { create, replicateAndSync, encode, same } = require('./helpers')
 
 test('links - writer sees previous writes via links', async function (t) {
   const auto1 = await create(t)
@@ -160,7 +159,10 @@ test('links - reverse order arrival of dependency chain', async function (t) {
   // Final sync to converge
   await replicateAndSync(auto1, auto2, auto3, auto4)
 
-  t.ok(await same(auto1, auto2, auto3, auto4), 'all peers converge after reverse-order chain arrival')
+  t.ok(
+    await same(auto1, auto2, auto3, auto4),
+    'all peers converge after reverse-order chain arrival'
+  )
 })
 
 test('links - diamond dependency pattern', async function (t) {
