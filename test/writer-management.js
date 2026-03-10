@@ -1,5 +1,4 @@
 const test = require('brittle')
-const b4a = require('b4a')
 const { create, replicateAndSync, encode } = require('./helpers')
 
 test('writer-management - add writer', async function (t) {
@@ -273,7 +272,7 @@ test('writer-management - indexer flag', async function (t) {
 })
 
 test('writer-management - concurrent remove and write from removed writer', async function (t) {
-  const { replicate, sync } = require('./helpers')
+  const { replicate } = require('./helpers')
 
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
