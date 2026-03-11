@@ -11,6 +11,7 @@ async function runTests() {
   await import('./concurrent-writes.js')
   await import('./perf.js')
   await import('./optimistic-race.js')
+  await import('./writer-scale.js')
 
   test.resume()
 }
