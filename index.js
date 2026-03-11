@@ -8,6 +8,7 @@ const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const { ActiveWriters } = require('./lib/writers.js')
+const UpdateChanges = require('./lib/updates.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 
@@ -56,6 +57,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._handlers = handlers
     this._hasApply = !!handlers.apply
+    this._hasUpdate = !!handlers.update
     this._needsUpdate = false
     this._host = new ApplyCalls(this)
 
@@ -262,6 +264,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
+
     if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
       this._host.applying = batch
       await this._handlers.apply(batch, this._workingView, this._host)
@@ -273,6 +278,11 @@ module.exports = class Autobee extends ReadyResource {
     for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
+    }
+
+    if (changes) {
+      changes.finalise()
+      this._handlers.update(this.view, changes)
     }
   }
 
