@@ -35,9 +35,7 @@ for (const writers of COUNTS) {
 
       const writeStart = Date.now()
 
-      await Promise.all(
-        peers.map((peer) => peer.append('ping'))
-      )
+      await Promise.all(peers.map((peer) => peer.append('ping')))
 
       await Promise.all(
         peers.map((peer) =>
