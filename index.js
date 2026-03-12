@@ -37,7 +37,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.system = new System(store.namespace('system'), name, handlers)
     this.bee = bee.snapshot()
-    this.view = handlers.open ? handlers.open(this.bee) : this.bee
+    this.view = handlers.open ? handlers.open(store, this.bee) : this.bee
     this.optimistic = handlers.optimistic !== false // TODO: should default to false instead
 
     this.name = name // for debugging
@@ -47,7 +47,7 @@ module.exports = class Autobee extends ReadyResource {
     this.bumping = 0
 
     this._workingBee = bee
-    this._workingView = handlers.open ? handlers.open(this._workingBee) : this._workingBee
+    this._workingView = handlers.open ? handlers.open(store, this._workingBee) : this._workingBee
 
     this._bootingState = null
     this._bootingSystem = null
@@ -74,7 +74,6 @@ module.exports = class Autobee extends ReadyResource {
       name: 'local',
       exclusive: true,
       encryption: this.encryptionKey
-      // valueEncoding: encoding.Oplog
     })
 
     this._bootingState = this._bootState()
@@ -194,7 +193,7 @@ module.exports = class Autobee extends ReadyResource {
     for (let i = this.writers.pending.length - 1; i >= 0; i--) {
       const w = this.writers.pending[i]
 
-      const batch = await w.next(this._handlers.decodeOplog)
+      const batch = await w.next()
       if (batch === null) continue
 
       if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
