@@ -67,7 +67,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _open() {
     if (this._handlers.encryptionKey !== null) {
-      this.encryptionKey = { key: await this._handlers.encryptionKey }
+      this.encryptionKey = await this._handlers.encryptionKey
     }
 
     this.local = this.store.get({
