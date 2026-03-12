@@ -35,14 +35,13 @@ module.exports = class Autobee extends ReadyResource {
     this.discoveryKey = null
     this.id = null
 
-    this.system = new System(store.namespace('system'), name)
+    this.system = new System(store.namespace('system'), name, handlers)
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee) : this.bee
     this.optimistic = handlers.optimistic !== false // TODO: should default to false instead
 
     this.name = name // for debugging
 
-    this.local = store.get({ name: 'local', exclusive: true })
     this.writers = null
     this.lock = new ScopeLock()
     this.bumping = 0
@@ -67,6 +66,17 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _open() {
+    if (this._handlers.encryptionKey !== null) {
+      this.encryptionKey = { key: await this._handlers.encryptionKey }
+    }
+
+    this.local = this.store.get({
+      name: 'local',
+      exclusive: true,
+      encryption: this.encryptionKey
+      // valueEncoding: encoding.Oplog
+    })
+
     this._bootingState = this._bootState()
     this._bootingSystem = this._bootSystem()
     this._bootingAll = this._bootAll() // bg
