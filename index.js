@@ -129,8 +129,12 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.system.boot(system)
 
-    this._workingBee.move(system.view)
-    this.bee.move(system.view)
+    // Use the view position from the system info (authoritative, post-processing)
+    // rather than from the oplog (stale, captured at append time before _bump)
+    const view = this.system.view || EMPTY_HEAD
+
+    this._workingBee.move(view)
+    this.bee.move(view)
 
     await this.writers.updateLocalState()
   }
