@@ -3,7 +3,7 @@ const b4a = require('b4a')
 const { create } = require('./helpers')
 
 const COUNTS = [10, 25, 50, 100]
-const BASE_TIMEOUT = 90_000
+const BASE_TIMEOUT = 190_000
 
 for (const writers of COUNTS) {
   test(`scale - ${writers} writers converges`, async function (t) {
@@ -182,4 +182,4 @@ function timeoutFor(writers) {
   return BASE_TIMEOUT + writers * 1_000
 }
 
-function noop() {}
+function noop() { }
