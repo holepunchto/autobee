@@ -182,4 +182,4 @@ function timeoutFor(writers) {
   return BASE_TIMEOUT + writers * 1_000
 }
 
-function noop() { }
+function noop() {}
