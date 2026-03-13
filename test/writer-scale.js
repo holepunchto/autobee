@@ -149,8 +149,10 @@ async function collectStats(primary, peers) {
     writers: peers.length + 1,
     primaryActiveWriters: primary.writers.active.size,
     primaryPendingWriters: primary.writers.pending.length,
-    rssMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
-    heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+    rssMb: globalThis.process ? Math.round(process.memoryUsage().rss / 1024 / 1024) : 'unknown',
+    heapUsedMb: globalThis.process
+      ? Math.round(process.memoryUsage().heapUsed / 1024 / 1024)
+      : 'unknown',
     sample: lengths.slice(0, 5)
   }
 }
