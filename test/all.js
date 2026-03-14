@@ -13,6 +13,9 @@ async function runTests() {
   await import('./optimistic-race.js')
   await import('./topo-sort.js')
   await import('./optimistic.js')
+  await import('./batch.js')
+  await import('./view-consistency.js')
+  await import('./writer-management.js')
 
   test.resume()
 }
