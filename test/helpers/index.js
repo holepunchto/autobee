@@ -2,6 +2,11 @@ const Autobee = require('../../index.js')
 const Corestore = require('corestore')
 const b4a = require('b4a')
 
+const argv = typeof global.Bare !== 'undefined' ? global.Bare.argv : process.argv
+const encryptionKey = argv.includes('--encrypt-all')
+  ? b4a.alloc(32).fill('autobase-encryption-test')
+  : undefined
+
 exports.create = create
 exports.sync = sync
 exports.same = same
@@ -11,6 +16,7 @@ exports.apply = apply
 exports.encode = encode
 exports.decode = decode
 exports.dump = dump
+exports.encryptionKey = encryptionKey
 
 function encode(val) {
   return b4a.from(JSON.stringify(val))
@@ -76,6 +82,7 @@ async function create(t, key, opts) {
 
   const storage = (opts && opts.storage) || (await t.tmp())
   const auto = new Autobee(new Corestore(storage), key, {
+    encryptionKey,
     name: '#' + t.tick++,
     apply,
     ...opts

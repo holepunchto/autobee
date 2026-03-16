@@ -3,6 +3,7 @@ const b4a = require('b4a')
 const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
+const { WriterEncryption } = require('autobee-encryption')
 const asserts = require('./lib/asserts.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
@@ -67,6 +68,11 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _open() {
+    if (this._handlers.encryptionKey) {
+      this.encryptionKey = await this._handlers.encryptionKey
+      this.local.setEncryption(new WriterEncryption(this))
+    }
+
     this._bootingState = this._bootState()
     this._bootingSystem = this._bootSystem()
     this._bootingAll = this._bootAll() // bg
