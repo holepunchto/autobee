@@ -1,7 +1,16 @@
 const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
-const { create, replicateAndSync, same, encode, apply, replicate, sync } = require('./helpers')
+const {
+  create,
+  replicateAndSync,
+  same,
+  encode,
+  decode,
+  apply,
+  replicate,
+  sync
+} = require('./helpers')
 const Autobee = require('../index.js')
 
 test('basic', async function (t) {
@@ -113,4 +122,33 @@ test('basic - optimistic', async function (t) {
   done()
 
   t.pass('applied')
+})
+
+test('basic - anchor', async function (t) {
+  const auto = await create(t, null, { apply })
+
+  await auto.append(encode({ hello: 'world' }))
+  await auto.append(encode({ anchor: true }))
+
+  t.pass('applied')
+
+  async function apply(nodes, view, host) {
+    for (const node of nodes) {
+      const data = decode(node.value)
+
+      if (data.anchor) {
+        const anchor = await host.createAnchor(data.addWriter)
+        t.ok(anchor.key)
+        t.ok(anchor.length)
+      }
+
+      if (data.removeWriter) {
+        host.removeWriter(data.removeWriter)
+      }
+
+      const w = view.write()
+      w.tryPut(b4a.from('latest'), node.value)
+      await w.flush()
+    }
+  }
 })
