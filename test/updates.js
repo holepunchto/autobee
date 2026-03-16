@@ -18,6 +18,6 @@ test('updates - simple', async (t) => {
     const update = changes.get('view')
 
     // always appending one
-    t.is(update.to - update.from, 1)
+    t.is(update.to.length - update.from.length, 1)
   }
 })
