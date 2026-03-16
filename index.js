@@ -192,29 +192,38 @@ module.exports = class Autobee extends ReadyResource {
   async _bumpPendingWriters() {
     let updated = false
 
-    for (let i = this.writers.pending.length - 1; i >= 0; i--) {
-      const w = this.writers.pending[i]
+    while (this.writers.pending.length) {
+      console.log('_pending', this.writers.pending)
+      const w = this.writers.pending[this.writers.pending.length - 1]
 
       const batch = await w.next()
-      if (batch === null) continue
+      if (batch === null) {
+        console.log('[_bumpPendingWriters] batch null')
+        continue
+      }
 
       if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
         await this._processBatch(batch)
         w.notify(batch)
         updated = true
+        console.log('[_bumpPendingWriters] isAdded')
         continue
       }
 
       if (this.optimistic && !w.isRemoved && batch[0].optimistic) {
         if (!(await this._optimisticBatch(batch))) {
           w.removePending()
+          console.log('[_bumpPendingWriters] not optimistic')
           continue
         }
         w.notify(batch)
         updated = true
+        console.log('[_bumpPendingWriters]  optimistic')
         continue
       }
     }
+
+    console.log('[_bumpPendingWriters]  done')
 
     return updated
   }

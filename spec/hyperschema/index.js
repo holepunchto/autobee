@@ -509,7 +509,7 @@ const encoding16 = {
         return decoded
       }
       default:
-        throw new Error('Unsupported version')
+        throw new Error('Unsupported version:' + v)
     }
   }
 }
