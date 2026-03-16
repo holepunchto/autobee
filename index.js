@@ -3,7 +3,9 @@ const b4a = require('b4a')
 const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
-const { WriterEncryption } = require('autobee-encryption')
+const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
+const crypto = require('hypercore-crypto')
+const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
@@ -190,6 +192,51 @@ module.exports = class Autobee extends ReadyResource {
     this.bee.update(this._workingBee.root)
   }
 
+  async createAnchor() {
+    const node = this._host.applying[this._host.applying.length - 1]
+
+    const key = node.key
+    const length = node.length
+    const legacy = node.version <= 2
+
+    const info = await this.system.get(key, { unflushed: true })
+
+    // if (!info || info.length < length) throw new Error('Anchor node is not in system')
+
+    const state = { start: 0, end: 40, buffer: b4a.alloc(40) }
+    c.fixed32.encode(state, key)
+    c.uint64.encode(state, length)
+
+    const namespace = crypto.hash(state.buffer)
+    const manifestData = c.encode(encoding.ManifestData, { version: 0, legacyBlocks: 0, namespace })
+
+    const padding = this.encryptionKey ? AutobeeEncryption.PADDING : 0
+    const block = Autobee.encodeValue(null, { legacy: true, heads: [{ key, length }], padding })
+
+    if (this.encryptionKey) {
+      await AutobeeEncryption.encryptAnchor(block, this.key, this.encryptionKey, namespace)
+    }
+
+    const root = { index: 0, size: block.byteLength, hash: crypto.data(block) }
+    const hash = crypto.tree([root])
+    const prologue = { hash, length: 1 }
+
+    const core = createAnchorCore(this.store, prologue, manifestData)
+    await core.ready()
+
+    if (core.length === 0) {
+      await core.append(block, { writable: true, maxLength: 1 })
+    }
+
+    await this.system.addWriter(core.key)
+
+    const anchor = { key: core.key, length: core.length }
+
+    await core.close()
+
+    return anchor
+  }
+
   async _bumpPendingWriters() {
     let updated = false
 
@@ -367,3 +414,23 @@ function isObject(o) {
 }
 
 function noop() {}
+
+function createAnchorCore(store, prologue, manifestData) {
+  const manifest = {
+    version: 2,
+    hash: 'blake2b',
+    prologue,
+    allowPatch: false,
+    quorum: 0,
+    signers: [],
+    userData: manifestData,
+    linked: null
+  }
+
+  const core = store.get({
+    manifest,
+    active: false
+  })
+
+  return core
+}

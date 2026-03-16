@@ -224,6 +224,36 @@ const encoding5 = {
   }
 }
 
+// @autobee/manifest-data
+const encoding6 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.version)
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.legacyBlocks) c.uint.preencode(state, m.legacyBlocks)
+    if (m.namespace) c.fixed32.preencode(state, m.namespace)
+  },
+  encode(state, m) {
+    const flags = (m.legacyBlocks ? 1 : 0) | (m.namespace ? 2 : 0)
+
+    c.uint.encode(state, m.version)
+    c.uint.encode(state, flags)
+
+    if (m.legacyBlocks) c.uint.encode(state, m.legacyBlocks)
+    if (m.namespace) c.fixed32.encode(state, m.namespace)
+  },
+  decode(state) {
+    const r0 = c.uint.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      version: r0,
+      legacyBlocks: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
+      namespace: (flags & 2) !== 0 ? c.fixed32.decode(state) : null
+    }
+  }
+}
+
 // @autobee/system-info.heads, deferred due to recusive use
 const encoding0_4 = c.array(encoding2)
 // @autobee/system-info.indexers, deferred due to recusive use
@@ -266,6 +296,8 @@ function getEncoding(name) {
       return encoding4
     case '@autobee/oplog':
       return encoding5
+    case '@autobee/manifest-data':
+      return encoding6
     default:
       throw new Error('Encoder not found ' + name)
   }

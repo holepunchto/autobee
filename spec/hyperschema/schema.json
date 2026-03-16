@@ -188,6 +188,32 @@
           "version": 1
         }
       ]
+    },
+    {
+      "name": "manifest-data",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "version",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "legacyBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "namespace",
+          "required": false,
+          "type": "fixed32",
+          "version": 1
+        }
+      ]
     }
   ]
 }

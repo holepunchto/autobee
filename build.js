@@ -158,4 +158,27 @@ auto.register({
   ]
 })
 
+// autobase compat
+auto.register({
+  name: 'manifest-data',
+  compact: false,
+  fields: [
+    {
+      name: 'version',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'legacyBlocks',
+      type: 'uint',
+      required: false
+    },
+    {
+      name: 'namespace',
+      type: 'fixed32',
+      required: false
+    }
+  ]
+})
+
 Hyperschema.toDisk(schema)
