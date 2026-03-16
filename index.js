@@ -195,7 +195,7 @@ module.exports = class Autobee extends ReadyResource {
     for (let i = this.writers.pending.length - 1; i >= 0; i--) {
       const w = this.writers.pending[i]
 
-      const batch = await w.next(this._handlers.decodeOplog)
+      const batch = await w.next()
       if (batch === null) continue
 
       if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
