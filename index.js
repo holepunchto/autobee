@@ -200,8 +200,7 @@ module.exports = class Autobee extends ReadyResource {
     const legacy = node.version <= 2
 
     const info = await this.system.get(key, { unflushed: true })
-
-    // if (!info || info.length < length) throw new Error('Anchor node is not in system')
+    if (!info || info.length < length) throw new Error('Anchor node is not in system')
 
     const state = { start: 0, end: 40, buffer: b4a.alloc(40) }
     c.fixed32.encode(state, key)
@@ -211,7 +210,7 @@ module.exports = class Autobee extends ReadyResource {
     const manifestData = c.encode(encoding.ManifestData, { version: 0, legacyBlocks: 0, namespace })
 
     const padding = this.encryptionKey ? AutobeeEncryption.PADDING : 0
-    const block = Autobee.encodeValue(null, { legacy: true, heads: [{ key, length }], padding })
+    const block = Autobee.encodeValue(null, { legacy, heads: [{ key, length }], padding })
 
     if (this.encryptionKey) {
       await AutobeeEncryption.encryptAnchor(block, this.key, this.encryptionKey, namespace)
@@ -337,9 +336,17 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
+    const userBatch = []
+    for (const node of batch) {
+      this.system.addNode(node)
+
+      // compat: autobase nodes may be null
+      if (node.value) userBatch.push(node)
+    }
+
     if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
       this._host.applying = batch
-      await this._handlers.apply(batch, this._workingView, this._host)
+      await this._handlers.apply(userBatch, this._workingView, this._host)
       this._host.applying = null
     }
 
