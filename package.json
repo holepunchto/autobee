@@ -19,7 +19,7 @@
     "test:generate": "brittle -r test/all.js test/*.js"
   },
   "dependencies": {
-    "autobee-encryption": "^0.0.2",
+    "autobee-encryption": "^0.0.4",
     "b4a": "^1.8.0",
     "compact-encoding": "^2.18.0",
     "hyperbee2": "^2.5.0",
