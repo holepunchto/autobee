@@ -144,15 +144,25 @@
     {
       "name": "oplog",
       "namespace": "autobee",
-      "compact": false,
-      "flagsPosition": 3,
-      "fields": [
+      "versions": [
         {
-          "name": "version",
-          "required": true,
-          "type": "uint",
-          "version": 1
+          "type": "@autobase-compat/oplog-message-v2",
+          "map": null,
+          "version": 2
         },
+        {
+          "type": "@autobee/oplog-message-v0",
+          "map": null,
+          "version": 4
+        }
+      ]
+    },
+    {
+      "name": "oplog-message-v0",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
         {
           "name": "timestamp",
           "required": true,
@@ -185,6 +195,233 @@
         {
           "name": "value",
           "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "checkout",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "namespace": "autobase-compat",
+      "array": true,
+      "type": "@autobase-compat/checkout"
+    },
+    {
+      "name": "index-checkpoint",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "signature",
+          "required": true,
+          "type": "fixed64",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "checkpointer",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "checkpointer",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "checkpoint",
+          "required": false,
+          "type": "@autobase-compat/index-checkpoint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "checkpoint",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "system",
+          "required": false,
+          "type": "@autobase-compat/checkpointer",
+          "version": 1
+        },
+        {
+          "name": "encryption",
+          "required": false,
+          "type": "@autobase-compat/checkpointer",
+          "version": 1
+        },
+        {
+          "name": "user",
+          "required": false,
+          "array": true,
+          "type": "@autobase-compat/checkpointer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "digest",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "pointer",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "key",
+          "required": false,
+          "type": "fixed32",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "node",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "heads",
+          "required": true,
+          "type": "@autobase-compat/clock",
+          "version": 1
+        },
+        {
+          "name": "batch",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "user-view-trace",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "view",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "blocks",
+          "required": true,
+          "array": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "trace",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "system",
+          "required": true,
+          "array": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "encryption",
+          "required": true,
+          "array": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "user",
+          "required": true,
+          "array": true,
+          "type": "@autobase-compat/user-view-trace",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "oplog-message-v2",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "node",
+          "required": true,
+          "type": "@autobase-compat/node",
+          "version": 1
+        },
+        {
+          "name": "checkpoint",
+          "required": false,
+          "type": "@autobase-compat/checkpoint",
+          "version": 1
+        },
+        {
+          "name": "digest",
+          "required": false,
+          "type": "@autobase-compat/digest",
+          "version": 1
+        },
+        {
+          "name": "optimistic",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "trace",
+          "required": false,
+          "type": "@autobase-compat/trace",
           "version": 1
         }
       ]
