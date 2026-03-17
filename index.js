@@ -79,7 +79,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _close() {
-    if (this._handlers.open) await this._handlers.close(this.view)
+    if (this._handlers.close) await this._handlers.close(this.view)
 
     await this.local.close()
     await this.system.close()
