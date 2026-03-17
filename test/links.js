@@ -39,7 +39,7 @@ test('links - dependency arrives before dependent', async function (t) {
   t.ok(await same(auto1, auto2), 'peers converge when dependency arrives first')
 })
 
-test('links - dependent arrives before dependency', async function (t) {
+test.solo('links - dependent arrives before dependency', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
@@ -57,6 +57,8 @@ test('links - dependent arrives before dependency', async function (t) {
 
   // Sync auto2 → auto3 first (auto3 gets auto2's entry but NOT auto1's step1 yet)
   await replicateAndSync(auto2, auto3)
+
+  t.ok(await same(auto2, auto3), 'peers converge when dependent arrives before dependency')
 
   // Now sync auto1 → auto3 (auto3 gets the dependency)
   await replicateAndSync(auto1, auto3)

@@ -43,6 +43,7 @@ async function dump(auto, enc = 'hex') {
 }
 
 async function apply(nodes, view, host) {
+  console.log('APPLYING NODES', nodes)
   for (const node of nodes) {
     const data = decode(node.value)
 
