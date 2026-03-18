@@ -7,6 +7,7 @@ async function runTests() {
 
   test.pause()
 
+  await import('./links.js')
   await import('./basic.js')
   await import('./concurrent-writes.js')
   await import('./perf.js')
