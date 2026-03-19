@@ -31,3 +31,4 @@ jobs:
       - run: npm test
       - run: npm -g install bare
       - run: npm run test:bare
+      - run: npm run test:encrypted

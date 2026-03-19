@@ -3,10 +3,12 @@ const b4a = require('b4a')
 const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
+const { WriterEncryption } = require('autobee-encryption')
 const asserts = require('./lib/asserts.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
+const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
@@ -67,6 +69,11 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _open() {
+    if (this._handlers.encryptionKey) {
+      this.encryptionKey = await this._handlers.encryptionKey
+      this.local.setEncryption(new WriterEncryption(this))
+    }
+
     this._bootingState = this._bootState()
     this._bootingSystem = this._bootSystem()
     this._bootingAll = this._bootAll() // bg
@@ -99,6 +106,11 @@ module.exports = class Autobee extends ReadyResource {
   async flush() {
     await this._bootingAll
     await this.lock.flush()
+  }
+
+  openCore(key, { oplog = true } = {}) {
+    const encryption = this.encryptionKey ? new WriterEncryption(this) : null
+    return this.store.get({ key, encryption })
   }
 
   async _bootState() {
@@ -212,7 +224,7 @@ module.exports = class Autobee extends ReadyResource {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
 
-    const t = await this.system.prepare(batch)
+    const t = await this.prepareBatch(batch)
 
     if (t.view) {
       this._workingBee.move(t.view)
@@ -244,8 +256,24 @@ module.exports = class Autobee extends ReadyResource {
     return true
   }
 
+  async prepareBatch(batch) {
+    const node = batch[0]
+
+    if (topo.isLinkingAll(node, this.system.heads)) {
+      return { undo: null, view: null, tip: [batch] }
+    }
+
+    const t = await topo.sort(this, batch)
+
+    if (t.undo) {
+      t.view = await this.system.undo(t.undo)
+    }
+
+    return t
+  }
+
   async _processBatch(batch) {
-    const t = await this.system.prepare(batch)
+    const t = await this.prepareBatch(batch)
 
     if (t.view) {
       this._workingBee.move(t.view)
