@@ -177,6 +177,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bump() {
+    this._flushWakeup()
+
     this.bumping++
 
     while (this.bumping === 1) {
@@ -384,6 +386,21 @@ module.exports = class Autobee extends ReadyResource {
 
   static encodeValue(value, opts) {
     return encoding.encodeValue(value, opts)
+  }
+
+  async _flushWakeup() {
+    for (const [hex, length] of this._wakeup.hints) {
+      const key = b4a.from(hex, 'hex')
+      if (this.writers.has(hex)) continue
+      if (length !== -1) {
+        const info = await this.system.get(key)
+        console.log('FLUSH!', info)
+        if (info && length <= info.length) continue // stale hint
+      }
+      await this.writers.wakeup(key, length === -1 ? 0 : length)
+    }
+
+    this._wakeup.hints.clear()
   }
 
   async wakeup({ key, length }) {
