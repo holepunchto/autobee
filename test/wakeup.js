@@ -24,8 +24,5 @@ test('basic - replication', async function (t) {
   t.is(auto1._wakeup._coupler.coupled.size, 2)
   t.is(auto2._wakeup._coupler.coupled.size, 2)
 
-  t.comment('waiting')
-  await new Promise((resolve) => setTimeout(resolve, 2000))
-
   t.ok(await same(auto1, auto2))
 })

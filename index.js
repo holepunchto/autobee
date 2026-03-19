@@ -394,7 +394,6 @@ module.exports = class Autobee extends ReadyResource {
       if (this.writers.has(hex)) continue
       if (length !== -1) {
         const info = await this.system.get(key)
-        console.log('FLUSH!', info)
         if (info && length <= info.length) continue // stale hint
       }
       await this.writers.wakeup(key, length === -1 ? 0 : length)
