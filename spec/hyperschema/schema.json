@@ -142,22 +142,6 @@
       ]
     },
     {
-      "name": "oplog",
-      "namespace": "autobee",
-      "versions": [
-        {
-          "type": "@autobase-compat/oplog-message-v2",
-          "map": null,
-          "version": 2
-        },
-        {
-          "type": "@autobee/oplog-message-v0",
-          "map": null,
-          "version": 4
-        }
-      ]
-    },
-    {
       "name": "oplog-message-v0",
       "namespace": "autobee",
       "compact": false,
@@ -422,6 +406,48 @@
           "name": "trace",
           "required": false,
           "type": "@autobase-compat/trace",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "oplog",
+      "namespace": "autobee",
+      "versions": [
+        {
+          "type": "@autobase-compat/oplog-message-v2",
+          "map": null,
+          "version": 2
+        },
+        {
+          "type": "@autobee/oplog-message-v0",
+          "map": null,
+          "version": 4
+        }
+      ]
+    },
+    {
+      "name": "manifest-data",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "version",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "legacyBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "namespace",
+          "required": false,
+          "type": "fixed32",
           "version": 1
         }
       ]

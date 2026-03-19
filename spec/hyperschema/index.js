@@ -179,67 +179,11 @@ const encoding4_inline = {
   }
 }
 
-// @autobee/oplog
+// @autobee/oplog-message-v0
 const encoding5 = {
   preencode(state, m) {
-    c.uint.preencode(state, m.version)
-    switch (m.version) {
-      case 0:
-      case 1:
-      case 2:
-        encoding16.preencode(state, m)
-        break
-      case 3:
-      case 4:
-        encoding6.preencode(state, m)
-        break
-      default:
-        throw new Error('Unsupported version')
-    }
-  },
-  encode(state, m) {
-    c.uint.encode(state, m.version)
-    switch (m.version) {
-      case 0:
-      case 1:
-      case 2:
-        encoding16.encode(state, m)
-        break
-      case 3:
-      case 4:
-        encoding6.encode(state, m)
-        break
-      default:
-        throw new Error('Unsupported version')
-    }
-  },
-  decode(state) {
-    const start = state.start
-    const v = c.uint.decode(state)
-    state.start = start
-    switch (v) {
-      case 0:
-      case 1:
-      case 2: {
-        const decoded = encoding16.decode(state)
-        return decoded
-      }
-      case 3:
-      case 4: {
-        const decoded = encoding6.decode(state)
-        return decoded
-      }
-      default:
-        throw new Error('Unsupported version')
-    }
-  }
-}
-
-// @autobee/oplog-message-v0
-const encoding6 = {
-  preencode(state, m) {
     c.uint.preencode(state, m.timestamp)
-    encoding6_1.preencode(state, m.links)
+    encoding5_1.preencode(state, m.links)
     state.end++ // max flag is 16 so always one byte
 
     if (m.batch) encoding3.preencode(state, m.batch)
@@ -253,7 +197,7 @@ const encoding6 = {
     }
 
     c.uint.encode(state, m.timestamp)
-    encoding6_1.encode(state, m.links)
+    encoding5_1.encode(state, m.links)
     c.uint.encode(state, flags)
 
     if (m.batch) encoding3.encode(state, m.batch)
@@ -263,7 +207,7 @@ const encoding6 = {
   decode(state) {
     const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
-    const r1 = encoding6_1.decode(state)
+    const r1 = encoding5_1.decode(state)
     const flags = c.uint.decode(state)
 
     return {
@@ -279,13 +223,13 @@ const encoding6 = {
 }
 
 // @autobase-compat/checkout
-const encoding7 = encoding2
+const encoding6 = encoding2
 
 // @autobase-compat/clock
-const encoding8 = c.array(encoding7)
+const encoding7 = c.array(encoding6)
 
 // @autobase-compat/index-checkpoint
-const encoding9 = {
+const encoding8 = {
   preencode(state, m) {
     c.fixed64.preencode(state, m.signature)
     c.uint.preencode(state, m.length)
@@ -306,12 +250,12 @@ const encoding9 = {
 }
 
 // @autobase-compat/checkpointer
-const encoding10 = {
+const encoding9 = {
   preencode(state, m) {
     state.end++ // flags are fixed size
 
     if (m.checkpointer) c.uint.preencode(state, m.checkpointer)
-    if (m.checkpoint) encoding9.preencode(state, m.checkpoint)
+    if (m.checkpoint) encoding8.preencode(state, m.checkpoint)
   },
   encode(state, m) {
     const flags = (m.checkpointer ? 1 : 0) | (m.checkpoint ? 2 : 0)
@@ -319,52 +263,52 @@ const encoding10 = {
     c.uint8.encode(state, flags)
 
     if (m.checkpointer) c.uint.encode(state, m.checkpointer)
-    if (m.checkpoint) encoding9.encode(state, m.checkpoint)
+    if (m.checkpoint) encoding8.encode(state, m.checkpoint)
   },
   decode(state) {
     const flags = c.uint8.decode(state)
 
     return {
       checkpointer: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
-      checkpoint: (flags & 2) !== 0 ? encoding9.decode(state) : null
+      checkpoint: (flags & 2) !== 0 ? encoding8.decode(state) : null
     }
   }
 }
 
 // @autobase-compat/checkpoint.user
-const encoding11_2 = c.array(encoding10)
+const encoding10_2 = c.array(encoding9)
 
 // @autobase-compat/checkpoint
-const encoding11 = {
+const encoding10 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
-    if (m.system) encoding10.preencode(state, m.system)
-    if (m.encryption) encoding10.preencode(state, m.encryption)
-    if (m.user) encoding11_2.preencode(state, m.user)
+    if (m.system) encoding9.preencode(state, m.system)
+    if (m.encryption) encoding9.preencode(state, m.encryption)
+    if (m.user) encoding10_2.preencode(state, m.user)
   },
   encode(state, m) {
     const flags = (m.system ? 1 : 0) | (m.encryption ? 2 : 0) | (m.user ? 4 : 0)
 
     c.uint.encode(state, flags)
 
-    if (m.system) encoding10.encode(state, m.system)
-    if (m.encryption) encoding10.encode(state, m.encryption)
-    if (m.user) encoding11_2.encode(state, m.user)
+    if (m.system) encoding9.encode(state, m.system)
+    if (m.encryption) encoding9.encode(state, m.encryption)
+    if (m.user) encoding10_2.encode(state, m.user)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
-      system: (flags & 1) !== 0 ? encoding10.decode(state) : null,
-      encryption: (flags & 2) !== 0 ? encoding10.decode(state) : null,
-      user: (flags & 4) !== 0 ? encoding11_2.decode(state) : null
+      system: (flags & 1) !== 0 ? encoding9.decode(state) : null,
+      encryption: (flags & 2) !== 0 ? encoding9.decode(state) : null,
+      user: (flags & 4) !== 0 ? encoding10_2.decode(state) : null
     }
   }
 }
 
 // @autobase-compat/digest
-const encoding12 = {
+const encoding11 = {
   preencode(state, m) {
     state.end++ // max flag is 2 so always one byte
 
@@ -390,19 +334,19 @@ const encoding12 = {
 }
 
 // @autobase-compat/node
-const encoding13 = {
+const encoding12 = {
   preencode(state, m) {
-    encoding8.preencode(state, m.heads)
+    encoding7.preencode(state, m.heads)
     c.uint.preencode(state, m.batch)
     c.buffer.preencode(state, m.value)
   },
   encode(state, m) {
-    encoding8.encode(state, m.heads)
+    encoding7.encode(state, m.heads)
     c.uint.encode(state, m.batch)
     c.buffer.encode(state, m.value)
   },
   decode(state) {
-    const r0 = encoding8.decode(state)
+    const r0 = encoding7.decode(state)
     const r1 = c.uint.decode(state)
     const r2 = c.buffer.decode(state)
 
@@ -415,21 +359,21 @@ const encoding13 = {
 }
 
 // @autobase-compat/user-view-trace.blocks
-const encoding14_1 = c.array(c.uint)
+const encoding13_1 = c.array(c.uint)
 
 // @autobase-compat/user-view-trace
-const encoding14 = {
+const encoding13 = {
   preencode(state, m) {
     c.uint.preencode(state, m.view)
-    encoding14_1.preencode(state, m.blocks)
+    encoding13_1.preencode(state, m.blocks)
   },
   encode(state, m) {
     c.uint.encode(state, m.view)
-    encoding14_1.encode(state, m.blocks)
+    encoding13_1.encode(state, m.blocks)
   },
   decode(state) {
     const r0 = c.uint.decode(state)
-    const r1 = encoding14_1.decode(state)
+    const r1 = encoding13_1.decode(state)
 
     return {
       view: r0,
@@ -439,28 +383,28 @@ const encoding14 = {
 }
 
 // @autobase-compat/trace.system
-const encoding15_0 = encoding14_1
+const encoding14_0 = encoding13_1
 // @autobase-compat/trace.encryption
-const encoding15_1 = encoding14_1
+const encoding14_1 = encoding13_1
 // @autobase-compat/trace.user
-const encoding15_2 = c.array(encoding14)
+const encoding14_2 = c.array(encoding13)
 
 // @autobase-compat/trace
-const encoding15 = {
+const encoding14 = {
   preencode(state, m) {
-    encoding15_0.preencode(state, m.system)
-    encoding15_1.preencode(state, m.encryption)
-    encoding15_2.preencode(state, m.user)
+    encoding14_0.preencode(state, m.system)
+    encoding14_1.preencode(state, m.encryption)
+    encoding14_2.preencode(state, m.user)
   },
   encode(state, m) {
-    encoding15_0.encode(state, m.system)
-    encoding15_1.encode(state, m.encryption)
-    encoding15_2.encode(state, m.user)
+    encoding14_0.encode(state, m.system)
+    encoding14_1.encode(state, m.encryption)
+    encoding14_2.encode(state, m.user)
   },
   decode(state) {
-    const r0 = encoding15_0.decode(state)
-    const r1 = encoding15_1.decode(state)
-    const r2 = encoding15_2.decode(state)
+    const r0 = encoding14_0.decode(state)
+    const r1 = encoding14_1.decode(state)
+    const r2 = encoding14_2.decode(state)
 
     return {
       system: r0,
@@ -471,45 +415,131 @@ const encoding15 = {
 }
 
 // @autobase-compat/oplog-message-v2.checkpoint
-const encoding16_1 = c.frame(encoding11)
+const encoding15_1 = c.frame(encoding10)
 // @autobase-compat/oplog-message-v2.digest
-const encoding16_2 = c.frame(encoding12)
+const encoding15_2 = c.frame(encoding11)
 // @autobase-compat/oplog-message-v2.trace
-const encoding16_4 = c.frame(encoding15)
+const encoding15_4 = c.frame(encoding14)
 
 // @autobase-compat/oplog-message-v2
-const encoding16 = {
+const encoding15 = {
   preencode(state, m) {
-    encoding13.preencode(state, m.node)
+    encoding12.preencode(state, m.node)
     state.end++ // max flag is 8 so always one byte
 
-    if (m.checkpoint) encoding16_1.preencode(state, m.checkpoint)
-    if (m.digest) encoding16_2.preencode(state, m.digest)
-    if (m.trace) encoding16_4.preencode(state, m.trace)
+    if (m.checkpoint) encoding15_1.preencode(state, m.checkpoint)
+    if (m.digest) encoding15_2.preencode(state, m.digest)
+    if (m.trace) encoding15_4.preencode(state, m.trace)
   },
   encode(state, m) {
     const flags =
       (m.checkpoint ? 1 : 0) | (m.digest ? 2 : 0) | (m.optimistic ? 4 : 0) | (m.trace ? 8 : 0)
 
-    encoding13.encode(state, m.node)
+    encoding12.encode(state, m.node)
     c.uint.encode(state, flags)
 
-    if (m.checkpoint) encoding16_1.encode(state, m.checkpoint)
-    if (m.digest) encoding16_2.encode(state, m.digest)
-    if (m.trace) encoding16_4.encode(state, m.trace)
+    if (m.checkpoint) encoding15_1.encode(state, m.checkpoint)
+    if (m.digest) encoding15_2.encode(state, m.digest)
+    if (m.trace) encoding15_4.encode(state, m.trace)
   },
   decode(state) {
     const v = c.uint.decode(state)
-    const r0 = encoding13.decode(state)
+    const r0 = encoding12.decode(state)
     const flags = c.uint.decode(state)
 
     return {
       version: v,
       node: r0,
-      checkpoint: (flags & 1) !== 0 ? encoding16_1.decode(state) : null,
-      digest: (flags & 2) !== 0 ? encoding16_2.decode(state) : null,
+      checkpoint: (flags & 1) !== 0 ? encoding15_1.decode(state) : null,
+      digest: (flags & 2) !== 0 ? encoding15_2.decode(state) : null,
       optimistic: (flags & 4) !== 0,
-      trace: (flags & 8) !== 0 ? encoding16_4.decode(state) : null
+      trace: (flags & 8) !== 0 ? encoding15_4.decode(state) : null
+    }
+  }
+}
+
+// @autobee/oplog
+const encoding16 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.version)
+    switch (m.version) {
+      case 0:
+      case 1:
+      case 2:
+        encoding15.preencode(state, m)
+        break
+      case 3:
+      case 4:
+        encoding5.preencode(state, m)
+        break
+      default:
+        throw new Error('Unsupported version')
+    }
+  },
+  encode(state, m) {
+    c.uint.encode(state, m.version)
+    switch (m.version) {
+      case 0:
+      case 1:
+      case 2:
+        encoding15.encode(state, m)
+        break
+      case 3:
+      case 4:
+        encoding5.encode(state, m)
+        break
+      default:
+        throw new Error('Unsupported version')
+    }
+  },
+  decode(state) {
+    const start = state.start
+    const v = c.uint.decode(state)
+    state.start = start
+    switch (v) {
+      case 0:
+      case 1:
+      case 2: {
+        const decoded = encoding15.decode(state)
+        return decoded
+      }
+      case 3:
+      case 4: {
+        const decoded = encoding5.decode(state)
+        return decoded
+      }
+      default:
+        throw new Error('Unsupported version')
+    }
+  }
+}
+
+// @autobee/manifest-data
+const encoding17 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.version)
+    state.end++ // max flag is 2 so always one byte
+
+    if (m.legacyBlocks) c.uint.preencode(state, m.legacyBlocks)
+    if (m.namespace) c.fixed32.preencode(state, m.namespace)
+  },
+  encode(state, m) {
+    const flags = (m.legacyBlocks ? 1 : 0) | (m.namespace ? 2 : 0)
+
+    c.uint.encode(state, m.version)
+    c.uint.encode(state, flags)
+
+    if (m.legacyBlocks) c.uint.encode(state, m.legacyBlocks)
+    if (m.namespace) c.fixed32.encode(state, m.namespace)
+  },
+  decode(state) {
+    const r0 = c.uint.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      version: r0,
+      legacyBlocks: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
+      namespace: (flags & 2) !== 0 ? c.fixed32.decode(state) : null
     }
   }
 }
@@ -519,7 +549,7 @@ const encoding0_4 = c.array(encoding2)
 // @autobee/system-info.indexers, deferred due to recusive use
 const encoding0_5 = encoding0_4
 // @autobee/oplog-message-v0.links, deferred due to recusive use
-const encoding6_1 = encoding0_4
+const encoding5_1 = encoding0_4
 
 function setVersion(v) {
   version = v
@@ -554,30 +584,32 @@ function getEncoding(name) {
       return encoding3
     case '@autobee/views':
       return encoding4
-    case '@autobee/oplog':
-      return encoding5
     case '@autobee/oplog-message-v0':
-      return encoding6
+      return encoding5
     case '@autobase-compat/checkout':
-      return encoding7
+      return encoding6
     case '@autobase-compat/clock':
-      return encoding8
+      return encoding7
     case '@autobase-compat/index-checkpoint':
-      return encoding9
+      return encoding8
     case '@autobase-compat/checkpointer':
-      return encoding10
+      return encoding9
     case '@autobase-compat/checkpoint':
-      return encoding11
+      return encoding10
     case '@autobase-compat/digest':
-      return encoding12
+      return encoding11
     case '@autobase-compat/node':
-      return encoding13
+      return encoding12
     case '@autobase-compat/user-view-trace':
-      return encoding14
+      return encoding13
     case '@autobase-compat/trace':
-      return encoding15
+      return encoding14
     case '@autobase-compat/oplog-message-v2':
+      return encoding15
+    case '@autobee/oplog':
       return encoding16
+    case '@autobee/manifest-data':
+      return encoding17
     default:
       throw new Error('Encoder not found ' + name)
   }
