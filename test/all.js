@@ -8,10 +8,11 @@ async function runTests() {
   test.pause()
 
   await import('./basic.js')
-  await import('./concurrent-writes.js')
-  await import('./perf.js')
-  await import('./optimistic-race.js')
   await import('./batch.js')
+  await import('./concurrent-writes.js')
+  await import('./optimistic-race.js')
+  await import('./perf.js')
+  await import('./updates.js')
   await import('./view-consistency.js')
   await import('./writer-management.js')
 
