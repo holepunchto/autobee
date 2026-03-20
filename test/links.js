@@ -226,27 +226,39 @@ test('links - trigger cascade with multiple waiting writers', async function (t)
   t.ok(await same(auto1, auto2, auto3, auto4), 'all peers converge after trigger cascade')
 })
 
-test('links - writer removed while others link to its entries', async function (t) {
+test('links - writer removed while others link to its entries', { timeout: 30000 }, async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
 
+  console.log('[test] auto1 id:', auto1.local.id)
+  console.log('[test] auto2 id:', auto2.local.id)
+  console.log('[test] auto3 id:', auto3.local.id)
+
   await auto1.append(encode({ addWriter: auto2.local.id }))
   await auto1.append(encode({ addWriter: auto3.local.id }))
+  console.log('[test] added writers, syncing...')
   await replicateAndSync(auto1, auto2, auto3)
+  console.log('[test] initial sync done')
 
   // auto2 writes
   await auto2.append(encode({ msg: 'from-auto2' }))
+  console.log('[test] auto2 wrote, syncing...')
   await replicateAndSync(auto1, auto2, auto3)
+  console.log('[test] auto2 write synced')
 
   // auto3 sees auto2's write and writes (links to auto2's entry)
   await auto3.append(encode({ msg: 'links-to-auto2' }))
+  console.log('[test] auto3 wrote (links to auto2), auto3.local.length:', auto3.local.length)
 
   // auto1 removes auto2 concurrently
   await auto1.append(encode({ removeWriter: auto2.local.id }))
+  console.log('[test] auto1 removed auto2, auto1.local.length:', auto1.local.length)
 
+  console.log('[test] starting final sync...')
   // Sync everyone
   await replicateAndSync(auto1, auto2, auto3)
+  console.log('[test] final sync done')
 
   // auto3's write should still be processed even though auto2 is now removed
   // because auto2's entry was already indexed before removal

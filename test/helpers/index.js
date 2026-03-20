@@ -128,8 +128,21 @@ function replicate(...autos) {
 
 async function sync(...autos) {
   const scale = [10, 10, 20, 30, 40, 50]
+  let attempts = 0
 
   while (true) {
+    attempts++
+    if (attempts % 50 === 0) {
+      console.log('[sync] attempt', attempts, '- checking status:')
+      for (const a of autos) {
+        console.log('[sync]   writer', a.name, 'local.length:', a.local.length)
+        for (const b of autos) {
+          if (a === b) continue
+          const info = await b.system.get(a.local.key)
+          console.log('[sync]     peer', b.name, 'sees:', info ? { length: info.length, isRemoved: info.isRemoved } : null)
+        }
+      }
+    }
     if (await check()) {
       for (const a of autos) await a.flush()
       if (await check()) return
