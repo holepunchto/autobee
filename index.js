@@ -175,10 +175,14 @@ module.exports = class Autobee extends ReadyResource {
       await this.lock.lock()
 
       try {
+        let rounds = 0
         while (!this.closing) {
           if (!(await this._bumpPendingWriters())) break
+          rounds++
+          if (rounds % 10 === 0) console.log('[bump]', this.name, 'round', rounds, 'pending:', this.writers.pending.length)
           this._needsUpdate = true
         }
+        if (rounds > 0) console.log('[bump]', this.name, 'done after', rounds, 'rounds')
       } finally {
         if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
@@ -323,7 +327,11 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _processBatch(batch) {
+    console.log('[process]', this.name, 'batch from', b4a.toString(batch[0].key, 'hex').slice(0, 8) + '..', 'len:', batch[0].length, '-', batch[batch.length - 1].length, 'tip will have reorder:', !topo.isLinkingAll(batch[0], this.system.heads))
+
     const t = await this.prepareBatch(batch)
+
+    console.log('[process]', this.name, 'tip length:', t.tip.length, 'undo:', !!t.undo)
 
     if (t.view) {
       this._workingBee.move(t.view)
