@@ -71,6 +71,10 @@ module.exports = class Autobee extends ReadyResource {
     this.ready().catch(noop)
   }
 
+  static isAutobee(auto) {
+    return auto instanceof Autobee
+  }
+
   get writable() {
     return this.writers.writable
   }
