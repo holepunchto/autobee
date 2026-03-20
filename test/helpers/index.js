@@ -60,15 +60,12 @@ async function apply(nodes, view, host) {
       host.removeWriter(data.removeWriter)
     }
 
-    const clock = await view.get(b4a.from('clock'))
-    const c = clock ? Number(b4a.toString(clock.value)) + 1 : 0
     const oplog = b4a.toString(node.key, 'hex') + '.' + node.length
 
     const w = view.write()
 
-    w.tryPut(b4a.from('clock'), b4a.from('' + c))
     w.tryPut(b4a.from('latest'), node.value)
-    w.tryPut(b4a.from('#' + c.toString().padStart(6, '0')), b4a.from(oplog))
+    w.tryPut(b4a.from('oplog/' + oplog), node.value)
 
     await w.flush()
   }
@@ -146,7 +143,9 @@ async function sync(...autos) {
         if (a === b) continue
 
         const info = await b.system.get(a.local.key)
-        const length = info ? info.length : 0
+        if (!info) continue
+        if (info.isRemoved) continue
+        const length = info.length
         if (length !== a.local.length) return false
       }
     }
