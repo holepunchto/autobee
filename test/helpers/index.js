@@ -143,9 +143,8 @@ async function sync(...autos) {
         if (a === b) continue
 
         const info = await b.system.get(a.local.key)
-        if (!info) continue
-        if (info.isRemoved) continue
-        const length = info.length
+        if (info && info.isRemoved) continue
+        const length = info ? info.length : 0
         if (length !== a.local.length) return false
       }
     }
