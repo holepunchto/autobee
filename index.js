@@ -40,6 +40,7 @@ module.exports = class Autobee extends ReadyResource {
     })
 
     this.store = store
+
     this.key = key ? ID.decode(key) : null
     this.discoveryKey = null
     this.id = null
@@ -54,7 +55,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this.name = name // for debugging
 
-    this.local = store.get({ name: 'local', exclusive: true })
+    this.local = null
+    this.encryptionKey = null
+    this.keyPair = null
     this.writers = null
     this.lock = new ScopeLock()
     this.bumping = 0
@@ -158,6 +161,23 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootState() {
+    if (this._handlers.encryptionKey) {
+      this.encryptionKey = await this._handlers.encryptionKey
+    }
+
+    if (this._handlers.keyPair) {
+      this.keyPair = await this._handlers.keyPair
+    }
+
+    this.local = this.store.get({
+      name: this.keyPair ? null : 'local',
+      exclusive: true,
+      encryption: new WriterEncryption(this),
+      keyPair: this.keyPair,
+      log: true
+    })
+
+    console.log('KEYYYYY', this.key, this.discoveryKey, 'KEYYY')
     await this.local.ready()
 
     this.writers = new ActiveWriters(this)
@@ -173,6 +193,11 @@ module.exports = class Autobee extends ReadyResource {
       this.key = bootstrap.core.key
       this.discoveryKey = bootstrap.core.discoveryKey
       this.id = bootstrap.core.id
+    }
+
+    if (!this.discoveryKey) {
+      this.discoveryKey = this.local.discoveryKey
+      this.id = this.local.id
     }
   }
 
