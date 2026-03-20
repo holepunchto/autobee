@@ -4,6 +4,7 @@ const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
+const AutobeeWakeup = require('autobee-wakeup')
 const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
@@ -65,6 +66,8 @@ module.exports = class Autobee extends ReadyResource {
     this._needsUpdate = false
     this._host = new ApplyCalls(this)
 
+    this._wakeup = new AutobeeWakeup(this, handlers)
+
     this.ready().catch(noop)
   }
 
@@ -87,6 +90,9 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll.catch(noop)
 
     await this.bee.ready()
+
+    this._wakeup.recouple()
+    this._wakeup.setCapability(this.key, this.discoveryKey)
   }
 
   async _close() {
@@ -104,7 +110,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   replicate(...args) {
-    return this.store.replicate(...args)
+    const stream = this.store.replicate(...args)
+    this._wakeup.addStream(stream)
+    return stream
   }
 
   async flush() {
@@ -169,6 +177,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bump() {
+    await this._flushWakeup()
+
     this.bumping++
 
     while (this.bumping === 1) {
@@ -187,6 +197,20 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this._needsUpdate) this._update()
+  }
+
+  async _flushWakeup() {
+    const hints = this._wakeup.flush()
+
+    for (const [hex, length] of hints) {
+      const key = b4a.from(hex, 'hex')
+      if (this.writers.has(hex)) continue
+      if (length !== -1) {
+        const info = await this.system.get(key)
+        if (info && length <= info.length) continue // stale hint
+      }
+      await this.writers.wakeup(key, length === -1 ? 0 : length)
+    }
   }
 
   _update() {
