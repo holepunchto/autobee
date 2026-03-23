@@ -177,7 +177,6 @@ module.exports = class Autobee extends ReadyResource {
       log: true
     })
 
-    console.log('KEYYYYY', this.key, this.discoveryKey, 'KEYYY')
     await this.local.ready()
 
     this.writers = new ActiveWriters(this)
