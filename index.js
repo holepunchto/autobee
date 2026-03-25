@@ -28,11 +28,18 @@ module.exports = class Autobee extends ReadyResource {
 
     const { name = null } = handlers
 
+    this.encrypted = handlers.encrypted === true
+
     const bee = new Hyperbee(store.namespace('view'), {
       // defer one tick to ensure consistent state, then return state prom
       preload: async () => {
         await 1
         await this._bootingState
+      },
+      getEncryption: () => {
+        if (!handlers.encryptionKey) return null
+
+        return new WriterEncryption(this)
       }
     })
 
@@ -41,7 +48,13 @@ module.exports = class Autobee extends ReadyResource {
     this.discoveryKey = null
     this.id = null
 
-    this.system = new System(store.namespace('system'), name)
+    this.system = new System(this.store.namespace('system'), this.name, {
+      getEncryption: () => {
+        if (!handlers.encryptionKey) return null
+
+        return new WriterEncryption(this)
+      }
+    })
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee) : this.bee
     this.optimistic = handlers.optimistic !== false // TODO: should default to false instead
@@ -84,9 +97,10 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _open() {
-    if (this._handlers.encryptionKey) {
-      this.encryptionKey = await this._handlers.encryptionKey
-      this.local.setEncryption(new WriterEncryption(this))
+    await this._preBoot()
+
+    if (this.encrypted) {
+      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
     }
 
     this._bootingState = this._bootState()
@@ -98,6 +112,14 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll.catch(noop)
 
     await this.bee.ready()
+
+    if (this.encrypted) {
+      // wait a tick for encryption to be ready
+      setTimeout(() => {
+        asserts.assert(this._workingBee.core.encryption !== null, 'Encryption key is expected')
+        asserts.assert(this.system.bee.core.encryption !== null, 'Encryption key is expected')
+      }, 1)
+    }
 
     this._wakeup.recouple()
     this._wakeup.setCapability(this.key, this.discoveryKey)
@@ -128,9 +150,16 @@ module.exports = class Autobee extends ReadyResource {
     await this.lock.flush()
   }
 
-  openCore(key, { oplog = true } = {}) {
+  openCore(key) {
     const encryption = this.encryptionKey ? new WriterEncryption(this) : null
     return this.store.get({ key, encryption })
+  }
+
+  async _preBoot() {
+    if (!this._handlers.encryptionKey) return
+
+    this.encryptionKey = await this._handlers.encryptionKey
+    this.local.setEncryption(new WriterEncryption(this))
   }
 
   async _bootState() {
@@ -249,7 +278,7 @@ module.exports = class Autobee extends ReadyResource {
     const block = Autobee.encodeValue(null, { legacy, links, heads: links, padding })
 
     if (this.encryptionKey) {
-      await AutobeeEncryption.encryptAnchor(block, this.key, this.encryptionKey, namespace)
+      AutobeeEncryption.encryptAnchor(block, this.key, this.encryptionKey, namespace)
     }
 
     const root = { index: 0, size: block.byteLength, hash: crypto.data(block) }

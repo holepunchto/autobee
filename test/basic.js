@@ -9,7 +9,8 @@ const {
   decode,
   apply,
   replicate,
-  sync
+  sync,
+  encryptionKey
 } = require('./helpers')
 const Autobee = require('../index.js')
 
@@ -91,7 +92,8 @@ test('basic - restart', async function (t) {
   }
 
   {
-    const auto = new Autobee(new Corestore(storage), { apply })
+    const auto = new Autobee(new Corestore(storage), { apply, encryptionKey })
+    await auto.ready()
 
     const node = await auto.view.get(b4a.from('latest'))
 

@@ -83,6 +83,7 @@ async function create(t, key, opts) {
   const storage = (opts && opts.storage) || (await t.tmp())
   const auto = new Autobee(new Corestore(storage), key, {
     encryptionKey,
+    encrypted: !!encryptionKey,
     name: '#' + t.tick++,
     apply,
     ...opts

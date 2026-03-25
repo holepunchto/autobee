@@ -1,5 +1,5 @@
 const test = require('brittle')
-const { create, replicateAndSync, encode } = require('./helpers')
+const { create, replicateAndSync, encode, encryptionKey } = require('./helpers')
 
 test('writer-management - add writer', async function (t) {
   const auto1 = await create(t)
@@ -145,7 +145,7 @@ test('writer-management - writer permissions persist after restart', async funct
     const Autobee = require('../index.js')
     const { apply } = require('./helpers')
 
-    const auto1 = new Autobee(new Corestore(storage), { apply })
+    const auto1 = new Autobee(new Corestore(storage), { apply, encryptionKey })
     await auto1.ready()
 
     t.alike(auto1.key, auto1Key, 'auto1 key matches after restart')
