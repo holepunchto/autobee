@@ -36,11 +36,7 @@ module.exports = class Autobee extends ReadyResource {
         await 1
         await this._bootingState
       },
-      getEncryption: () => {
-        if (!handlers.encryptionKey) return null
-
-        return new WriterEncryption(this)
-      }
+      getEncryption: this._getEncryption.bind(this, handlers)
     })
 
     this.store = store
@@ -49,11 +45,7 @@ module.exports = class Autobee extends ReadyResource {
     this.id = null
 
     this.system = new System(this.store.namespace('system'), this.name, {
-      getEncryption: () => {
-        if (!handlers.encryptionKey) return null
-
-        return new WriterEncryption(this)
-      }
+      getEncryption: this._getEncryption.bind(this, handlers)
     })
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee) : this.bee
@@ -153,6 +145,12 @@ module.exports = class Autobee extends ReadyResource {
   openCore(key) {
     const encryption = this.encryptionKey ? new WriterEncryption(this) : null
     return this.store.get({ key, encryption })
+  }
+
+  _getEncryption(handlers) {
+    if (!handlers.encryptionKey) return null
+
+    return new WriterEncryption(this)
   }
 
   async _preBoot() {
