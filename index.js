@@ -75,6 +75,10 @@ module.exports = class Autobee extends ReadyResource {
     return auto instanceof Autobee
   }
 
+  get isIndexer() {
+    return this.writers.localWriter.isIndexer
+  }
+
   get writable() {
     return this.writers.writable
   }
