@@ -169,10 +169,12 @@ module.exports = class Autobee extends ReadyResource {
       this.keyPair = await this._handlers.keyPair
     }
 
+    const encryption = this._handlers.encryptionKey ? new WriterEncryption(this) : null
+
     this.local = this.store.get({
       name: this.keyPair ? null : 'local',
       exclusive: true,
-      encryption: this._handlers.encryptionKey ? new WriterEncryption(this) : null,
+      encryption,
       keyPair: this.keyPair,
       log: true
     })
