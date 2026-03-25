@@ -45,7 +45,8 @@ module.exports = class Autobee extends ReadyResource {
     this.id = null
 
     this.system = new System(this.store.namespace('system'), this.name, {
-      getEncryptionProvider: this._getEncryptionProvider.bind(this, handlers)
+      getEncryptionProvider: this._getEncryptionProvider.bind(this, handlers),
+      encrypted: handlers.encrypted
     })
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee) : this.bee
@@ -106,11 +107,7 @@ module.exports = class Autobee extends ReadyResource {
     await this.bee.ready()
 
     if (this.encrypted) {
-      // wait a tick for encryption to be ready
-      setTimeout(() => {
-        asserts.assert(this._workingBee.core.encryption !== null, 'Encryption key is expected')
-        asserts.assert(this.system.bee.core.encryption !== null, 'Encryption key is expected')
-      }, 1)
+      asserts.assert(this._workingBee.core.encryption !== null, 'Encryption key is expected')
     }
 
     this._wakeup.recouple()
