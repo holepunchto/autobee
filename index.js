@@ -110,10 +110,6 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.bee.ready()
 
-    if (this.encrypted) {
-      asserts.assert(this._workingBee.core.encryption !== null, 'Encryption key is expected')
-    }
-
     this._wakeup.recouple()
     this._wakeup.setCapability(this.key, this.discoveryKey)
   }
