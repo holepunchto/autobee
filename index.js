@@ -171,8 +171,7 @@ module.exports = class Autobee extends ReadyResource {
       name: this.keyPair ? null : 'local',
       exclusive: true,
       encryption: this._getEncryptionProvider(),
-      keyPair: this.keyPair,
-      log: true
+      keyPair: this.keyPair
     })
 
     await this.local.ready()
