@@ -66,6 +66,9 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
 
+    this._appending = []
+    this._draining = null
+
     this._bootingState = null
     this._bootingSystem = null
     this._bootingAll = null
@@ -118,6 +121,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _close() {
+    await this.interrupt()
+
     if (this._handlers.close) await this._handlers.close(this.view)
 
     await this.local.close()
@@ -139,7 +144,6 @@ module.exports = class Autobee extends ReadyResource {
 
   async flush() {
     await this._bootingAll
-    await this.lock.flush()
   }
 
   hintWakeup(wakeup) {
@@ -236,24 +240,36 @@ module.exports = class Autobee extends ReadyResource {
 
   async _bump() {
     await this._flushWakeup()
-
     this.bumping++
+    return this.drain()
+  }
 
-    while (this.bumping === 1) {
-      await this.lock.lock()
+  async drain() {
+    if (this._draining) return this._draining
+    this._draining = this._drain()
+    return this._draining
+  }
 
-      if (this._hasUpdate) this._trackChanges()
+  async _drain() {
+    if (this._hasUpdate) this._trackChanges()
+
+    while (!this._interrupting && this.bumping > 0) {
+      await this._flushLocal()
+      if (this._interrupting) return
+
       try {
-        while (!this.closing) {
+        while (!this._interrupting) {
           if (!(await this._bumpPendingWriters())) break
           this._needsUpdate = true
         }
       } finally {
-        if (this.bumping === 1) this.bumping = 0
+        if (this.bumping === 1) break
         else this.bumping = 1
-        this.lock.unlock()
       }
     }
+
+    this._draining = null
+    if (this._interrupting) return
 
     const changes = this.changes
     this.changes = null
@@ -281,6 +297,11 @@ module.exports = class Autobee extends ReadyResource {
   _update() {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
+  }
+
+  interrupt() {
+    this._interrupting = true
+    if (this._draining) return this._draining
   }
 
   async createAnchor() {
@@ -486,8 +507,8 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
-    const batch = []
     const t = Date.now()
+    const batch = []
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
@@ -499,27 +520,27 @@ module.exports = class Autobee extends ReadyResource {
       batch.push(node)
     }
 
-    await this.lock.lock()
+    this._appending.push({ force, optimistic, batch })
 
-    if (this._hasUpdate) this._trackChanges()
+    return this._bump()
+  }
 
-    if (!this.writers.writable && !force && !optimistic) {
-      this.writers.clearLocal()
-      throw new Error('Not writable')
-    }
+  async _flushLocal() {
+    while (this._appending.length) {
+      const { optimistic, force, batch } = this._appending.shift()
 
-    try {
+      if (!this.writers.writable && !force && !optimistic) {
+        this.writers.clearLocal()
+        throw new Error('Not writable')
+      }
+
       if (!(optimistic && this.system.isGenesis())) {
         await this._processBatch(batch)
       }
       this._needsUpdate = true
       // analyze is worth the trade off adding the view here also (technically not needed)
       await this.writers.flushLocal(this._workingBee.head())
-    } finally {
-      this.lock.unlock()
     }
-
-    await this._bump()
   }
 }
 
