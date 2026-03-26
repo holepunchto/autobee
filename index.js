@@ -219,8 +219,19 @@ module.exports = class Autobee extends ReadyResource {
     await this._bump()
   }
 
+  update() {
+    this.bumpSoon()
+    return this.updating()
+  }
+
   bumpSoon() {
     this._bump().catch(noop)
+  }
+
+  updating() {
+    if (this._bumping) return this._bumping.promise
+    this._bumping = Promise.withResolvers()
+    return this._bumping.promise
   }
 
   async _bump() {
@@ -236,6 +247,9 @@ module.exports = class Autobee extends ReadyResource {
           if (!(await this._bumpPendingWriters())) break
           this._needsUpdate = true
         }
+      } catch (err) {
+        this.onBumpDone(err)
+        throw err
       } finally {
         if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
@@ -244,6 +258,15 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this._needsUpdate) this._update()
+
+    this._onBumpDone()
+  }
+
+  _onBumpDone(err) {
+    if (!this._bumping) return
+
+    if (err) this._bumping.reject(err)
+    else this._bumping.resolve()
   }
 
   async _flushWakeup() {
