@@ -51,7 +51,7 @@ module.exports = class Autobee extends ReadyResource {
     })
 
     this.bee = bee.snapshot()
-    this.view = handlers.open ? handlers.open(this.bee) : this.bee
+    this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
     this.optimistic = handlers.optimistic !== false // TODO: should default to false instead
 
     this.name = name // for debugging
@@ -64,7 +64,7 @@ module.exports = class Autobee extends ReadyResource {
     this.bumping = 0
 
     this._workingBee = bee
-    this._workingView = handlers.open ? handlers.open(this._workingBee) : this._workingBee
+    this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
 
     this._bootingState = null
     this._bootingSystem = null
