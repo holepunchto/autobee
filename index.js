@@ -240,12 +240,11 @@ module.exports = class Autobee extends ReadyResource {
 
     this.bumping++
 
-    const changes = this._hasUpdate ? new UpdateChanges(this) : null
-    if (changes) changes.track()
-
+    let updates = null
     while (this.bumping === 1) {
       await this.lock.lock()
 
+      if (this._hasUpdate) this._trackUpdates()
       try {
         while (!this.closing) {
           if (!(await this._bumpPendingWriters())) break
@@ -258,11 +257,12 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (this._needsUpdate) this._update()
+    updates = this.updates
+    this.updates = null
 
-    if (changes) {
-      changes.finalise()
-      this._handlers.update(this.view, changes)
+    if (this._needsUpdate) {
+      this._update()
+      if (updates) this._flushUpdates(updates)
     }
   }
 
@@ -453,6 +453,18 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  _trackUpdates() {
+    if (this.updates) return
+    this.updates = new UpdateChanges(this)
+    this.updates.track()
+  }
+
+  _flushUpdates(updates) {
+    if (!updates) console.trace(updates)
+    updates.finalise()
+    this._handlers.update(this.view, updates)
+  }
+
   static decodeValue(buf, opts) {
     return encoding.decodeValue(buf, opts)
   }
@@ -490,6 +502,8 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     await this.lock.lock()
+
+    if (this._hasUpdate) this._trackUpdates()
 
     if (!this.writers.writable && !force && !optimistic) {
       this.writers.clearLocal()
