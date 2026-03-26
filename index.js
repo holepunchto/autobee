@@ -26,9 +26,9 @@ module.exports = class Autobee extends ReadyResource {
       key = null
     }
 
-    const { name = null } = handlers
+    const { name = null, encrypted, encryptionKey } = handlers
 
-    this.encrypted = handlers.encrypted === true
+    this.encrypted = encrypted === true || !!encryptionKey
 
     const bee = new Hyperbee(store.namespace('view'), {
       // defer one tick to ensure consistent state, then return state prom
@@ -36,25 +36,29 @@ module.exports = class Autobee extends ReadyResource {
         await 1
         await this._bootingState
       },
-      getEncryptionProvider: this._getEncryptionProvider.bind(this, handlers)
+      getEncryptionProvider: () => this._getEncryptionProvider()
     })
 
     this.store = store
+
     this.key = key ? ID.decode(key) : null
     this.discoveryKey = null
     this.id = null
 
     this.system = new System(this.store.namespace('system'), this.name, {
-      getEncryptionProvider: this._getEncryptionProvider.bind(this, handlers),
-      encrypted: handlers.encrypted
+      getEncryptionProvider: () => this._getEncryptionProvider(),
+      encrypted: this.encrypted
     })
+
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee) : this.bee
     this.optimistic = handlers.optimistic !== false // TODO: should default to false instead
 
     this.name = name // for debugging
 
-    this.local = store.get({ name: 'local', exclusive: true })
+    this.local = null
+    this.encryptionKey = null
+    this.keyPair = null
     this.writers = null
     this.lock = new ScopeLock()
     this.bumping = 0
@@ -106,10 +110,6 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.bee.ready()
 
-    if (this.encrypted) {
-      asserts.assert(this._workingBee.core.encryption !== null, 'Encryption key is expected')
-    }
-
     this._wakeup.recouple()
     this._wakeup.setCapability(this.key, this.discoveryKey)
   }
@@ -144,20 +144,30 @@ module.exports = class Autobee extends ReadyResource {
     return this.store.get({ key, encryption })
   }
 
-  _getEncryptionProvider(handlers) {
-    if (!handlers.encryptionKey) return null
-
+  _getEncryptionProvider() {
+    if (!this.encrypted) return null
     return new WriterEncryption(this)
   }
 
   async _preBoot() {
-    if (!this._handlers.encryptionKey) return
+    if (this._handlers.encryptionKey) {
+      this.encryptionKey = await this._handlers.encryptionKey
+    }
 
-    this.encryptionKey = await this._handlers.encryptionKey
-    this.local.setEncryption(new WriterEncryption(this))
+    if (this._handlers.keyPair) {
+      this.keyPair = await this._handlers.keyPair
+    }
   }
 
   async _bootState() {
+    this.local = this.store.get({
+      name: this.keyPair ? null : 'local',
+      exclusive: true,
+      encryption: this._getEncryptionProvider(),
+      keyPair: this.keyPair,
+      log: true
+    })
+
     await this.local.ready()
 
     this.writers = new ActiveWriters(this)
@@ -173,6 +183,11 @@ module.exports = class Autobee extends ReadyResource {
       this.key = bootstrap.core.key
       this.discoveryKey = bootstrap.core.discoveryKey
       this.id = bootstrap.core.id
+    }
+
+    if (!this.discoveryKey) {
+      this.discoveryKey = this.local.discoveryKey
+      this.id = this.local.id
     }
   }
 

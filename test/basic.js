@@ -1,6 +1,7 @@
 const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
+const crypto = require('hypercore-crypto')
 const {
   create,
   replicateAndSync,
@@ -23,6 +24,23 @@ test('basic', async function (t) {
   const node = await auto.view.get(b4a.from('latest'))
 
   t.alike(node.value, val)
+})
+
+test('basic - accept keyPair', async function (t) {
+  const keyPair = crypto.keyPair()
+
+  const auto = await create(t, {
+    keyPair: new Promise((resolve) => setImmediate(resolve, keyPair))
+  })
+
+  // writer not setup until we append
+  const val = encode({ hello: 'world' })
+  await auto.append(val)
+
+  const node = await auto.view.get(b4a.from('latest'))
+
+  t.alike(node.value, val)
+  t.alike(auto.local.keyPair.publicKey, keyPair.publicKey)
 })
 
 test('basic - replication', async function (t) {
