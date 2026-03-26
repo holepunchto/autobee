@@ -240,6 +240,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this.bumping++
 
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
+
     while (this.bumping === 1) {
       await this.lock.lock()
 
@@ -256,6 +259,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this._needsUpdate) this._update()
+
+    if (changes) {
+      changes.finalise()
+      this._handlers.update(this.view, changes)
+    }
   }
 
   async _flushWakeup() {
@@ -423,9 +431,6 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
-    const changes = this._hasUpdate ? new UpdateChanges(this) : null
-    if (changes) changes.track()
-
     const userBatch = []
     for (const node of batch) {
       this.system.addNode(node)
@@ -445,11 +450,6 @@ module.exports = class Autobee extends ReadyResource {
     for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
-    }
-
-    if (changes) {
-      changes.finalise()
-      this._handlers.update(this.view, changes)
     }
   }
 
