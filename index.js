@@ -698,9 +698,6 @@ module.exports = class Autobee extends ReadyResource {
     if (changes) changes.finalise()
 
     await this.writers.refresh()
-    if (!this.localWriter || this.localWriter.closed) {
-      await this.writers.updateLocalState()
-    }
 
     if (changes) await this._handlers.update(this.view, changes)
 
