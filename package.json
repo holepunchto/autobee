@@ -13,13 +13,13 @@
   "scripts": {
     "format": "prettier . --write",
     "lint": "lunte && prettier . --check",
-    "test": "node test/all.js",
+    "test": "prettier . --check && lunte && node test/all.js",
     "test:bare": "bare test/all.js",
     "test:encrypted": "bare test/all.js --encrypt-all",
     "test:generate": "brittle -r test/all.js test/*.js"
   },
   "dependencies": {
-    "autobee-encryption": "^0.0.4",
+    "autobee-encryption": "^0.0.5",
     "autobee-wakeup": "^1.0.5",
     "b4a": "^1.8.0",
     "compact-encoding": "^2.18.0",
