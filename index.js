@@ -269,7 +269,7 @@ module.exports = class Autobee extends ReadyResource {
           this._needsUpdate = true
         }
       } finally {
-        if (this.bumping === 1) break
+        if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
       }
     }
