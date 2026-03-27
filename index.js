@@ -1,6 +1,5 @@
 const ReadyResource = require('ready-resource')
 const b4a = require('b4a')
-const ScopeLock = require('scope-lock')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
@@ -60,7 +59,6 @@ module.exports = class Autobee extends ReadyResource {
     this.encryptionKey = null
     this.keyPair = null
     this.writers = null
-    this.lock = new ScopeLock()
     this.bumping = 0
 
     this._workingBee = bee
