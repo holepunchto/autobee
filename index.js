@@ -256,7 +256,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
-    if (this._hasUpdate) this._trackChanges()
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
 
     while (!this._interrupting && this.bumping > 0) {
       await this._flushLocal()
@@ -276,12 +277,8 @@ module.exports = class Autobee extends ReadyResource {
     this._draining = null
     if (this._interrupting) return
 
-    const changes = this.changes
-    this.changes = null
-
     if (this._needsUpdate) {
-      this._update()
-      if (changes) this._flushChanges(changes)
+      this._update(changes)
     }
   }
 
@@ -299,9 +296,14 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  _update() {
+  _update(changes) {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
+
+    if (!changes) return
+
+    changes.finalise()
+    this._handlers.update(this.view, changes)
   }
 
   interrupt() {
@@ -475,18 +477,6 @@ module.exports = class Autobee extends ReadyResource {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }
-  }
-
-  _trackChanges() {
-    if (this.changes) return
-    this.changes = new UpdateChanges(this)
-    this.changes.track()
-  }
-
-  _flushChanges(updates) {
-    if (!updates) console.trace(updates)
-    updates.finalise()
-    this._handlers.update(this.view, updates)
   }
 
   static decodeValue(buf, opts) {
