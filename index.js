@@ -115,8 +115,8 @@ module.exports = class Autobee extends ReadyResource {
 
     this._wakeup.recouple()
 
-    if (this.wakeupCapability) {
-      this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
+    if (this._wakeupCapability) {
+      this._wakeup.setCapability(this._wakeupCapability.key, this._wakeupCapability.discoveryKey)
     } else {
       this._wakeup.setCapability(this.key, this.discoveryKey)
     }
