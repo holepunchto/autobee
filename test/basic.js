@@ -206,3 +206,10 @@ test('basic - isIndexer', async function (t) {
   t.is(auto2.writers.active.get(auto1.local.key.toString('hex')).isIndexer, auto1.isIndexer)
   t.is(auto2.writers.active.get(auto2.local.key.toString('hex')).isIndexer, auto2.isIndexer)
 })
+
+test('basic - writers', async function (t) {
+  const auto = await create(t)
+
+  t.ok(auto.writers.has(b4a.toString(auto.key, 'hex')))
+  t.absent(auto.writers.has(b4a.alloc(32).toString('hex')))
+})
