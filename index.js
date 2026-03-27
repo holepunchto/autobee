@@ -241,18 +241,18 @@ module.exports = class Autobee extends ReadyResource {
   async _bump() {
     await this._flushWakeup()
     this.bumping++
-    return this.drain()
+    return this.update()
+  }
+
+  async update() {
+    if (this._draining) return this._draining
+    this._draining = this._drain()
+    return this._draining
   }
 
   async updated() {
     if (this._draining) return this._draining
     return Promise.resolve()
-  }
-
-  async drain() {
-    if (this._draining) return this._draining
-    this._draining = this._drain()
-    return this._draining
   }
 
   async _drain() {
