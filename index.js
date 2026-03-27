@@ -113,7 +113,12 @@ module.exports = class Autobee extends ReadyResource {
     await this.bee.ready()
 
     this._wakeup.recouple()
-    this._wakeup.setCapability(this.key, this.discoveryKey)
+
+    if (this.wakeupCapability) {
+      this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
+    } else {
+      this._wakeup.setCapability(this.key, this.discoveryKey)
+    }
   }
 
   async _close() {
@@ -162,6 +167,10 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this._handlers.keyPair) {
       this.keyPair = await this._handlers.keyPair
+    }
+
+    if (this._handlers.wakeupCapability) {
+      this.wakeupCapability = await this._handlers.wakeupCapability
     }
   }
 
