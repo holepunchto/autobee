@@ -77,6 +77,7 @@ module.exports = class Autobee extends ReadyResource {
     this._host = new ApplyCalls(this)
 
     this._wakeup = new AutobeeWakeup(this, handlers)
+    this._wakeupCapability = null
 
     this.ready().catch(noop)
   }
@@ -170,7 +171,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this._handlers.wakeupCapability) {
-      this.wakeupCapability = await this._handlers.wakeupCapability
+      this._wakeupCapability = await this._handlers.wakeupCapability
     }
   }
 
