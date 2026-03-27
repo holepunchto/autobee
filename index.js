@@ -139,6 +139,10 @@ module.exports = class Autobee extends ReadyResource {
     await this.lock.flush()
   }
 
+  hintWakeup(wakeup) {
+    this._wakeup.hint(wakeup)
+  }
+
   openCore(key) {
     const encryption = this.encryptionKey ? new WriterEncryption(this) : null
     return this.store.get({ key, encryption })
