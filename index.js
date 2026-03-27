@@ -244,6 +244,11 @@ module.exports = class Autobee extends ReadyResource {
     return this.drain()
   }
 
+  async updated() {
+    if (this._draining) return this._draining
+    return Promise.resolve()
+  }
+
   async drain() {
     if (this._draining) return this._draining
     this._draining = this._drain()
