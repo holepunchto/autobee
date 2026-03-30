@@ -243,7 +243,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!this._draining) {
       this._draining = this._drain()
-      this.draining.catch(safetyCatch)
+      this._draining.catch(safetyCatch)
     }
 
     return this._draining
