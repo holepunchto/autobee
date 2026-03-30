@@ -81,6 +81,8 @@ module.exports = class Autobee extends ReadyResource {
     this.ready().catch(noop)
   }
 
+  static GENESIS = EMPTY_HEAD
+
   static isAutobee(auto) {
     return auto instanceof Autobee
   }
