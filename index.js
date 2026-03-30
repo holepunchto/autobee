@@ -1,6 +1,6 @@
 const ReadyResource = require('ready-resource')
 const b4a = require('b4a')
-const ScopeLock = require('scope-lock')
+const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
@@ -60,11 +60,13 @@ module.exports = class Autobee extends ReadyResource {
     this.encryptionKey = null
     this.keyPair = null
     this.writers = null
-    this.lock = new ScopeLock()
     this.bumping = 0
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
+
+    this._appending = []
+    this._draining = null
 
     this._bootingState = null
     this._bootingSystem = null
@@ -118,6 +120,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _close() {
+    await this.interrupt()
+
     if (this._handlers.close) await this._handlers.close(this.view)
 
     await this.local.close()
@@ -139,7 +143,6 @@ module.exports = class Autobee extends ReadyResource {
 
   async flush() {
     await this._bootingAll
-    await this.lock.flush()
   }
 
   hintWakeup(wakeup) {
@@ -171,8 +174,7 @@ module.exports = class Autobee extends ReadyResource {
       name: this.keyPair ? null : 'local',
       exclusive: true,
       encryption: this._getEncryptionProvider(),
-      keyPair: this.keyPair,
-      log: true
+      keyPair: this.keyPair
     })
 
     await this.local.ready()
@@ -232,30 +234,55 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   bumpSoon() {
-    this._bump().catch(noop)
+    this._bump().catch(safetyCatch)
   }
 
   async _bump() {
     await this._flushWakeup()
-
     this.bumping++
 
-    while (this.bumping === 1) {
-      await this.lock.lock()
+    if (!this._draining) {
+      this._draining = this._drain()
+      this._draining.catch(safetyCatch)
+    }
+
+    return this._draining
+  }
+
+  update() {
+    return this._bump()
+  }
+
+  async updated() {
+    if (this._draining) return this._draining
+    return Promise.resolve()
+  }
+
+  async _drain() {
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
+
+    while (!this._interrupting && this.bumping > 0) {
+      await this._flushLocal()
+      if (this._interrupting) return
 
       try {
-        while (!this.closing) {
+        while (!this._interrupting) {
           if (!(await this._bumpPendingWriters())) break
           this._needsUpdate = true
         }
       } finally {
         if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
-        this.lock.unlock()
       }
     }
 
-    if (this._needsUpdate) this._update()
+    this._draining = null
+    if (this._interrupting) return
+
+    if (this._needsUpdate) {
+      this._update(changes)
+    }
   }
 
   async _flushWakeup() {
@@ -272,9 +299,19 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  _update() {
+  _update(changes) {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
+
+    if (!changes) return
+
+    changes.finalise()
+    this._handlers.update(this.view, changes)
+  }
+
+  interrupt() {
+    this._interrupting = true
+    if (this._draining) return this._draining
   }
 
   async createAnchor() {
@@ -423,9 +460,6 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
-    const changes = this._hasUpdate ? new UpdateChanges(this) : null
-    if (changes) changes.track()
-
     const userBatch = []
     for (const node of batch) {
       this.system.addNode(node)
@@ -445,11 +479,6 @@ module.exports = class Autobee extends ReadyResource {
     for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
-    }
-
-    if (changes) {
-      changes.finalise()
-      this._handlers.update(this.view, changes)
     }
   }
 
@@ -476,8 +505,8 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
-    const batch = []
     const t = Date.now()
+    const batch = []
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
@@ -489,25 +518,27 @@ module.exports = class Autobee extends ReadyResource {
       batch.push(node)
     }
 
-    await this.lock.lock()
+    this._appending.push({ force, optimistic, batch })
 
-    if (!this.writers.writable && !force && !optimistic) {
-      this.writers.clearLocal()
-      throw new Error('Not writable')
-    }
+    return this._bump()
+  }
 
-    try {
+  async _flushLocal() {
+    while (this._appending.length) {
+      const { optimistic, force, batch } = this._appending.shift()
+
+      if (!this.writers.writable && !force && !optimistic) {
+        this.writers.clearLocal()
+        throw new Error('Not writable')
+      }
+
       if (!(optimistic && this.system.isGenesis())) {
         await this._processBatch(batch)
       }
       this._needsUpdate = true
       // analyze is worth the trade off adding the view here also (technically not needed)
       await this.writers.flushLocal(this._workingBee.head())
-    } finally {
-      this.lock.unlock()
     }
-
-    await this._bump()
   }
 }
 

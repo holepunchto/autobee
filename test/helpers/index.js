@@ -137,18 +137,25 @@ async function sync(...autos) {
   while (true) {
     if (await check()) {
       for (const a of autos) await a.flush()
-      if (await check()) return
+      if (await check()) {
+        return
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, scale.shift() || 100))
   }
 
   async function check() {
     for (const a of autos) {
+      await a.updated()
+
       for (const b of autos) {
         if (a === b) continue
 
+        await b.updated()
+
         const info = await b.system.get(a.local.key)
         const length = info ? info.length : 0
+
         if (length !== a.local.length) return false
       }
     }
