@@ -1,5 +1,6 @@
 const ReadyResource = require('ready-resource')
 const b4a = require('b4a')
+const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
@@ -233,18 +234,23 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   bumpSoon() {
-    this._bump().catch(noop)
+    this._bump().catch(safetyCatch)
   }
 
   async _bump() {
     await this._flushWakeup()
     this.bumping++
-    if (!this._draining) this._draining = this._drain()
+
+    if (!this._draining) {
+      this._draining = this._drain()
+      this.draining.catch(safetyCatch)
+    }
+
     return this._draining
   }
 
-  async update() {
-    this._bump()
+  update() {
+    return this._bump()
   }
 
   async updated() {
