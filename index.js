@@ -164,12 +164,6 @@ module.exports = class Autobee extends ReadyResource {
     if (this._handlers.keyPair) {
       this.keyPair = await this._handlers.keyPair
     }
-
-    if (this._handlers.wakeupCapability) {
-      this.wakeupCapability = await this._handlers.wakeupCapability
-    } else {
-      this.wakeupCapability = { key: this.key, discoveryKey: this.discoveryKey }
-    }
   }
 
   async _bootState() {
@@ -201,6 +195,11 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.discoveryKey) {
       this.discoveryKey = this.local.discoveryKey
       this.id = this.local.id
+    }
+    if (this._handlers.wakeupCapability) {
+      this.wakeupCapability = await this._handlers.wakeupCapability
+    } else {
+      this.wakeupCapability = { key: this.key, discoveryKey: this.discoveryKey }
     }
   }
 
