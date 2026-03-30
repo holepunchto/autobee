@@ -172,17 +172,17 @@ module.exports = class Autobee extends ReadyResource {
 
     this.writers = new ActiveWriters(this)
 
-    if (!this.key) {
-      this.key = this.local.key
-      this.discoveryKey = this.local.discoveryKey
-      this.id = this.local.id
-    }
-
-    if (!b4a.equals(this.local.key, this.key)) {
+    if (this.key && !b4a.equals(this.local.key, this.key)) {
       const bootstrap = await this.writers.add(this.key)
       this.key = bootstrap.core.key
       this.discoveryKey = bootstrap.core.discoveryKey
       this.id = bootstrap.core.id
+      this.bootstrap = bootstrap.core
+    } else {
+      this.key = this.local.key
+      this.discoveryKey = this.local.discoveryKey
+      this.id = this.local.id
+      this.bootstrap = this.local
     }
 
     if (!this.discoveryKey) {
