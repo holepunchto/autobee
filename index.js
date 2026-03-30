@@ -8,6 +8,7 @@ const AutobeeWakeup = require('autobee-wakeup')
 const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
+const AppendBatch = require('./lib/append-batch.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
@@ -494,6 +495,10 @@ module.exports = class Autobee extends ReadyResource {
     await this._bootingSystem
     await this.writers.wakeup(key, length)
     await this._bump()
+  }
+
+  batch() {
+    return new AppendBatch(this)
   }
 
   async append(values, { force = false, optimistic = false } = {}) {
