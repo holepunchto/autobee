@@ -120,7 +120,7 @@ auto.register({
 })
 
 auto.register({
-  name: 'oplog-message-v0',
+  name: 'oplog-message-v3',
   fields: [
     {
       name: 'timestamp',
@@ -361,8 +361,8 @@ auto.register({
       type: '@autobase-compat/oplog-message-v2'
     },
     {
-      version: 4,
-      type: '@autobee/oplog-message-v0'
+      version: 3,
+      type: '@autobee/oplog-message-v3'
     }
   ]
 })
