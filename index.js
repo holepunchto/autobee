@@ -334,7 +334,13 @@ module.exports = class Autobee extends ReadyResource {
     const padding = this.encryptionKey ? AutobeeEncryption.PADDING : 0
     const links = [{ key, length }]
 
-    const block = Autobee.encodeValue(null, { legacy, links, heads: links, padding })
+    const block = Autobee.encodeValue(null, {
+      legacy,
+      timestamp: 0,
+      links,
+      heads: links, // legacy compat
+      padding
+    })
 
     if (this.encryptionKey) {
       AutobeeEncryption.encryptAnchor(block, this.key, this.encryptionKey, namespace)
