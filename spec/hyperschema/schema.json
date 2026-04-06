@@ -142,7 +142,7 @@
       ]
     },
     {
-      "name": "oplog-message-v0",
+      "name": "oplog-message-v3",
       "namespace": "autobee",
       "compact": false,
       "flagsPosition": 2,
@@ -420,9 +420,9 @@
           "version": 2
         },
         {
-          "type": "@autobee/oplog-message-v0",
+          "type": "@autobee/oplog-message-v3",
           "map": null,
-          "version": 4
+          "version": 3
         }
       ]
     },

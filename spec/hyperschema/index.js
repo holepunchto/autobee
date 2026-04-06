@@ -179,7 +179,7 @@ const encoding4_inline = {
   }
 }
 
-// @autobee/oplog-message-v0
+// @autobee/oplog-message-v3
 const encoding5 = {
   preencode(state, m) {
     c.uint.preencode(state, m.timestamp)
@@ -469,7 +469,6 @@ const encoding16 = {
         encoding15.preencode(state, m)
         break
       case 3:
-      case 4:
         encoding5.preencode(state, m)
         break
       default:
@@ -485,7 +484,6 @@ const encoding16 = {
         encoding15.encode(state, m)
         break
       case 3:
-      case 4:
         encoding5.encode(state, m)
         break
       default:
@@ -503,8 +501,7 @@ const encoding16 = {
         const decoded = encoding15.decode(state)
         return decoded
       }
-      case 3:
-      case 4: {
+      case 3: {
         const decoded = encoding5.decode(state)
         return decoded
       }
@@ -548,7 +545,7 @@ const encoding17 = {
 const encoding0_4 = c.array(encoding2)
 // @autobee/system-info.indexers, deferred due to recusive use
 const encoding0_5 = encoding0_4
-// @autobee/oplog-message-v0.links, deferred due to recusive use
+// @autobee/oplog-message-v3.links, deferred due to recusive use
 const encoding5_1 = encoding0_4
 
 function setVersion(v) {
@@ -584,7 +581,7 @@ function getEncoding(name) {
       return encoding3
     case '@autobee/views':
       return encoding4
-    case '@autobee/oplog-message-v0':
+    case '@autobee/oplog-message-v3':
       return encoding5
     case '@autobase-compat/checkout':
       return encoding6
