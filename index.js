@@ -1,13 +1,19 @@
 const ReadyResource = require('ready-resource')
 const b4a = require('b4a')
-const ScopeLock = require('scope-lock')
+const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
+const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
+const AutobeeWakeup = require('autobee-wakeup')
+const crypto = require('hypercore-crypto')
+const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
+const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
+const UpdateChanges = require('./lib/updates.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 
@@ -20,35 +26,47 @@ module.exports = class Autobee extends ReadyResource {
       key = null
     }
 
-    const { name = null } = handlers
+    const { name = null, encrypted, encryptionKey } = handlers
+
+    this.encrypted = encrypted === true || !!encryptionKey
 
     const bee = new Hyperbee(store.namespace('view'), {
       // defer one tick to ensure consistent state, then return state prom
       preload: async () => {
         await 1
         await this._bootingState
-      }
+      },
+      getEncryptionProvider: () => this._getEncryptionProvider()
     })
 
     this.store = store
+
     this.key = key ? ID.decode(key) : null
     this.discoveryKey = null
     this.id = null
 
-    this.system = new System(store.namespace('system'), name)
+    this.system = new System(this.store.namespace('system'), this.name, {
+      getEncryptionProvider: () => this._getEncryptionProvider(),
+      encrypted: this.encrypted
+    })
+
     this.bee = bee.snapshot()
-    this.view = handlers.open ? handlers.open(this.bee) : this.bee
+    this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
     this.optimistic = handlers.optimistic !== false // TODO: should default to false instead
 
     this.name = name // for debugging
 
-    this.local = store.get({ name: 'local', exclusive: true })
+    this.local = null
+    this.encryptionKey = null
+    this.keyPair = null
     this.writers = null
-    this.lock = new ScopeLock()
     this.bumping = 0
 
     this._workingBee = bee
-    this._workingView = handlers.open ? handlers.open(this._workingBee) : this._workingBee
+    this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
+
+    this._appending = []
+    this._draining = null
 
     this._bootingState = null
     this._bootingSystem = null
@@ -56,10 +74,24 @@ module.exports = class Autobee extends ReadyResource {
 
     this._handlers = handlers
     this._hasApply = !!handlers.apply
+    this._hasUpdate = !!handlers.update
     this._needsUpdate = false
     this._host = new ApplyCalls(this)
 
+    this._wakeup = new AutobeeWakeup(this, handlers)
+    this.wakeupCapability = null
+
     this.ready().catch(noop)
+  }
+
+  static GENESIS = EMPTY_HEAD
+
+  static isAutobee(auto) {
+    return auto instanceof Autobee
+  }
+
+  get isIndexer() {
+    return this.writers.localWriter.isIndexer
   }
 
   get writable() {
@@ -67,6 +99,12 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _open() {
+    await this._preBoot()
+
+    if (this.encrypted) {
+      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
+    }
+
     this._bootingState = this._bootState()
     this._bootingSystem = this._bootSystem()
     this._bootingAll = this._bootAll() // bg
@@ -76,10 +114,15 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll.catch(noop)
 
     await this.bee.ready()
+
+    this._wakeup.recouple()
+    this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
   }
 
   async _close() {
-    if (this._handlers.open) await this._handlers.close(this.view)
+    await this.interrupt()
+
+    if (this._handlers.close) await this._handlers.close(this.view)
 
     await this.local.close()
     await this.system.close()
@@ -93,30 +136,72 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   replicate(...args) {
-    return this.store.replicate(...args)
+    const stream = this.store.replicate(...args)
+    this._wakeup.addStream(stream)
+    return stream
   }
 
   async flush() {
     await this._bootingAll
-    await this.lock.flush()
+  }
+
+  hintWakeup(wakeup) {
+    this._wakeup.hint(wakeup)
+  }
+
+  openCore(key) {
+    const encryption = this.encryptionKey ? new WriterEncryption(this) : null
+    return this.store.get({ key, encryption })
+  }
+
+  _getEncryptionProvider() {
+    if (!this.encrypted) return null
+    return new WriterEncryption(this)
+  }
+
+  async _preBoot() {
+    if (this._handlers.encryptionKey) {
+      this.encryptionKey = await this._handlers.encryptionKey
+    }
+
+    if (this._handlers.keyPair) {
+      this.keyPair = await this._handlers.keyPair
+    }
   }
 
   async _bootState() {
+    this.local = this.store.get({
+      name: this.keyPair ? null : 'local',
+      exclusive: true,
+      encryption: this._getEncryptionProvider(),
+      keyPair: this.keyPair
+    })
+
     await this.local.ready()
 
     this.writers = new ActiveWriters(this)
 
-    if (!this.key) {
-      this.key = this.local.key
-      this.discoveryKey = this.local.discoveryKey
-      this.id = this.local.id
-    }
-
-    if (!b4a.equals(this.local.key, this.key)) {
+    if (this.key && !b4a.equals(this.local.key, this.key)) {
       const bootstrap = await this.writers.add(this.key)
       this.key = bootstrap.core.key
       this.discoveryKey = bootstrap.core.discoveryKey
       this.id = bootstrap.core.id
+      this.bootstrap = bootstrap.core
+    } else {
+      this.key = this.local.key
+      this.discoveryKey = this.local.discoveryKey
+      this.id = this.local.id
+      this.bootstrap = this.local
+    }
+
+    if (!this.discoveryKey) {
+      this.discoveryKey = this.local.discoveryKey
+      this.id = this.local.id
+    }
+    if (this._handlers.wakeupCapability) {
+      this.wakeupCapability = await this._handlers.wakeupCapability
+    } else {
+      this.wakeupCapability = { key: this.key, discoveryKey: this.discoveryKey }
     }
   }
 
@@ -149,33 +234,136 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   bumpSoon() {
-    this._bump().catch(noop)
+    this._bump().catch(safetyCatch)
   }
 
   async _bump() {
+    await this._flushWakeup()
     this.bumping++
 
-    while (this.bumping === 1) {
-      await this.lock.lock()
+    if (!this._draining) {
+      this._draining = this._drain()
+      this._draining.catch(safetyCatch)
+    }
+
+    return this._draining
+  }
+
+  update() {
+    return this._bump()
+  }
+
+  async updated() {
+    if (this._draining) return this._draining
+    return Promise.resolve()
+  }
+
+  async _drain() {
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
+
+    while (!this._interrupting && this.bumping > 0) {
+      await this._flushLocal()
+      if (this._interrupting) return
 
       try {
-        while (!this.closing) {
+        while (!this._interrupting) {
           if (!(await this._bumpPendingWriters())) break
           this._needsUpdate = true
         }
       } finally {
         if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
-        this.lock.unlock()
       }
     }
 
-    if (this._needsUpdate) this._update()
+    this._draining = null
+    if (this._interrupting) return
+
+    if (this._needsUpdate) {
+      this._update(changes)
+    }
   }
 
-  _update() {
+  async _flushWakeup() {
+    const hints = this._wakeup.flush()
+
+    for (const [hex, length] of hints) {
+      const key = b4a.from(hex, 'hex')
+      if (this.writers.has(hex)) continue
+      if (length !== -1) {
+        const info = await this.system.get(key)
+        if (info && length <= info.length) continue // stale hint
+      }
+      await this.writers.wakeup(key, length === -1 ? 0 : length)
+    }
+  }
+
+  _update(changes) {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
+
+    if (!changes) return
+
+    changes.finalise()
+    this._handlers.update(this.view, changes)
+  }
+
+  interrupt() {
+    this._interrupting = true
+    if (this._draining) return this._draining
+  }
+
+  async createAnchor() {
+    const node = this._host.applying[this._host.applying.length - 1]
+
+    const key = node.key
+    const length = node.length
+    const legacy = node.version <= 2
+
+    const info = await this.system.get(key, { unflushed: true })
+    if (!info || info.length < length) throw new Error('Anchor node is not in system')
+
+    const state = { start: 0, end: 40, buffer: b4a.alloc(40) }
+    c.fixed32.encode(state, key)
+    c.uint64.encode(state, length)
+
+    const namespace = crypto.hash(state.buffer)
+    const manifestData = c.encode(encoding.ManifestData, { version: 0, legacyBlocks: 0, namespace })
+
+    const padding = this.encryptionKey ? AutobeeEncryption.PADDING : 0
+    const links = [{ key, length }]
+
+    const block = Autobee.encodeValue(null, {
+      legacy,
+      timestamp: 0,
+      links,
+      heads: links, // legacy compat
+      padding
+    })
+
+    if (this.encryptionKey) {
+      AutobeeEncryption.encryptAnchor(block, this.key, this.encryptionKey, namespace)
+    }
+
+    const root = { index: 0, size: block.byteLength, hash: crypto.data(block) }
+    const hash = crypto.tree([root])
+    const prologue = { hash, length: 1 }
+
+    const core = createAnchorCore(this.store, prologue, manifestData)
+    await core.ready()
+
+    if (core.length === 0) {
+      await core.append(block, { writable: true, maxLength: 1 })
+    }
+
+    await this.system.addWriter(core.key)
+
+    const anchor = { key: core.key, length: core.length }
+
+    await core.close()
+
+    return anchor
   }
 
   async _bumpPendingWriters() {
@@ -212,7 +400,7 @@ module.exports = class Autobee extends ReadyResource {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
 
-    const t = await this.system.prepare(batch)
+    const t = await this.prepareBatch(batch)
 
     if (t.view) {
       this._workingBee.move(t.view)
@@ -238,14 +426,30 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     for (let i = 1; i < t.tip.length; i++) {
-      await this._applyBatch(t.tip[i])
+      await this._applyBatch(t.tip[i], t.tip[i][0].optimistic)
     }
 
     return true
   }
 
+  async prepareBatch(batch) {
+    const node = batch[0]
+
+    if (topo.isLinkingAll(node, this.system.heads)) {
+      return { undo: null, view: null, tip: [batch] }
+    }
+
+    const t = await topo.sort(this, batch)
+
+    if (t.undo) {
+      t.view = await this.system.undo(t.undo)
+    }
+
+    return t
+  }
+
   async _processBatch(batch) {
-    const t = await this.system.prepare(batch)
+    const t = await this.prepareBatch(batch)
 
     if (t.view) {
       this._workingBee.move(t.view)
@@ -262,9 +466,17 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
+    const userBatch = []
+    for (const node of batch) {
+      this.system.addNode(node)
+
+      // compat: autobase nodes may be null
+      if (node.value) userBatch.push(node)
+    }
+
     if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
       this._host.applying = batch
-      await this._handlers.apply(batch, this._workingView, this._host)
+      await this._handlers.apply(userBatch, this._workingView, this._host)
       this._host.applying = null
     }
 
@@ -299,8 +511,8 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
-    const batch = []
     const t = Date.now()
+    const batch = []
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
@@ -312,25 +524,27 @@ module.exports = class Autobee extends ReadyResource {
       batch.push(node)
     }
 
-    await this.lock.lock()
+    this._appending.push({ force, optimistic, batch })
 
-    if (!this.writers.writable && !force && !optimistic) {
-      this.writers.clearLocal()
-      throw new Error('Not writable')
-    }
+    return this._bump()
+  }
 
-    try {
+  async _flushLocal() {
+    while (this._appending.length) {
+      const { optimistic, force, batch } = this._appending.shift()
+
+      if (!this.writers.writable && !force && !optimistic) {
+        this.writers.clearLocal()
+        throw new Error('Not writable')
+      }
+
       if (!(optimistic && this.system.isGenesis())) {
         await this._processBatch(batch)
       }
       this._needsUpdate = true
       // analyze is worth the trade off adding the view here also (technically not needed)
       await this.writers.flushLocal(this._workingBee.head())
-    } finally {
-      this.lock.unlock()
     }
-
-    await this._bump()
   }
 }
 
@@ -339,3 +553,23 @@ function isObject(o) {
 }
 
 function noop() {}
+
+function createAnchorCore(store, prologue, manifestData) {
+  const manifest = {
+    version: 2,
+    hash: 'blake2b',
+    prologue,
+    allowPatch: false,
+    quorum: 0,
+    signers: [],
+    userData: manifestData,
+    linked: null
+  }
+
+  const core = store.get({
+    manifest,
+    active: false
+  })
+
+  return core
+}

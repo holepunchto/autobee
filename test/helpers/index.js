@@ -2,6 +2,11 @@ const Autobee = require('../../index.js')
 const Corestore = require('corestore')
 const b4a = require('b4a')
 
+const argv = typeof global.Bare !== 'undefined' ? global.Bare.argv : process.argv
+const encryptionKey = argv.includes('--encrypt-all')
+  ? b4a.alloc(32).fill('autobase-encryption-test')
+  : undefined
+
 exports.create = create
 exports.sync = sync
 exports.same = same
@@ -11,6 +16,7 @@ exports.apply = apply
 exports.encode = encode
 exports.decode = decode
 exports.dump = dump
+exports.encryptionKey = encryptionKey
 
 function encode(val) {
   return b4a.from(JSON.stringify(val))
@@ -75,7 +81,10 @@ async function create(t, key, opts) {
   if (!t.tick) t.tick = 0
 
   const storage = (opts && opts.storage) || (await t.tmp())
-  const auto = new Autobee(new Corestore(storage), key, {
+  const store = new Corestore(storage, { manifestVersion: 2 })
+  const auto = new Autobee(store, key, {
+    encryptionKey,
+    encrypted: !!encryptionKey,
     name: '#' + t.tick++,
     apply,
     ...opts
@@ -128,18 +137,25 @@ async function sync(...autos) {
   while (true) {
     if (await check()) {
       for (const a of autos) await a.flush()
-      if (await check()) return
+      if (await check()) {
+        return
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, scale.shift() || 100))
   }
 
   async function check() {
     for (const a of autos) {
+      await a.updated()
+
       for (const b of autos) {
         if (a === b) continue
 
+        await b.updated()
+
         const info = await b.system.get(a.local.key)
         const length = info ? info.length : 0
+
         if (length !== a.local.length) return false
       }
     }
