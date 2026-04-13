@@ -263,7 +263,6 @@ module.exports = class Autobee extends ReadyResource {
     if (changes) changes.track()
 
     while (!this._interrupting && this.bumping > 0) {
-      await this._flushLocal()
       if (this._interrupting) return
 
       try {
@@ -271,6 +270,8 @@ module.exports = class Autobee extends ReadyResource {
           if (!(await this._bumpPendingWriters())) break
           this._needsUpdate = true
         }
+
+        await this._flushLocal()
       } finally {
         if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
@@ -369,8 +370,10 @@ module.exports = class Autobee extends ReadyResource {
   async _bumpPendingWriters() {
     let updated = false
 
-    for (let i = this.writers.pending.length - 1; i >= 0; i--) {
-      const w = this.writers.pending[i]
+    const pending = this.writers.pending.slice()
+
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const w = pending[i]
 
       const batch = await w.next()
       if (batch === null) continue
@@ -502,7 +505,7 @@ module.exports = class Autobee extends ReadyResource {
     await this._bump()
   }
 
-  async append(values, { force = false, optimistic = false } = {}) {
+  async append(values, { optimistic = false } = {}) {
     if (!Array.isArray(values)) values = [values]
 
     if (!this.opened) await this.ready()
@@ -524,27 +527,12 @@ module.exports = class Autobee extends ReadyResource {
       batch.push(node)
     }
 
-    this._appending.push({ force, optimistic, batch })
-
     return this._bump()
   }
 
   async _flushLocal() {
-    while (this._appending.length) {
-      const { optimistic, force, batch } = this._appending.shift()
-
-      if (!this.writers.writable && !force && !optimistic) {
-        this.writers.clearLocal()
-        throw new Error('Not writable')
-      }
-
-      if (!(optimistic && this.system.isGenesis())) {
-        await this._processBatch(batch)
-      }
-      this._needsUpdate = true
-      // analyze is worth the trade off adding the view here also (technically not needed)
-      await this.writers.flushLocal(this._workingBee.head())
-    }
+    // analyze is worth the trade off adding the view here also (technically not needed)
+    await this.writers.flushLocal(this._workingBee.head())
   }
 }
 

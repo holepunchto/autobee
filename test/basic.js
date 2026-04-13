@@ -213,3 +213,20 @@ test('basic - writers', async function (t) {
   t.ok(auto.writers.has(b4a.toString(auto.key, 'hex')))
   t.absent(auto.writers.has(b4a.alloc(32).toString('hex')))
 })
+
+test('basic - append during bump', async function (t) {
+  const auto = await create(t)
+
+  // set high to ensure trigger
+  const APPENDS = 100
+
+  const ops = []
+  for (let i = 0; i < APPENDS; i++) {
+    ops.push(auto.append(encode({ hello: 'world' + i })))
+    await new Promise(setImmediate)
+  }
+
+  await t.execution(Promise.all(ops))
+
+  t.ok(auto.writable)
+})
