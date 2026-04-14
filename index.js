@@ -44,6 +44,7 @@ module.exports = class Autobee extends ReadyResource {
     this.key = key ? ID.decode(key) : null
     this.discoveryKey = null
     this.id = null
+    this.bootstrap = null
 
     this.system = new System(this.store.namespace('system'), this.name, {
       getEncryptionProvider: () => this._getEncryptionProvider(),
@@ -114,7 +115,9 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll.catch(noop)
 
     await this.bee.ready()
+  }
 
+  _registerWakeup() {
     this._wakeup.recouple()
     this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
   }
@@ -203,6 +206,8 @@ module.exports = class Autobee extends ReadyResource {
     } else {
       this.wakeupCapability = { key: this.key, discoveryKey: this.discoveryKey }
     }
+
+    this._registerWakeup()
   }
 
   async _bootSystem() {
