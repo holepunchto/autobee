@@ -77,6 +77,7 @@ module.exports = class Autobee extends ReadyResource {
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
+    this._updateLocalCore = null
     this._host = new ApplyCalls(this)
 
     this._wakeup = new AutobeeWakeup(this, handlers)
@@ -247,12 +248,16 @@ module.exports = class Autobee extends ReadyResource {
     return this._bump()
   }
 
-  async updated() {
+  updated() {
     if (this._draining) return this._draining
     return Promise.resolve()
   }
 
   async _drain() {
+    if (this._updateLocalCore !== null) {
+      await this._rotateLocalWriter(this._updateLocalCore)
+    }
+
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
@@ -302,6 +307,56 @@ module.exports = class Autobee extends ReadyResource {
 
     changes.finalise()
     this._handlers.update(this.view, changes)
+  }
+
+  async setLocal(key, { keyPair } = {}) {
+    if (!this.opened) await this.ready()
+
+    const manifest = keyPair
+      ? { version: this.store.manifestVersion, signers: [{ publicKey: keyPair.publicKey }] }
+      : null
+    if (!key) key = Hypercore.key(manifest)
+    // If the keys are the same, no need to rotate
+    if (b4a.equals(key, this.local.key)) return
+
+    const encryption = this.encryptionKey ? this._getEncryptionProvider() : null
+
+    const local = this.store.get({
+      key,
+      manifest,
+      active: false,
+      exclusive: true,
+      encryption
+    })
+    await local.ready()
+
+    this._updateLocalCore = local
+
+    let runs = 0
+    while (!this._interrupting && this.appending && runs++ < 16) await this.update()
+    await this.bumpSoon()
+  }
+
+  async _rotateLocalWriter(newLocal) {
+    asserts.assert(!this.appending, 'Cannot rotate a newLocal writer if an append is in progress')
+
+    const oldLocal = this.local
+
+    this.local = newLocal
+    this.writers.rotateLocalWriter(this.local)
+
+    this._updateLocalCore = null
+
+    this.local.setUserData('referrer', this.key)
+    if (this.encryptionKey) {
+      await this.local.setUserData('autobase/encryption', this.encryptionKey)
+    }
+
+    await this.bootstrap.setUserData('autobase/local', this.local.key)
+    await oldLocal.close()
+
+    // done, soft reboot
+    this.emit('rotate-local-writer')
   }
 
   interrupt() {
