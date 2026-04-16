@@ -8,6 +8,7 @@ const AutobeeWakeup = require('autobee-wakeup')
 const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
+const boot = require('./lib/boot.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
@@ -101,10 +102,6 @@ module.exports = class Autobee extends ReadyResource {
   async _open() {
     await this._preBoot()
 
-    if (this.encrypted) {
-      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
-    }
-
     this._bootingState = this._bootState()
     this._bootingSystem = this._bootSystem()
     this._bootingAll = this._bootAll() // bg
@@ -160,6 +157,10 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _preBoot() {
+    if (this._handlers.wait) await this._handlers.wait()
+
+    await this.store.ready()
+
     if (this._handlers.encryptionKey) {
       this.encryptionKey = await this._handlers.encryptionKey
     }
@@ -170,34 +171,27 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootState() {
-    this.local = this.store.get({
-      name: this.keyPair ? null : 'local',
-      exclusive: true,
-      encryption: this._getEncryptionProvider(),
+    const result = await boot(this.store, this.key, {
+      encryptionKey: this.encryptionKey,
       keyPair: this.keyPair
     })
 
-    await this.local.ready()
+    this.key = result.key
+    this.bootstrap = result.bootstrap
+    this.discoveryKey = result.bootstrap.core.discoveryKey
+    this.id = result.bootstrap.core.id
+    this.encryptionKey = result.encryptionKey
+
+    if (this.encrypted) {
+      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
+    }
+
+    this.local = result.local
+    this.local.setEncryption(this._getEncryptionProvider())
+    this.local.setActive(true)
 
     this.writers = new ActiveWriters(this)
 
-    if (this.key && !b4a.equals(this.local.key, this.key)) {
-      const bootstrap = await this.writers.add(this.key)
-      this.key = bootstrap.core.key
-      this.discoveryKey = bootstrap.core.discoveryKey
-      this.id = bootstrap.core.id
-      this.bootstrap = bootstrap.core
-    } else {
-      this.key = this.local.key
-      this.discoveryKey = this.local.discoveryKey
-      this.id = this.local.id
-      this.bootstrap = this.local
-    }
-
-    if (!this.discoveryKey) {
-      this.discoveryKey = this.local.discoveryKey
-      this.id = this.local.id
-    }
     if (this._handlers.wakeupCapability) {
       this.wakeupCapability = await this._handlers.wakeupCapability
     } else {
