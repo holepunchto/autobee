@@ -5,9 +5,11 @@ const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
 const AutobeeWakeup = require('autobee-wakeup')
+const Hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
+const boot = require('./lib/boot.js')
 const encoding = require('./lib/encoding.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
@@ -77,6 +79,7 @@ module.exports = class Autobee extends ReadyResource {
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
+    this._updateLocalCore = null
     this._host = new ApplyCalls(this)
 
     this._wakeup = new AutobeeWakeup(this, handlers)
@@ -101,10 +104,6 @@ module.exports = class Autobee extends ReadyResource {
 
   async _open() {
     await this._preBoot()
-
-    if (this.encrypted) {
-      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
-    }
 
     this._bootingState = this._bootState()
     this._bootingSystem = this._bootSystem()
@@ -163,6 +162,10 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _preBoot() {
+    if (this._handlers.wait) await this._handlers.wait()
+
+    await this.store.ready()
+
     if (this._handlers.encryptionKey) {
       this.encryptionKey = await this._handlers.encryptionKey
     }
@@ -173,34 +176,27 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootState() {
-    this.local = this.store.get({
-      name: this.keyPair ? null : 'local',
-      exclusive: true,
-      encryption: this._getEncryptionProvider(),
+    const result = await boot(this.store, this.key, {
+      encryptionKey: this.encryptionKey,
       keyPair: this.keyPair
     })
 
-    await this.local.ready()
+    this.key = result.key
+    this.bootstrap = result.bootstrap
+    this.discoveryKey = result.bootstrap.core.discoveryKey
+    this.id = result.bootstrap.core.id
+    this.encryptionKey = result.encryptionKey
+
+    if (this.encrypted) {
+      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
+    }
+
+    this.local = result.local
+    this.local.setEncryption(this._getEncryptionProvider())
+    this.local.setActive(true)
 
     this.writers = new ActiveWriters(this)
 
-    if (this.key && !b4a.equals(this.local.key, this.key)) {
-      const bootstrap = await this.writers.add(this.key)
-      this.key = bootstrap.core.key
-      this.discoveryKey = bootstrap.core.discoveryKey
-      this.id = bootstrap.core.id
-      this.bootstrap = bootstrap.core
-    } else {
-      this.key = this.local.key
-      this.discoveryKey = this.local.discoveryKey
-      this.id = this.local.id
-      this.bootstrap = this.local
-    }
-
-    if (!this.discoveryKey) {
-      this.discoveryKey = this.local.discoveryKey
-      this.id = this.local.id
-    }
     if (this._handlers.wakeupCapability) {
       this.wakeupCapability = await this._handlers.wakeupCapability
     } else {
@@ -258,12 +254,16 @@ module.exports = class Autobee extends ReadyResource {
     return this._bump()
   }
 
-  async updated() {
+  updated() {
     if (this._draining) return this._draining
     return Promise.resolve()
   }
 
   async _drain() {
+    if (this._updateLocalCore !== null) {
+      await this._rotateLocalWriter(this._updateLocalCore)
+    }
+
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
@@ -313,6 +313,56 @@ module.exports = class Autobee extends ReadyResource {
 
     changes.finalise()
     this._handlers.update(this.view, changes)
+  }
+
+  async setLocal(key, { keyPair } = {}) {
+    if (!this.opened) await this.ready()
+
+    const manifest = keyPair
+      ? { version: this.store.manifestVersion, signers: [{ publicKey: keyPair.publicKey }] }
+      : null
+    if (!key) key = Hypercore.key(manifest)
+    // If the keys are the same, no need to rotate
+    if (b4a.equals(key, this.local.key)) return
+
+    const encryption = this.encryptionKey ? this._getEncryptionProvider() : null
+
+    const local = this.store.get({
+      key,
+      manifest,
+      active: false,
+      exclusive: true,
+      encryption
+    })
+    await local.ready()
+
+    this._updateLocalCore = local
+
+    let runs = 0
+    while (!this._interrupting && this.appending && runs++ < 16) await this.update()
+    await this.bumpSoon()
+  }
+
+  async _rotateLocalWriter(newLocal) {
+    asserts.assert(!this.appending, 'Cannot rotate a newLocal writer if an append is in progress')
+
+    const oldLocal = this.local
+
+    this.local = newLocal
+    this.writers.rotateLocalWriter(this.local)
+
+    this._updateLocalCore = null
+
+    this.local.setUserData('referrer', this.key)
+    if (this.encryptionKey) {
+      await this.local.setUserData('autobase/encryption', this.encryptionKey)
+    }
+
+    await this.bootstrap.setUserData('autobase/local', this.local.key)
+    await oldLocal.close()
+
+    // done, soft reboot
+    this.emit('rotate-local-writer')
   }
 
   interrupt() {
