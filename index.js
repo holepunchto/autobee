@@ -519,7 +519,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     for (let i = 0; i < t.tip.length; i++) {
-      await this._applyBatch(t.tip[i], false)
+      await this._applyBatch(t.tip[i], t.tip[i][0].optimistic)
     }
   }
 
