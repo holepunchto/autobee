@@ -102,6 +102,11 @@ module.exports = class Autobee extends ReadyResource {
     return this.writers.writable
   }
 
+  // autobase compat
+  get activeWriters() {
+    return this.writers
+  }
+
   async _open() {
     await this._preBoot()
 
@@ -121,6 +126,17 @@ module.exports = class Autobee extends ReadyResource {
     this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
   }
 
+  views() {
+    const sys = this.system.bee.context.local
+    const view = this._workingBee.context.local
+
+    // signedLength for autobase compat
+    return [
+      { key: sys.key, length: sys.length, signedLength: sys.length },
+      { key: view.key, length: view.length, signedLength: view.length }
+    ]
+  }
+
   async _close() {
     await this.interrupt()
 
@@ -128,6 +144,7 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.local.close()
     await this.system.close()
+    await this._wakeup.close()
     await this._workingBee.close()
     await this.bee.close()
     await this.store.close()
