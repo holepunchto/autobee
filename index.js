@@ -557,10 +557,18 @@ module.exports = class Autobee extends ReadyResource {
 
     const changed = await this.system.flush(batch, this._workingBee)
 
+    await this._storeBoot()
+
     for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }
+  }
+
+  _storeBoot() {
+    const boot = this.system.bootRecord()
+    if (!boot) return
+    return this.local.setUserData('autobee/head', encoding.encodeBootRecord(boot))
   }
 
   static decodeValue(buf, opts) {
