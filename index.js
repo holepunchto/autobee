@@ -532,7 +532,7 @@ module.exports = class Autobee extends ReadyResource {
 
     // first writer is always added with full permissions
     if (this.system.isGenesis()) {
-      this._host.addWriter(t.tip[0][0].key)
+      await this._host.addWriter(t.tip[0][0].key)
     }
 
     for (let i = 0; i < t.tip.length; i++) {
