@@ -72,7 +72,6 @@ module.exports = class Autobee extends ReadyResource {
     this._draining = null
 
     this._bootingState = null
-    this._bootingSystem = null
     this._bootingAll = null
 
     this._handlers = handlers
@@ -111,14 +110,15 @@ module.exports = class Autobee extends ReadyResource {
     await this._preBoot()
 
     this._bootingState = this._bootState()
-    this._bootingSystem = this._bootSystem()
-    this._bootingAll = this._bootAll() // bg
+    this._bootingAll = this._bootAll()
 
-    this._bootingState.catch(noop)
-    this._bootingSystem.catch(noop)
-    this._bootingAll.catch(noop)
+    this._bootingState.catch(safetyCatch)
+    this._bootingAll.catch(safetyCatch)
 
     await this.bee.ready()
+    await this._bootingState
+
+    this.bumpSoon()
   }
 
   _registerWakeup() {
@@ -221,14 +221,8 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this._registerWakeup()
-  }
 
-  async _bootSystem() {
-    await this._bootingState
-
-    const oplog = await this.writers.getLatestLocalOplog()
-    const views = oplog ? oplog.views : null
-    const system = views ? views.system : EMPTY_HEAD
+    const system = result.system || EMPTY_HEAD
 
     await this.system.boot(system)
 
@@ -243,7 +237,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootAll() {
-    await this._bootingSystem
+    await this._bootingState
 
     for await (const node of this.system.list()) {
       await this.writers.add(node.key)
@@ -557,10 +551,18 @@ module.exports = class Autobee extends ReadyResource {
 
     const changed = await this.system.flush(batch, this._workingBee)
 
+    await this._storeBoot()
+
     for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }
+  }
+
+  _storeBoot() {
+    const boot = this.system.bootRecord()
+    if (!boot) return
+    return this.local.setUserData('autobee/head', encoding.encodeBootRecord(boot))
   }
 
   static decodeValue(buf, opts) {
@@ -572,7 +574,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async wakeup({ key, length }) {
-    await this._bootingSystem
+    await this._bootingState
     await this.writers.wakeup(key, length)
     await this._bump()
   }
@@ -582,7 +584,6 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!this.opened) await this.ready()
 
-    await this._bootingSystem
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
