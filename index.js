@@ -18,6 +18,7 @@ const { ActiveWriters } = require('./lib/writers.js')
 const UpdateChanges = require('./lib/updates.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
+const INTERRUPT = new Error('Apply interrupted')
 
 module.exports = class Autobee extends ReadyResource {
   constructor(store, key = null, handlers = {}) {
@@ -81,6 +82,10 @@ module.exports = class Autobee extends ReadyResource {
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
 
+    this.interrupted = null
+    this._interrupting = false
+    this._onErrorBound = this._onError.bind(this)
+
     this._wakeup = new AutobeeWakeup(this, handlers)
     this.wakeupCapability = null
 
@@ -138,7 +143,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _close() {
-    await this.interrupt()
+    this._interrupting = true
+    if (this._draining) await this._draining
 
     if (this._handlers.close) await this._handlers.close(this.view)
 
@@ -254,8 +260,7 @@ module.exports = class Autobee extends ReadyResource {
     this.bumping++
 
     if (!this._draining) {
-      this._draining = this._drain()
-      this._draining.catch(safetyCatch)
+      this._draining = this._drain().catch(this._onErrorBound)
     }
 
     return this._draining
@@ -265,9 +270,44 @@ module.exports = class Autobee extends ReadyResource {
     return this._bump()
   }
 
-  updated() {
+  async updated() {
+    if (this.opened === false) await this.ready()
     if (this._draining) return this._draining
     return Promise.resolve()
+  }
+
+  interrupt(reason) {
+    asserts.assert(!!this._host.applying, 'Interrupt is only allowed in apply')
+    this._interrupting = true
+    if (reason) this.interrupted = reason
+    throw INTERRUPT
+  }
+
+  getLastError() {
+    return this._lastError
+  }
+
+  _onError(err) {
+    if (this.closing) return
+
+    this._lastError = err
+
+    if (err === INTERRUPT) {
+      this.emit('interrupt', this.interrupted)
+      this.emit('update')
+      return
+    }
+
+    this.close().catch(safetyCatch)
+
+    // if no one is listening we should crash! we cannot rely on the EE here
+    // as this is wrapped in a promise so instead of nextTick throw it
+    if (ReadyResource.listenerCount(this, 'error') === 0) {
+      crashSoon(err)
+      return
+    }
+
+    this.emit('error', err)
   }
 
   async _drain() {
@@ -374,11 +414,6 @@ module.exports = class Autobee extends ReadyResource {
 
     // done, soft reboot
     this.emit('rotate-local-writer')
-  }
-
-  interrupt() {
-    this._interrupting = true
-    if (this._draining) return this._draining
   }
 
   async createAnchor() {
@@ -633,4 +668,11 @@ function createAnchorCore(store, prologue, manifestData) {
   })
 
   return core
+}
+
+function crashSoon(err) {
+  queueMicrotask(() => {
+    throw err
+  })
+  throw err
 }
