@@ -2,6 +2,8 @@
 
 Unstoppable, scalable multiwriter Hyperbee.
 
+> **Still experimental and under heavy development. Expect breaking changes.**
+
 ```sh
 npm install autobee
 ```
@@ -246,7 +248,7 @@ Decode an Autobee block back to its value.
 
 #### `Autobee.GENESIS`
 
-Sentinel head `{ length: 0, key: null }` representing the genesis state.
+`{ length: 0, key: null }`. The empty head used to represent the genesis state.
 
 ## License
 
