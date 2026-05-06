@@ -629,9 +629,7 @@ module.exports = class Autobee extends ReadyResource {
       const value = values[i]
       const buffer = typeof value === 'string' ? b4a.from(value) : value
       const lnk = i === 0 ? links : []
-      const b = { start: i, end: values.length - 1 - i }
-
-      const node = this.writers.appendLocal(buffer, t, b, lnk, optimistic)
+      const node = this.writers.appendLocal(buffer, t, null, lnk, optimistic)
       batch.push(node)
     }
 
