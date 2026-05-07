@@ -1,0 +1,671 @@
+{
+  "version": 1,
+  "schema": [
+    {
+      "name": "checkout",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "clock",
+      "namespace": "autobase-compat",
+      "array": true,
+      "type": "@autobase-compat/checkout"
+    },
+    {
+      "name": "index-checkpoint",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "signature",
+          "required": true,
+          "type": "fixed64",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "wakeup",
+      "namespace": "autobase-compat",
+      "external": "Wakeup"
+    },
+    {
+      "name": "boot-record-v0",
+      "namespace": "autobase-compat",
+      "external": "BootRecordV0"
+    },
+    {
+      "name": "boot-record-raw",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "systemLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "indexersUpdated",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "fastForwarding",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "recoveries",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "boot-record",
+      "namespace": "autobase-compat",
+      "versions": [
+        {
+          "type": "@autobase-compat/boot-record-v0",
+          "map": null,
+          "version": 0
+        },
+        {
+          "type": "@autobase-compat/boot-record-raw",
+          "map": null,
+          "version": 3
+        }
+      ]
+    },
+    {
+      "name": "checkpointer",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "checkpointer",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "checkpoint",
+          "required": false,
+          "type": "@autobase-compat/index-checkpoint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "checkpoint",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "system",
+          "required": false,
+          "type": "@autobase-compat/checkpointer",
+          "version": 1
+        },
+        {
+          "name": "encryption",
+          "required": false,
+          "type": "@autobase-compat/checkpointer",
+          "version": 1
+        },
+        {
+          "name": "user",
+          "required": false,
+          "array": true,
+          "type": "@autobase-compat/checkpointer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "digest",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "pointer",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "key",
+          "required": false,
+          "type": "fixed32",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "node",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "heads",
+          "required": true,
+          "type": "@autobase-compat/clock",
+          "version": 1
+        },
+        {
+          "name": "batch",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "user-view-trace",
+      "namespace": "autobase-compat",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "view",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "blocks",
+          "required": true,
+          "array": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "trace",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "system",
+          "required": true,
+          "array": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "encryption",
+          "required": true,
+          "array": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "user",
+          "required": true,
+          "array": true,
+          "type": "@autobase-compat/user-view-trace",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "oplog-message-v0",
+      "namespace": "autobase-compat",
+      "external": "OplogMessageV0"
+    },
+    {
+      "name": "oplog-message-v1",
+      "namespace": "autobase-compat",
+      "external": "OplogMessageV1"
+    },
+    {
+      "name": "oplog-message-v2",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "node",
+          "required": true,
+          "type": "@autobase-compat/node",
+          "version": 1
+        },
+        {
+          "name": "checkpoint",
+          "required": false,
+          "type": "@autobase-compat/checkpoint",
+          "version": 1
+        },
+        {
+          "name": "digest",
+          "required": false,
+          "type": "@autobase-compat/digest",
+          "version": 1
+        },
+        {
+          "name": "optimistic",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "trace",
+          "required": false,
+          "type": "@autobase-compat/trace",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "info-v1",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "members",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "pendingIndexers",
+          "required": true,
+          "array": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "indexers",
+          "required": true,
+          "type": "@autobase-compat/clock",
+          "version": 1
+        },
+        {
+          "name": "heads",
+          "required": true,
+          "type": "@autobase-compat/clock",
+          "version": 1
+        },
+        {
+          "name": "views",
+          "required": true,
+          "type": "@autobase-compat/clock",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "info-v2",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 6,
+      "fields": [
+        {
+          "name": "members",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "pendingIndexers",
+          "required": true,
+          "array": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "indexers",
+          "required": true,
+          "type": "@autobase-compat/clock",
+          "version": 1
+        },
+        {
+          "name": "heads",
+          "required": true,
+          "type": "@autobase-compat/clock",
+          "version": 1
+        },
+        {
+          "name": "views",
+          "required": true,
+          "type": "@autobase-compat/clock",
+          "version": 1
+        },
+        {
+          "name": "encryptionLength",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "entropy",
+          "required": false,
+          "type": "fixed32",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "member",
+      "namespace": "autobase-compat",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "isIndexer",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isRemoved",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "system-info-v3",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 4,
+      "fields": [
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "flushes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "view",
+          "required": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "heads",
+          "required": true,
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "indexers",
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "system-info",
+      "namespace": "autobee",
+      "versions": [
+        {
+          "type": "@autobase-compat/info-v1",
+          "map": "infoLegacyMap",
+          "version": 1
+        },
+        {
+          "type": "@autobase-compat/info-v2",
+          "map": null,
+          "version": 2
+        },
+        {
+          "type": "@autobee/system-info-v3",
+          "map": null,
+          "version": 3
+        }
+      ]
+    },
+    {
+      "name": "system-writer",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "isIndexer",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isRemoved",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isOplog",
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "link",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "batch",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "start",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "end",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "views",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "system",
+          "required": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "flushes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "view",
+          "required": false,
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "oplog-message-v3",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "links",
+          "required": true,
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "batch",
+          "type": "@autobee/batch",
+          "version": 1
+        },
+        {
+          "name": "views",
+          "inline": true,
+          "type": "@autobee/views",
+          "version": 1
+        },
+        {
+          "name": "optimistic",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "oplog",
+      "namespace": "autobee",
+      "versions": [
+        {
+          "type": "@autobase-compat/oplog-message-v0",
+          "map": null,
+          "version": 0
+        },
+        {
+          "type": "@autobase-compat/oplog-message-v1",
+          "map": null,
+          "version": 1
+        },
+        {
+          "type": "@autobase-compat/oplog-message-v2",
+          "map": null,
+          "version": 2
+        },
+        {
+          "type": "@autobee/oplog-message-v3",
+          "map": null,
+          "version": 3
+        }
+      ]
+    },
+    {
+      "name": "manifest-data",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "version",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "legacyBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "namespace",
+          "required": false,
+          "type": "fixed32",
+          "version": 1
+        }
+      ]
+    }
+  ]
+}
