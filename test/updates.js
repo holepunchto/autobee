@@ -14,7 +14,7 @@ test('updates - simple', async (t) => {
 
   t.is(auto.view.core.length, 2)
 
-  async function update(view, changes) {
+  function update(view, changes) {
     const update = changes.get('view')
 
     // always appending one

@@ -28,7 +28,7 @@ await db.append(Buffer.from(JSON.stringify({ hello: 'world' })))
 const node = await db.view.get(Buffer.from('latest'))
 console.log(JSON.parse(node.value))
 
-async function apply (nodes, view, host) {
+async function apply(nodes, view, host) {
   for (const node of nodes) {
     const op = JSON.parse(node.value)
 
@@ -172,7 +172,7 @@ Returns `true` if `val` is an Autobee instance.
 The `apply` function is called with a batch of nodes from writers, a writable `view` (Hyperbee batch), and a `host` object.
 
 ```js
-async function apply (nodes, view, host) {
+async function apply(nodes, view, host) {
   for (const node of nodes) {
     // node.key    — writer public key (Buffer)
     // node.value  — the value appended (Buffer)
@@ -198,7 +198,7 @@ Add a writer by public key (Buffer or hex string). Options:
 
 ```js
 {
-  isIndexer: true  // default
+  isIndexer: true // default
 }
 ```
 

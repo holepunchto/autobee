@@ -121,7 +121,7 @@ test('basic - restart', async function (t) {
   }
 })
 
-test('basic - encode/decode value', async function (t) {
+test('basic - encode/decode value', function (t) {
   const buf = Autobee.encodeValue(b4a.from('hello'))
   const value = Autobee.decodeValue(buf)
   t.alike(value, b4a.from('hello'))
