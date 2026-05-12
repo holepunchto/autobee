@@ -361,6 +361,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _handleWakeup(hints) {
+    if (!this._handlers.onwakeup) return false
+
     let best = null
     let bestFlushes = -1
 
