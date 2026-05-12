@@ -345,6 +345,10 @@ module.exports = class Autobee extends ReadyResource {
   async _flushWakeup() {
     const hints = this._wakeup.flush()
 
+    const ff = await this._handleWakeup(hints)
+
+    // @todo fast-forward
+
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
       if (this.writers.has(hex)) continue
@@ -353,6 +357,39 @@ module.exports = class Autobee extends ReadyResource {
         if (info && length <= info.length) continue // stale hint
       }
       await this.writers.wakeup(key, length === -1 ? 0 : length)
+    }
+  }
+
+  async _handleWakeup(hints) {
+    let best = null
+    let bestFlushes = -1
+
+    for (const [hex, length] of hints) {
+      if (length <= 0) continue
+      const key = b4a.from(hex, 'hex')
+      const core = this.openCore(key)
+      await core.ready()
+      const buf = await core.get(length - 1)
+      await core.close()
+
+      if (buf === null) continue
+
+      const msg = encoding.decodeOplog(buf)
+      require('bugbear').log('wakeup', { hex, length, buf, msg }, hex)
+      if (msg.views && msg.views.flushes > bestFlushes) {
+        bestFlushes = msg.views.flushes
+        best = msg.views
+      }
+    }
+
+    if (best === null || !this._handlers.onwakeup) return
+
+    const view = this.bee.checkout({ length: best.view.length })
+    try {
+      const ff = await this._handlers.onwakeup(view)
+      return ff
+    } finally {
+      view.close()
     }
   }
 
