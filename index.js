@@ -363,27 +363,27 @@ module.exports = class Autobee extends ReadyResource {
   async _handleWakeup(hints) {
     if (!this._handlers.onwakeup) return false
 
-    let best = null
-    let bestFlushes = -1
-
+    const promises = []
     for (const [hex, length] of hints) {
       if (length <= 0) continue
       const key = b4a.from(hex, 'hex')
-      const core = this.openCore(key)
-      await core.ready()
-      const buf = await core.get(length - 1)
-      await core.close()
+      promises.push(this._getOplog(key, length))
+    }
 
-      if (buf === null) continue
+    const ops = await Promise.all(promises)
+    let best = null
+    let bestFlushes = -1
 
-      const msg = encoding.decodeOplog(buf)
+    for (const msg of ops) {
+      if (msg === null) continue
+
       if (msg.views && msg.views.flushes > bestFlushes) {
         bestFlushes = msg.views.flushes
         best = msg.views
       }
     }
 
-    if (best === null || !this._handlers.onwakeup) return
+    if (best === null) return false
 
     const view = this.bee.checkout({ length: best.view.length })
     try {
@@ -392,6 +392,17 @@ module.exports = class Autobee extends ReadyResource {
     } finally {
       view.close()
     }
+  }
+
+  async _getOplog(key, length) {
+    const core = this.openCore(key)
+    await core.ready()
+    const buf = await core.get(length - 1)
+    await core.close()
+
+    if (buf === null) return null
+
+    return encoding.decodeOplog(buf)
   }
 
   _update(changes) {
