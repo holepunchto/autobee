@@ -377,7 +377,6 @@ module.exports = class Autobee extends ReadyResource {
       if (buf === null) continue
 
       const msg = encoding.decodeOplog(buf)
-      require('bugbear').log('wakeup', { hex, length, buf, msg }, hex)
       if (msg.views && msg.views.flushes > bestFlushes) {
         bestFlushes = msg.views.flushes
         best = msg.views

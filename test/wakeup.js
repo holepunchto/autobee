@@ -24,6 +24,8 @@ test('wakeup - replication', async function (t) {
 })
 
 test('wakeup - onwakeup', async function (t) {
+  t.plan(5)
+
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key, { onwakeup: createOnWakeup('auto2') })
   const auto3 = await create(t, auto1.key, { onwakeup: createOnWakeup('auto3') })
