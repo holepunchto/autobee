@@ -48,11 +48,6 @@
       ]
     },
     {
-      "name": "wakeup",
-      "namespace": "autobase-compat",
-      "external": "Wakeup"
-    },
-    {
       "name": "boot-record-v0",
       "namespace": "autobase-compat",
       "external": "BootRecordV0"
@@ -395,28 +390,7 @@
     {
       "name": "member",
       "namespace": "autobase-compat",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "isIndexer",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "isRemoved",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "length",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        }
-      ]
+      "external": "SystemWriterV0"
     },
     {
       "name": "system-info-v3",
@@ -479,31 +453,50 @@
       ]
     },
     {
-      "name": "system-writer",
+      "name": "system-writer-v4",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": 1,
+      "flagsPosition": 0,
       "fields": [
         {
-          "name": "length",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "isIndexer",
-          "type": "bool",
-          "version": 1
-        },
-        {
           "name": "isRemoved",
+          "required": false,
           "type": "bool",
           "version": 1
         },
         {
           "name": "isOplog",
+          "required": false,
           "type": "bool",
           "version": 1
+        },
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "system-writer",
+      "namespace": "autobee",
+      "versions": [
+        {
+          "type": "@autobase-compat/member",
+          "map": "memberLegacyMap",
+          "version": 3
+        },
+        {
+          "type": "@autobee/system-writer-v4",
+          "map": null,
+          "version": 4
         }
       ]
     },
