@@ -181,7 +181,7 @@ test('basic - isIndexer', async function (t) {
   await auto.append(val)
 
   const info = await auto.system.get(auto.local.key)
-  t.ok(info.isIndexer)
+  t.is(info.weight, 2)
   t.ok(auto.isIndexer)
 })
 
