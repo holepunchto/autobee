@@ -47,11 +47,6 @@ module.exports = function buildAutobaseSchema(schema, DIR) {
   })
 
   autobase.register({
-    name: 'wakeup',
-    external: 'Wakeup'
-  })
-
-  autobase.register({
     name: 'boot-record-v0',
     external: 'BootRecordV0'
   })
@@ -341,22 +336,6 @@ module.exports = function buildAutobaseSchema(schema, DIR) {
 
   autobase.register({
     name: 'member',
-    fields: [
-      {
-        name: 'isIndexer',
-        type: 'bool',
-        required: true
-      },
-      {
-        name: 'isRemoved',
-        type: 'bool',
-        required: true
-      },
-      {
-        name: 'length',
-        type: 'uint',
-        required: true
-      }
-    ]
+    external: 'SystemWriterV0'
   })
 }

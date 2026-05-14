@@ -17,11 +17,6 @@ auto.register({
   name: 'system-info-v3',
   fields: [
     {
-      name: 'timestamp',
-      type: 'uint',
-      required: true
-    },
-    {
       name: 'flushes',
       type: 'uint',
       required: true
@@ -65,24 +60,47 @@ auto.register({
 })
 
 auto.register({
-  name: 'system-writer',
+  name: 'system-writer-v4',
   fields: [
+    {
+      name: 'isRemoved',
+      type: 'bool',
+      required: true
+    },
+    {
+      name: 'isOplog',
+      type: 'bool',
+      required: true
+    },
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
     {
       name: 'length',
       type: 'uint',
       required: true
     },
     {
-      name: 'isIndexer',
-      type: 'bool'
+      name: 'clock',
+      type: 'uint',
+      required: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'system-writer',
+  versions: [
+    {
+      version: 3, // hack: autobase member max flag is 2, so buffer[0] < 4
+      type: '@autobase-compat/member',
+      map: 'memberLegacyMap'
     },
     {
-      name: 'isRemoved',
-      type: 'bool'
-    },
-    {
-      name: 'isOplog',
-      type: 'bool'
+      version: 4,
+      type: '@autobee/system-writer-v4'
     }
   ]
 })

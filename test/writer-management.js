@@ -268,7 +268,7 @@ test('writer-management - indexer flag', async function (t) {
 
   t.ok(writerInfo, 'writer info exists')
   // Check if isIndexer flag is present and has expected value
-  t.ok(typeof writerInfo.isIndexer === 'boolean', 'isIndexer is a boolean')
+  t.is(writerInfo.weight, 2, 'weight has been updated')
 })
 
 test('writer-management - concurrent remove and write from removed writer', async function (t) {
@@ -395,6 +395,6 @@ test('writer-management - oplog flag', async function (t) {
   t.ok(localWriterInfo, 'local writer is stored in system bee after writing')
   t.ok(typeof localWriterInfo.isOplog === 'boolean', 'local writer isOplog is a boolean')
   t.ok(localWriterInfo.isOplog, 'local writer is marked as the current oplog (last writer)')
-  t.ok(localWriterInfo.isIndexer, 'local writer is marked as indexer')
+  t.is(localWriterInfo.weight, 2, 'local writer is marked as indexer')
   t.absent(localWriterInfo.isRemoved, 'local writer is not removed')
 })

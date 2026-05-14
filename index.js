@@ -510,8 +510,6 @@ module.exports = class Autobee extends ReadyResource {
       this._workingBee.move(t.view)
     }
 
-    asserts.assert(batch === t.tip[0], 'Batch must be first part of tip')
-
     let failed = true
 
     try {

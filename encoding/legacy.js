@@ -1,5 +1,4 @@
 const c = require('compact-encoding')
-const IndexEncoder = require('index-encoder')
 
 const Checkout = {
   preencode(state, m) {
@@ -34,98 +33,6 @@ const IndexCheckpoint = {
       signature: c.fixed64.decode(state),
       length: c.uint.decode(state)
     }
-  }
-}
-
-const KeyV0 = {
-  preencode(state, m) {
-    c.fixed32.preencode(state, m.key)
-  },
-  encode(state, m) {
-    c.fixed32.encode(state, m.key)
-  },
-  decode(state) {
-    return {
-      key: c.fixed32.decode(state),
-      length: -1
-    }
-  }
-}
-
-const KeysV0 = c.array(KeyV0)
-
-const WakeupV0 = {
-  preencode(state, m) {
-    c.uint.preencode(state, 0) // version
-    c.uint.preencode(state, m.type)
-
-    if (m.type === 1) {
-      KeysV0.preencode(state, m.writers)
-    }
-  },
-  encode(state, m) {
-    c.uint.encode(state, 0) // version
-    c.uint.encode(state, m.type)
-
-    if (m.type === 1) {
-      KeysV0.encode(state, m.writers)
-    }
-  },
-  decode(state) {
-    const v = c.uint.decode(state)
-    if (v !== 0) throw new Error('Unsupported version: ' + v)
-
-    const type = c.uint.decode(state)
-    const m = { version: 0, type, writers: null }
-
-    if (m.type === 1) {
-      m.writers = KeysV0.decode(state)
-    }
-
-    return m
-  }
-}
-
-const Wakeup = {
-  preencode(state, m) {
-    if (m.version === 0) return WakeupV0.preencode(state, m)
-
-    c.uint.preencode(state, 1) // version
-    c.uint.preencode(state, m.type)
-
-    if (m.type === 1) {
-      Clock.preencode(state, m.writers)
-    }
-  },
-  encode(state, m) {
-    if (m.version === 0) return WakeupV0.encode(state, m)
-
-    c.uint.encode(state, 1) // version
-    c.uint.encode(state, m.type)
-
-    if (m.type === 1) {
-      Clock.encode(state, m.writers)
-    }
-  },
-  decode(state) {
-    const start = state.start
-    const v = c.uint.decode(state)
-
-    if (v > 1) throw new Error('Unsupported version: ' + v)
-
-    if (v === 0) {
-      state.start = start
-      return WakeupV0.decode(state)
-    }
-
-    const type = c.uint.decode(state)
-    const m = { version: 1, type, writers: null }
-
-    if (m.type === 1) {
-      m.writers = Clock.decode(state)
-    }
-
-    return m
   }
 }
 
@@ -359,21 +266,22 @@ const OplogMessageV0 = {
   }
 }
 
-// prefix 0 is reserved for future manifest
-const LINEARIZER_PREFIX = 1
-
-const LinearizerKey = {
-  preencode(state, seq) {
-    IndexEncoder.UINT.preencode(state, LINEARIZER_PREFIX)
-    IndexEncoder.UINT.preencode(state, seq)
+const SystemWriterV0 = {
+  preencode(state, m) {
+    throw new Error('Encoding not supported')
   },
-  encode(state, seq) {
-    IndexEncoder.UINT.encode(state, LINEARIZER_PREFIX)
-    IndexEncoder.UINT.encode(state, seq)
+  encode(state, m) {
+    throw new Error('Encoding not supported')
   },
   decode(state) {
-    IndexEncoder.UINT.decode(state)
-    return IndexEncoder.UINT.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      version: 0,
+      isIndexer: flags & 1,
+      isRemoved: flags & 2,
+      length: c.uint.decode(state)
+    }
   }
 }
 
@@ -390,11 +298,20 @@ function infoLegacyMap(info) {
   }
 }
 
+function memberLegacyMap(m) {
+  return {
+    version: 0,
+    isRemoved: m.isRemoved,
+    weight: m.isIndexer ? 2 : 1,
+    length: m.length
+  }
+}
+
 module.exports = {
-  Wakeup,
   BootRecordV0,
   OplogMessageV0,
   OplogMessageV1,
-  LinearizerKey,
-  infoLegacyMap
+  SystemWriterV0,
+  infoLegacyMap,
+  memberLegacyMap
 }
