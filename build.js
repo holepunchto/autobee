@@ -17,11 +17,6 @@ auto.register({
   name: 'system-info-v3',
   fields: [
     {
-      name: 'timestamp',
-      type: 'uint',
-      required: true
-    },
-    {
       name: 'flushes',
       type: 'uint',
       required: true

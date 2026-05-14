@@ -455,40 +455,36 @@ const encoding17 = external0.SystemWriterV0
 // @autobee/system-info-v3
 const encoding18 = {
   preencode(state, m) {
-    c.uint.preencode(state, m.timestamp)
     c.uint.preencode(state, m.flushes)
     encoding22.preencode(state, m.view)
-    encoding18_3.preencode(state, m.heads)
+    encoding18_2.preencode(state, m.heads)
     state.end++ // max flag is 1 so always one byte
 
-    if (m.indexers) encoding18_4.preencode(state, m.indexers)
+    if (m.indexers) encoding18_3.preencode(state, m.indexers)
   },
   encode(state, m) {
     const flags = m.indexers ? 1 : 0
 
-    c.uint.encode(state, m.timestamp)
     c.uint.encode(state, m.flushes)
     encoding22.encode(state, m.view)
-    encoding18_3.encode(state, m.heads)
+    encoding18_2.encode(state, m.heads)
     c.uint.encode(state, flags)
 
-    if (m.indexers) encoding18_4.encode(state, m.indexers)
+    if (m.indexers) encoding18_3.encode(state, m.indexers)
   },
   decode(state) {
     const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
-    const r1 = c.uint.decode(state)
-    const r2 = encoding22.decode(state)
-    const r3 = encoding18_3.decode(state)
+    const r1 = encoding22.decode(state)
+    const r2 = encoding18_2.decode(state)
     const flags = c.uint.decode(state)
 
     return {
       version: v,
-      timestamp: r0,
-      flushes: r1,
-      view: r2,
-      heads: r3,
-      indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null
+      flushes: r0,
+      view: r1,
+      heads: r2,
+      indexers: (flags & 1) !== 0 ? encoding18_3.decode(state) : null
     }
   }
 }
@@ -865,11 +861,11 @@ const encoding27 = {
 }
 
 // @autobee/system-info-v3.heads, deferred due to recusive use
-const encoding18_3 = c.array(encoding22)
+const encoding18_2 = c.array(encoding22)
 // @autobee/system-info-v3.indexers, deferred due to recusive use
-const encoding18_4 = encoding18_3
+const encoding18_3 = encoding18_2
 // @autobee/oplog-message-v3.links, deferred due to recusive use
-const encoding25_1 = encoding18_3
+const encoding25_1 = encoding18_2
 
 function setVersion(v) {
   version = v
