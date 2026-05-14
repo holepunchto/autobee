@@ -560,6 +560,7 @@ const encoding20 = {
     state.end++ // max flag is 2 so always one byte
     c.uint.preencode(state, m.weight)
     c.uint.preencode(state, m.length)
+    c.uint.preencode(state, m.clock)
   },
   encode(state, m) {
     const flags = (m.isRemoved ? 1 : 0) | (m.isOplog ? 2 : 0)
@@ -567,6 +568,7 @@ const encoding20 = {
     c.uint.encode(state, flags)
     c.uint.encode(state, m.weight)
     c.uint.encode(state, m.length)
+    c.uint.encode(state, m.clock)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -577,7 +579,8 @@ const encoding20 = {
       isRemoved: (flags & 1) !== 0,
       isOplog: (flags & 2) !== 0,
       weight: c.uint.decode(state),
-      length: c.uint.decode(state)
+      length: c.uint.decode(state),
+      clock: c.uint.decode(state)
     }
   }
 }

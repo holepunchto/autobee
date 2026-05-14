@@ -481,6 +481,12 @@
           "required": true,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "clock",
+          "required": true,
+          "type": "uint",
+          "version": 1
         }
       ]
     },

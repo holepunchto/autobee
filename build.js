@@ -86,6 +86,11 @@ auto.register({
       name: 'length',
       type: 'uint',
       required: true
+    },
+    {
+      name: 'clock',
+      type: 'uint',
+      required: true
     }
   ]
 })
