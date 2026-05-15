@@ -3,6 +3,7 @@ const b4a = require('b4a')
 const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
+const rrp = require('resolve-reject-promise')
 const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
 const AutobeeWakeup = require('autobee-wakeup')
 const Hypercore = require('hypercore')
@@ -68,10 +69,9 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
-    this.fastForwardEnabled = handlers.fastForward !== false
+    this.fastForward = null
     this.fastForwarding = null
     this.fastForwardTo = null
-    this.fastForwardFailedAt = 0
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -328,13 +328,14 @@ module.exports = class Autobee extends ReadyResource {
     while (!this._interrupting && this.bumping > 0) {
       if (this._interrupting) return
 
-      if (this.fastForwardTo !== null) {
-        await this._applyFastForward()
-        continue // revaluate conditions...
-      }
 
       try {
         while (!this._interrupting) {
+          if (this.fastForwardTo !== null) {
+            await this._applyFastForward()
+            break // revaluate conditions...
+          }
+
           if (!(await this._bumpPendingWriters())) break
           this._needsUpdate = true
         }
@@ -651,12 +652,9 @@ module.exports = class Autobee extends ReadyResource {
     await this.writers.flushLocal(this._workingBee.head())
   }
 
-  queueFastForward(head) {
-    if (!this.fastForwardEnabled || this.fastForwarding !== null) return
-    if (this.fastForwardTo !== null) return
-    if (Date.now() - this.fastForwardFailedAt < MIN_FF_WAIT) return
-
-    this._runFastForward(new FastForward(this, head, { verified: false })).catch(noop)
+  moveTo(head) {
+    if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
+    return this._runFastForward(new FastForward(this, head, { verified: false })).catch(noop)
   }
 
   async _runFastForward(ff) {
@@ -667,15 +665,14 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.fastForwarding === ff) this.fastForwarding = null
 
-    if (!result) {
-      if (ff.failed) this.fastForwardFailedAt = Date.now()
-      return
-    }
+    if (!result) return null
 
-    this.fastForwardFailedAt = 0
     this.fastForwardTo = result
+    this.fastForward = rrp()
 
     this.bumpSoon()
+
+    return this.fastForward.promise
   }
 
   async _applyFastForward() {
@@ -695,13 +692,15 @@ module.exports = class Autobee extends ReadyResource {
 
     this.fastForwardTo = null
 
-    if (changes) changes.finalise()
-
     await this.writers.refresh()
 
-    if (changes) await this._handlers.update(this.view, changes)
+    if (changes) {
+      changes.finalise()
+      await this._handlers.update(this.view, changes)
+    }
 
-    this.emit('fast-forward', to, from)
+    this.emit('move-to', to, from)
+    this.fastForward.resolve({ to, from })
   }
 }
 

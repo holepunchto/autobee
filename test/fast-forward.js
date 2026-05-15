@@ -11,14 +11,16 @@ test('fast-forward - simple', async function (t) {
     await auto1.append(encode({ value: 'a' + i }))
   }
 
-  auto2.queueFastForward(auto1.system.bee.head())
+  const from = auto2.system.bee.head()
+  const to = auto1.system.bee.head()
 
-  const ff = new Promise((resolve) => auto2.on('fast-forward', resolve))
+  const ff = auto2.moveTo(to)
 
   t.teardown(replicate(auto1, auto2))
 
   await t.execution(ff)
 
+  t.alike((await ff).to, to)
   t.alike(auto1.view.head(), auto2.view.head())
   t.ok(await same(auto1, auto2))
 
