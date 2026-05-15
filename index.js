@@ -638,6 +638,10 @@ module.exports = class Autobee extends ReadyResource {
     // analyze is worth the trade off adding the view here also (technically not needed)
     await this.writers.flushLocal(this._workingBee.head())
   }
+
+  async replay() {
+    return topo.replay(this)
+  }
 }
 
 function isObject(o) {
