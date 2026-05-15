@@ -3,6 +3,7 @@ const b4a = require('b4a')
 const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
+const rrp = require('resolve-reject-promise')
 const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
 const AutobeeWakeup = require('autobee-wakeup')
 const Hypercore = require('hypercore')
@@ -11,6 +12,7 @@ const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
 const encoding = require('./lib/encoding.js')
+const FastForward = require('./lib/fast-forward.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
@@ -19,6 +21,7 @@ const UpdateChanges = require('./lib/updates.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
+const MIN_FF_WAIT = 300_000 // wait at least 5min before attempting to ff again after failure
 
 module.exports = class Autobee extends ReadyResource {
   constructor(store, key = null, handlers = {}) {
@@ -65,6 +68,10 @@ module.exports = class Autobee extends ReadyResource {
     this.keyPair = null
     this.writers = null
     this.bumping = 0
+
+    this.fastForward = null
+    this.fastForwarding = null
+    this.fastForwardTo = null
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -321,8 +328,14 @@ module.exports = class Autobee extends ReadyResource {
     while (!this._interrupting && this.bumping > 0) {
       if (this._interrupting) return
 
+
       try {
         while (!this._interrupting) {
+          if (this.fastForwardTo !== null) {
+            await this._applyFastForward()
+            break // revaluate conditions...
+          }
+
           if (!(await this._bumpPendingWriters())) break
           this._needsUpdate = true
         }
@@ -686,6 +699,57 @@ module.exports = class Autobee extends ReadyResource {
   async _flushLocal() {
     // analyze is worth the trade off adding the view here also (technically not needed)
     await this.writers.flushLocal(this._workingBee.head())
+  }
+
+  moveTo(head) {
+    if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
+    return this._runFastForward(new FastForward(this, head, { verified: false })).catch(noop)
+  }
+
+  async _runFastForward(ff) {
+    this.fastForwarding = ff
+
+    const result = await ff.upgrade()
+    await ff.close()
+
+    if (this.fastForwarding === ff) this.fastForwarding = null
+
+    if (!result) return null
+
+    this.fastForwardTo = result
+    this.fastForward = rrp()
+
+    this.bumpSoon()
+
+    return this.fastForward.promise
+  }
+
+  async _applyFastForward() {
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track(this._applyState)
+
+    const head = this.fastForwardTo
+
+    const from = this.system.bee.head()
+    const to = head
+
+    this.system.bee.move(head)
+    await this.system.reset()
+
+    this.bee.move(this.system.view)
+    this._workingBee.move(this.system.view)
+
+    this.fastForwardTo = null
+
+    await this.writers.refresh()
+
+    if (changes) {
+      changes.finalise()
+      await this._handlers.update(this.view, changes)
+    }
+
+    this.emit('move-to', to, from)
+    this.fastForward.resolve({ to, from })
   }
 }
 
