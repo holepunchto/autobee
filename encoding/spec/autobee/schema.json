@@ -396,8 +396,14 @@
       "name": "system-info-v3",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": 3,
+      "flagsPosition": 4,
       "fields": [
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
         {
           "name": "flushes",
           "required": true,
