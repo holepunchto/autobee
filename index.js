@@ -459,7 +459,7 @@ module.exports = class Autobee extends ReadyResource {
       await core.append(block, { writable: true, maxLength: 1 })
     }
 
-    await this.system.addWriter(core.key)
+    await this.system.addWriter(core.key, { weight: 1 })
 
     const anchor = { key: core.key, length: core.length }
 
