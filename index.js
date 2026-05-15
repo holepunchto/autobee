@@ -21,7 +21,7 @@ const UpdateChanges = require('./lib/updates.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
-const MIN_FF_WAIT = 300_000 // wait at least 5min before attempting to ff again after failure
+const MIN_FF_GAP = 32
 
 module.exports = class Autobee extends ReadyResource {
   constructor(store, key = null, handlers = {}) {
@@ -358,7 +358,7 @@ module.exports = class Autobee extends ReadyResource {
   async _flushWakeup() {
     const hints = this._wakeup.flush()
 
-    const ff = await this._handleWakeup(hints)
+    this.queueWakeupFastForward(hints).catch(noop)
 
     // @todo fast-forward
 
@@ -373,8 +373,9 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _handleWakeup(hints) {
+  async queueWakeupFastForward(hints) {
     if (!this._handlers.onwakeup) return false
+    if (this.fastForwarding || this.fastForwardTo) return false
 
     const promises = []
     for (const [hex, length] of hints) {
@@ -384,6 +385,8 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const ops = await Promise.all(promises)
+    if (this.fastForwarding || this.fastForwardTo) return false
+
     let best = null
     let bestFlushes = -1
 
@@ -396,15 +399,21 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (best === null) return false
+    if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
     const view = this.bee.checkout({ length: best.view.length })
+
+    let trusted = null
     try {
-      const ff = await this._handlers.onwakeup(view)
-      return ff
+      trusted = await this._handlers.onwakeup(view)
+      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
     }
+
+    const oplog = await this._getOplog(trusted.key, trusted.length)
+
+    return this.moveTo(oplog.views.system)
   }
 
   async _getOplog(key, length) {
