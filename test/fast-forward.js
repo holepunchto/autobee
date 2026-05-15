@@ -11,7 +11,6 @@ test('fast-forward - simple', async function (t) {
     await auto1.append(encode({ value: 'a' + i }))
   }
 
-  const from = auto2.system.bee.head()
   const to = auto1.system.bee.head()
 
   const ff = auto2.moveTo(to)

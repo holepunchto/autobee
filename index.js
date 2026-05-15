@@ -328,7 +328,6 @@ module.exports = class Autobee extends ReadyResource {
     while (!this._interrupting && this.bumping > 0) {
       if (this._interrupting) return
 
-
       try {
         while (!this._interrupting) {
           if (this.fastForwardTo !== null) {
