@@ -383,49 +383,6 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async queueWakeupFastForward(hints) {
-    if (!this._handlers.onwakeup) return false
-    if (!hints.size || this.fastForwarding || this.fastForwardTo) return false
-
-    const promises = []
-    for (const [hex, length] of hints) {
-      if (length <= 0) continue
-      const key = b4a.from(hex, 'hex')
-      promises.push(this._getOplog(key, length))
-    }
-
-    const ops = await Promise.all(promises)
-    if (this.fastForwarding || this.fastForwardTo) return false
-
-    let best = null
-    let bestFlushes = -1
-
-    for (const msg of ops) {
-      if (msg === null) continue
-
-      if (msg.views && msg.views.flushes > bestFlushes) {
-        bestFlushes = msg.views.flushes
-        best = msg.views
-      }
-    }
-
-    if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
-
-    const view = this.bee.checkout(best.view)
-
-    let trusted = null
-    try {
-      trusted = await this._handlers.onwakeup(view)
-      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
-    } finally {
-      view.close()
-    }
-
-    const oplog = await this._getOplog(trusted.key, trusted.length)
-
-    return this.moveTo(oplog.views.system)
-  }
-
   async _getOplog(key, length) {
     const core = this.openCore(key)
     await core.ready()
@@ -638,6 +595,10 @@ module.exports = class Autobee extends ReadyResource {
       this._workingBee.move(t.view)
     }
 
+    return this._processApplyBatch(t)
+  }
+
+  async _processApplyBatch(t) {
     // first writer is always added with full permissions
     if (this.system.isGenesis()) {
       await this._host.addWriter(t.tip[0][0].key)
@@ -720,9 +681,58 @@ module.exports = class Autobee extends ReadyResource {
     await this.writers.flushLocal(this._workingBee.head())
   }
 
-  moveTo(head) {
+  moveTo(head, tip) {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
-    return this._runFastForward(new FastForward(this, head, { verified: false })).catch(noop)
+    return this._runFastForward(new FastForward(this, head, tip, { verified: false })).catch(noop)
+  }
+
+  async queueWakeupFastForward(hints) {
+    if (!this._handlers.onwakeup) return false
+    if (!hints.size || this.fastForwarding || this.fastForwardTo) return false
+
+    const promises = []
+    for (const [hex, length] of hints) {
+      if (length <= 0) continue
+      const key = b4a.from(hex, 'hex')
+      promises.push(this._getOplog(key, length))
+    }
+
+    const ops = await Promise.all(promises)
+    if (this.fastForwarding || this.fastForwardTo) return false
+
+    let best = null
+    let bestFlushes = -1
+
+    for (const msg of ops) {
+      if (msg === null) continue
+
+      if (msg.views && msg.views.flushes > bestFlushes) {
+        bestFlushes = msg.views.flushes
+        best = msg.views
+      }
+    }
+
+    if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
+
+    const view = this.bee.checkout(best.view)
+
+    let trusted = null
+    try {
+      trusted = await this._handlers.onwakeup(view)
+      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
+    } finally {
+      view.close()
+    }
+
+    const oplog = await this._getOplog(trusted.key, trusted.length)
+
+    return this.moveTo(oplog.views.system, {
+      system: best.system,
+      verified: {
+        node: trusted,
+        flushes: oplog.views.flushes
+      }
+    })
   }
 
   async _runFastForward(ff) {
@@ -747,7 +757,7 @@ module.exports = class Autobee extends ReadyResource {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track(this._applyState)
 
-    const head = this.fastForwardTo
+    const { head, tip } = this.fastForwardTo
 
     const from = this.system.bee.head()
     const to = head
@@ -769,6 +779,16 @@ module.exports = class Autobee extends ReadyResource {
 
     this.emit('move-to', to, from)
     this.fastForward.resolve({ to, from })
+
+    return this._reapply(tip)
+  }
+
+  async _reapply({ system, verified }) {
+    const sys = this.system.bee.checkout(system)
+    const t = await topo.rollBack(this, sys, verified)
+    await sys.close()
+
+    return this._processApplyBatch(t)
   }
 }
 

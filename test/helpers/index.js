@@ -158,7 +158,9 @@ async function sync(...autos) {
         const info = await b.system.get(a.local.key)
         const length = info ? info.length : 0
 
-        if (length !== a.local.length) return false
+        if (length !== a.local.length) {
+          return false
+        }
       }
     }
 
