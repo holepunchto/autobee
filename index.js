@@ -93,8 +93,9 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = false
     this._onErrorBound = this._onError.bind(this)
 
-    this._wakeup = new AutobeeWakeup(this, handlers)
     this.wakeupCapability = null
+    this._wakeup = new AutobeeWakeup(this, handlers)
+    this._wakeupSession = null
 
     this.ready().catch(noop)
   }
@@ -136,6 +137,9 @@ module.exports = class Autobee extends ReadyResource {
   _registerWakeup() {
     this._wakeup.recouple()
     this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
+    this._wakeupSession = this.store.wakeupSession(this.wakeupCapability.discoveryKey, {
+      onwakeup: this.bumpSoon.bind(this)
+    })
   }
 
   views() {
@@ -356,6 +360,13 @@ module.exports = class Autobee extends ReadyResource {
 
   async _flushWakeup() {
     const hints = this._wakeup.flush()
+
+    if (this._wakeupSession) {
+      for (const [hex, length] of await this._wakeupSession.drain()) {
+        const prev = hints.get(hex) || 0
+        if (prev < length) hints.set(hex, length)
+      }
+    }
 
     this.queueWakeupFastForward(hints).catch(noop)
 
