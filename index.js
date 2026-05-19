@@ -330,7 +330,7 @@ module.exports = class Autobee extends ReadyResource {
     if (changes) changes.track()
 
     while (!this._interrupting && this.bumping > 0) {
-      if (this._interrupting) return
+      if (this._interrupting) break
 
       try {
         while (!this._interrupting) {
@@ -385,7 +385,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async queueWakeupFastForward(hints) {
     if (!this._handlers.onwakeup) return false
-    if (this.fastForwarding || this.fastForwardTo) return false
+    if (!hints.size || this.fastForwarding || this.fastForwardTo) return false
 
     const promises = []
     for (const [hex, length] of hints) {
@@ -411,7 +411,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
-    const view = this.bee.checkout({ length: best.view.length })
+    const view = this.bee.checkout(best.view)
 
     let trusted = null
     try {

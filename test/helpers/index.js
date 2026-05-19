@@ -53,7 +53,7 @@ async function apply(nodes, view, host) {
     const data = decode(node.value)
 
     if (data.addWriter) {
-      host.addWriter(data.addWriter)
+      host.addWriter(data.addWriter, { weight: data.weight })
     }
 
     if (data.removeWriter) {
@@ -104,26 +104,28 @@ async function create(t, key, opts) {
 function replicate(...autos) {
   const teardowns = []
 
-  for (let i = 0; i < autos.length - 1; i++) {
-    const a = autos[i]
-    const b = autos[i + 1]
+  while (autos.length > 1) {
+    const a = autos.pop()
+    for (let i = 0; i < autos.length; i++) {
+      const b = autos[i]
 
-    const s1 = a.replicate(true)
-    const s2 = b.replicate(false)
+      const s1 = a.replicate(true)
+      const s2 = b.replicate(false)
 
-    s1.pipe(s2).pipe(s1)
+      s1.pipe(s2).pipe(s1)
 
-    s1.on('error', console.error)
-    s2.on('error', console.error)
+      s1.on('error', console.error)
+      s2.on('error', console.error)
 
-    teardowns.push(async () => {
-      s1.destroy()
-      s2.destroy()
-      await Promise.all([
-        new Promise((resolve) => s1.once('close', resolve)),
-        new Promise((resolve) => s2.once('close', resolve))
-      ])
-    })
+      teardowns.push(async () => {
+        s1.destroy()
+        s2.destroy()
+        await Promise.all([
+          new Promise((resolve) => s1.once('close', resolve)),
+          new Promise((resolve) => s2.once('close', resolve))
+        ])
+      })
+    }
   }
 
   return async () => {
