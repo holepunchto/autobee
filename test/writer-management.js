@@ -398,3 +398,90 @@ test('writer-management - oplog flag', async function (t) {
   t.is(localWriterInfo.weight, 2, 'local writer is marked as indexer')
   t.absent(localWriterInfo.isRemoved, 'local writer is not removed')
 })
+
+test('writer-management - get writer views', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  // both auto1 and auto2 should have a view of each other
+  // and not themselves
+  {
+    const views = auto1.activeWriters.views()
+    t.is(views.length, 1, 'one view exists')
+    t.alike(views[0].key, auto2.local.key, 'view key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+
+  {
+    const views = auto2.activeWriters.views()
+    t.is(views.length, 1, 'one view exists')
+    t.alike(views[0].key, auto1.local.key, 'view key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+
+  // Remove writer
+  await auto1.append(encode({ removeWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+  t.absent(auto2.writable, 'auto2 is not writable after being removed')
+
+  // auto1 should no longer have a view of auto2
+  {
+    const views = auto1.activeWriters.views()
+    t.is(views.length, 0, 'no views exist')
+  }
+
+  // auto2 still has a view of auto1
+  {
+    const views = auto2.activeWriters.views()
+    t.is(views.length, 1, 'one view exists')
+    t.alike(views[0].key, auto1.local.key, 'view key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+  t.ok(auto2.writable, 'auto2 is writable again after being re-added')
+
+  // auto1 should have a view of auto2
+  {
+    const views = auto1.activeWriters.views()
+    t.is(views.length, 1, 'one view exists')
+    t.alike(views[0].key, auto2.local.key, 'view key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+
+  // auto2 still has a view of auto1
+  {
+    const views = auto2.activeWriters.views()
+    t.is(views.length, 2, 'two view exists') // don't gc writers atm
+    t.alike(views[0].key, auto1.local.key, 'view key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+})
+
+test('writer-management - get writer views - random', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+  const auto3 = await create(t, auto1.key)
+  const auto4 = await create(t, auto1.key)
+
+  t.ok(auto1.writable, 'auto1 is initially writable')
+  t.absent(auto2.writable, 'auto2 is not initially writable')
+  t.absent(auto3.writable, 'auto3 is not initially writable')
+  t.absent(auto4.writable, 'auto4 is not initially writable')
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await auto1.append(encode({ addWriter: auto3.local.id }))
+  await auto1.append(encode({ addWriter: auto4.local.id }))
+  await replicateAndSync(auto1, auto2, auto3, auto4)
+
+  // auto1 can select writers
+  {
+    const views = auto1.activeWriters.views(2)
+    t.is(views.length, 2, 'two view exists') // don't gc writers atm
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+})
