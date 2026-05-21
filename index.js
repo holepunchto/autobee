@@ -95,7 +95,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
-    this._wakeupSession = null
+    this._previousDrain = 0
 
     this.ready().catch(noop)
   }
@@ -137,9 +137,6 @@ module.exports = class Autobee extends ReadyResource {
   _registerWakeup() {
     this._wakeup.recouple()
     this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
-    this._wakeupSession = this.store.wakeupSession(this.wakeupCapability.discoveryKey, {
-      onwakeup: this.bumpSoon.bind(this)
-    })
   }
 
   views() {
@@ -239,6 +236,14 @@ module.exports = class Autobee extends ReadyResource {
 
     this._registerWakeup()
 
+    if (this.bootstrap !== this.local) {
+      await this.bootstrap.setGroup(this.wakeupCapability.discoveryKey)
+    }
+
+    this.store.on('group-active', (topic) => {
+      if (b4a.equals(topic, this.wakeupCapability.discoveryKey)) this.bumpSoon()
+    })
+
     const system = result.system || EMPTY_HEAD
 
     await this.system.boot(system)
@@ -267,7 +272,6 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bump() {
-    await this._flushWakeup()
     this.bumping++
 
     if (!this._draining) {
@@ -326,6 +330,8 @@ module.exports = class Autobee extends ReadyResource {
       await this._rotateLocalWriter(this._updateLocalCore)
     }
 
+    await this._flushWakeup()
+
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
@@ -361,13 +367,13 @@ module.exports = class Autobee extends ReadyResource {
   async _flushWakeup() {
     const hints = this._wakeup.flush()
 
-    if (this._wakeupSession) {
-      for (const [hex, length] of await this._wakeupSession.drain()) {
-        const prev = hints.get(hex) || 0
-        if (prev < length) hints.set(hex, length)
-      }
+    const group = this.wakeupCapability.discoveryKey
+    for await (const key of this.store.getGroupUpdates(group, { since: this.previousDrain })) {
+      const hex = b4a.toString(key, 'hex')
+      hints.set(hex, -1)
     }
 
+    this.previousDrain = Date.now()
     this.queueWakeupFastForward(hints).catch(noop)
 
     // @todo fast-forward
@@ -386,7 +392,11 @@ module.exports = class Autobee extends ReadyResource {
   async _getOplog(key, length) {
     const core = this.openCore(key)
     await core.ready()
-    const buf = await core.get(length - 1)
+
+    const target = length >= 0 ? length : core.length
+    if (target === -1) return null
+
+    const buf = await core.get(target - 1)
     await core.close()
 
     if (buf === null) return null
@@ -692,7 +702,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const promises = []
     for (const [hex, length] of hints) {
-      if (length <= 0) continue
+      if (length === 0) continue
       const key = b4a.from(hex, 'hex')
       promises.push(this._getOplog(key, length))
     }

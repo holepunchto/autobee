@@ -1,5 +1,5 @@
 const test = require('brittle')
-const { create, apply, replicate, replicateAndSync, encode, same, decode } = require('./helpers')
+const { create, replicate, replicateAndSync, encode, same, decode } = require('./helpers')
 const b4a = require('b4a')
 
 test('wakeup - replication', async function (t) {
@@ -25,7 +25,7 @@ test('wakeup - replication', async function (t) {
 
 test('wakeup - onwakeup', async function (t) {
   const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key, { onwakeup: createOnWakeup('auto2') })
+  const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key, { onwakeup: createOnWakeup('auto3') })
 
   await auto1.append(encode({ hello: 'world' }))
