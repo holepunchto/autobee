@@ -406,19 +406,25 @@ test('writer-management - get writer views', async function (t) {
   await auto1.append(encode({ addWriter: auto2.local.id }))
   await replicateAndSync(auto1, auto2)
 
+  // need oplogs
+  await auto2.append(encode({ hello: 'world' }))
+  await replicateAndSync(auto1, auto2)
+
   // both auto1 and auto2 should have a view of each other
   // and not themselves
   {
-    const views = auto1.activeWriters.views()
-    t.is(views.length, 1, 'one view exists')
-    t.alike(views[0].key, auto2.local.key, 'view key matches')
+    const views = await auto1.activeWriters.toArray()
+    t.is(views.length, 2, 'system view and working view exist')
+    t.alike(views[0].key, auto2.views()[0].key, 'system key matches')
+    t.alike(views[1].key, auto2.views()[1].key, 'working key matches')
     t.ok(views[0].length >= 0, 'view has valid length')
   }
 
   {
-    const views = auto2.activeWriters.views()
-    t.is(views.length, 1, 'one view exists')
-    t.alike(views[0].key, auto1.local.key, 'view key matches')
+    const views = await auto2.activeWriters.toArray()
+    t.is(views.length, 2, 'system view and working view exist')
+    t.alike(views[0].key, auto1.views()[0].key, 'system key matches')
+    t.alike(views[1].key, auto1.views()[1].key, 'working key matches')
     t.ok(views[0].length >= 0, 'view has valid length')
   }
 
@@ -429,15 +435,16 @@ test('writer-management - get writer views', async function (t) {
 
   // auto1 should no longer have a view of auto2
   {
-    const views = auto1.activeWriters.views()
+    const views = await auto1.activeWriters.toArray()
     t.is(views.length, 0, 'no views exist')
   }
 
   // auto2 still has a view of auto1
   {
-    const views = auto2.activeWriters.views()
-    t.is(views.length, 1, 'one view exists')
-    t.alike(views[0].key, auto1.local.key, 'view key matches')
+    const views = await auto2.activeWriters.toArray()
+    t.is(views.length, 2, 'system view and working view exist')
+    t.alike(views[0].key, auto1.views()[0].key, 'system key matches')
+    t.alike(views[1].key, auto1.views()[1].key, 'working key matches')
     t.ok(views[0].length >= 0, 'view has valid length')
   }
 
@@ -447,17 +454,18 @@ test('writer-management - get writer views', async function (t) {
 
   // auto1 should have a view of auto2
   {
-    const views = auto1.activeWriters.views()
-    t.is(views.length, 1, 'one view exists')
-    t.alike(views[0].key, auto2.local.key, 'view key matches')
+    const views = await auto1.activeWriters.toArray()
+    t.is(views.length, 2, 'system view and working view exist')
+    t.alike(views[0].key, auto2.views()[0].key, 'system key matches')
+    t.alike(views[1].key, auto2.views()[1].key, 'working key matches')
     t.ok(views[0].length >= 0, 'view has valid length')
   }
 
   // auto2 still has a view of auto1
   {
-    const views = auto2.activeWriters.views()
-    t.is(views.length, 2, 'two view exists') // don't gc writers atm
-    t.alike(views[0].key, auto1.local.key, 'view key matches')
+    const views = await auto2.activeWriters.toArray()
+    t.is(views.length, 4, 'four views exist') // don't gc writers atm, 2 writers * 2 views each
+    t.alike(views[0].key, auto1.views()[0].key, 'system key matches')
     t.ok(views[0].length >= 0, 'view has valid length')
   }
 })
@@ -478,10 +486,16 @@ test('writer-management - get writer views - random', async function (t) {
   await auto1.append(encode({ addWriter: auto4.local.id }))
   await replicateAndSync(auto1, auto2, auto3, auto4)
 
+  // need oplogs
+  await auto2.append(encode({ hello: 'world' }))
+  await auto3.append(encode({ hello: 'world' }))
+  await auto4.append(encode({ hello: 'world' }))
+  await replicateAndSync(auto1, auto2, auto3, auto4)
+
   // auto1 can select writers
   {
-    const views = auto1.activeWriters.views(2)
-    t.is(views.length, 2, 'two view exists') // don't gc writers atm
+    const views = await auto1.activeWriters.toArray(2)
+    t.is(views.length, 4, 'four views exist') // 2 random writers * 2 views each
     t.ok(views[0].length >= 0, 'view has valid length')
   }
 })
