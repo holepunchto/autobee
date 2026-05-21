@@ -143,7 +143,7 @@ module.exports = class Autobee extends ReadyResource {
   async getWriterViews(key) {
     const id = b4a.toString(key, 'hex')
     const w = this.writers.active.get(id)
-    if (!w) return null
+    if (!w) return []
     return w.views()
   }
 
