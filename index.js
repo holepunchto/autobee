@@ -5,7 +5,7 @@ const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const rrp = require('resolve-reject-promise')
-const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
+const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('autobee-encryption')
 const AutobeeWakeup = require('autobee-wakeup')
 const Hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
@@ -44,7 +44,7 @@ module.exports = class Autobee extends ReadyResource {
         await 1
         if (!this._bootGuard.opened) await this._bootGuard.ready()
       },
-      getEncryptionProvider: this._getEncryptionProviderBound
+      getEncryptionProvider: () => this._getEncryptionProvider({ view: 'view' })
     })
 
     this.store = store
@@ -53,9 +53,10 @@ module.exports = class Autobee extends ReadyResource {
     this.discoveryKey = null
     this.id = null
     this.bootstrap = null
+    this.handlers = handlers
 
     this.system = new System(this.store.namespace('system'), this.name, {
-      getEncryptionProvider: this._getEncryptionProviderBound,
+      getEncryptionProvider: () => this._getEncryptionProvider({ view: '_system' }),
       encrypted: this.encrypted
     })
 
@@ -211,8 +212,9 @@ module.exports = class Autobee extends ReadyResource {
     return this.store.get({ key, encryption })
   }
 
-  _getEncryptionProvider() {
+  _getEncryptionProvider({ view } = {}) {
     if (!this.encrypted) return null
+    if (view) return new ViewEncryption(this, view)
     return new WriterEncryption(this)
   }
 
@@ -277,6 +279,15 @@ module.exports = class Autobee extends ReadyResource {
     await this.system.boot(system)
 
     // @todo migration
+    if (result.migration) {
+      if (this.handlers.migrate) {
+        await this.handlers.migrate(result.migration.views)
+      }
+
+      // clear legacy data
+      await this.local.setUserData('autobase/boot', null)
+      await this.local.setUserData('autobase/encryption', null)
+    }
 
     // Use the view position from the system info (authoritative, post-processing)
     // rather than from the oplog (stale, captured at append time before _bump)
@@ -861,6 +872,10 @@ module.exports = class Autobee extends ReadyResource {
     await sys.close()
 
     return this._processApplyBatch(t)
+  }
+
+  replay() {
+    return topo.replay(this)
   }
 }
 

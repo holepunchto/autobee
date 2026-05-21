@@ -288,13 +288,11 @@ const SystemWriterV0 = {
 function infoLegacyMap(info) {
   return {
     version: info.version,
-    members: info.members,
-    pendingIndexers: info.pendingIndexers,
-    indexers: info.indexers,
+    timestamp: 0,
+    flushes: 0,
+    view: info.views[0],
     heads: info.heads,
-    views: info.views,
-    encryptionLength: 0,
-    entropy: null
+    indexers: info.indexers
   }
 }
 
