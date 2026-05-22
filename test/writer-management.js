@@ -398,3 +398,84 @@ test('writer-management - oplog flag', async function (t) {
   t.is(localWriterInfo.weight, 2, 'local writer is marked as indexer')
   t.absent(localWriterInfo.isRemoved, 'local writer is not removed')
 })
+
+test('writer-management - get writer views', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  // need oplogs
+  await auto2.append(encode({ hello: 'world' }))
+  await replicateAndSync(auto1, auto2)
+
+  // both auto1 and auto2 should have a view of each other
+  // and not themselves
+  {
+    const views = await getExternalViews(auto1)
+    t.is(views.length, 2, 'system view and working view exist')
+    t.alike(views[0].key, auto2.views()[0].key, 'system key matches')
+    t.alike(views[1].key, auto2.views()[1].key, 'working key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+
+  {
+    const views = await getExternalViews(auto2)
+    t.is(views.length, 2, 'system view and working view exist')
+    t.alike(views[0].key, auto1.views()[0].key, 'system key matches')
+    t.alike(views[1].key, auto1.views()[1].key, 'working key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+
+  // Remove writer
+  await auto1.append(encode({ removeWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+  t.absent(auto2.writable, 'auto2 is not writable after being removed')
+
+  // auto1 should no longer have a view of auto2
+  {
+    const views = await getExternalViews(auto1)
+    t.is(views.length, 0, 'no views exist')
+  }
+
+  // auto2 still has a view of auto1
+  {
+    const views = await getExternalViews(auto2)
+    t.is(views.length, 2, 'system view and working view exist')
+    t.alike(views[0].key, auto1.views()[0].key, 'system key matches')
+    t.alike(views[1].key, auto1.views()[1].key, 'working key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+  t.ok(auto2.writable, 'auto2 is writable again after being re-added')
+
+  // auto1 should have a view of auto2
+  {
+    const views = await getExternalViews(auto1)
+    t.is(views.length, 2, 'system view and working view exist')
+    t.alike(views[0].key, auto2.views()[0].key, 'system key matches')
+    t.alike(views[1].key, auto2.views()[1].key, 'working key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+
+  // auto2 still has a view of auto1
+  {
+    const views = await getExternalViews(auto2)
+    t.is(views.length, 4, 'four views exist') // don't gc writers atm, 2 writers * 2 views each
+    t.alike(views[0].key, auto1.views()[0].key, 'system key matches')
+    t.ok(views[0].length >= 0, 'view has valid length')
+  }
+})
+
+async function getExternalViews(auto) {
+  const writers = auto.getExternalWriters()
+  const results = await Promise.all(writers.map((key) => auto.getWriterViews(key)))
+  const views = []
+  for (const writerViews of results) {
+    if (writerViews) views.push(...writerViews)
+  }
+  return views
+}
