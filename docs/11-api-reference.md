@@ -75,7 +75,7 @@ The reason passed to `host.interrupt()` if the last apply cycle was interrupted,
 
 #### `db.view`
 
-A read-only snapshot of the Hyperbee view. Updated after each apply cycle. Use the full [Hyperbee](https://github.com/holepunch/hyperbee) API:
+A read-only snapshot of the Hyperbee view. Updated after each apply cycle. Use the full [Hyperbee](https://github.com/holepunchto/hyperbee) API:
 
 ```js
 await db.view.get(key)

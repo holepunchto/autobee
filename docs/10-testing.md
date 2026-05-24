@@ -16,7 +16,7 @@ function createDB (key, opts) {
 }
 ```
 
-Or with a test framework like [brittle](https://github.com/holepunch/brittle):
+Or with a test framework like [brittle](https://github.com/holepunchto/brittle):
 
 ```js
 const test = require('brittle')

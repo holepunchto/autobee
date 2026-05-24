@@ -41,7 +41,7 @@ async function apply (nodes, view, host) {
 }
 ```
 
-`db.view` is a [Hyperbee](https://github.com/holepunch/hyperbee) — use its full API for reads: `get`, `createReadStream`, range queries, etc.
+`db.view` is a [Hyperbee](https://github.com/holepunchto/hyperbee) — use its full API for reads: `get`, `createReadStream`, range queries, etc.
 
 ## Multiple writers
 
@@ -101,7 +101,7 @@ await db1.update()
 await db2.update()
 ```
 
-For real peer-to-peer networking over the internet, use [Hyperswarm](https://github.com/holepunch/hyperswarm):
+For real peer-to-peer networking over the internet, use [Hyperswarm](https://github.com/holepunchto/hyperswarm):
 
 ```js
 const Hyperswarm = require('hyperswarm')

@@ -27,7 +27,7 @@ await db1.flush()
 
 ## Replicating with Hyperswarm
 
-For real peer-to-peer networking, use [Hyperswarm](https://github.com/holepunch/hyperswarm) to find peers by the Autobee's discovery key:
+For real peer-to-peer networking, use [Hyperswarm](https://github.com/holepunchto/hyperswarm) to find peers by the Autobee's discovery key:
 
 ```js
 const Hyperswarm = require('hyperswarm')
