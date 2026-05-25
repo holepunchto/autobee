@@ -240,8 +240,8 @@ module.exports = class Autobee extends ReadyResource {
       await this.bootstrap.setGroup(this.wakeupCapability.discoveryKey)
     }
 
-    this.store.on('group-active', (topic) => {
-      if (b4a.equals(topic, this.wakeupCapability.discoveryKey)) this.bumpSoon()
+    this.store.notifyGroup(this.wakeupCapability.discoveryKey, () => {
+      this.bumpSoon()
     })
 
     const system = result.system || EMPTY_HEAD
