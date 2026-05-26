@@ -440,7 +440,7 @@ module.exports = class Autobee extends ReadyResource {
 
     let runs = 0
     while (!this._interrupting && this.appending && runs++ < 16) await this.update()
-    await this.bumpSoon()
+    this.bumpSoon()
   }
 
   async _rotateLocalWriter(newLocal) {
