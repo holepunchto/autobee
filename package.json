@@ -5,6 +5,10 @@
   "license": "Apache-2.0",
   "author": "Holepunch Inc.",
   "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holepunchto/autobee.git"
+  },
   "files": [
     "index.js",
     "lib/*.js",
