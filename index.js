@@ -88,10 +88,12 @@ module.exports = class Autobee extends ReadyResource {
     this._needsUpdate = false
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
+    this._notifyHandler = null
 
     this.interrupted = null
     this._interrupting = false
     this._onErrorBound = this._onError.bind(this)
+    this._bumpSoonBound = this.bumpSoon.bind(this)
 
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
@@ -152,6 +154,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    if (this._notifyHandler) this._notifyHandler.destroy()
     if (this._draining) await this._draining
 
     if (this._handlers.close) await this._handlers.close(this.view)
@@ -240,9 +243,8 @@ module.exports = class Autobee extends ReadyResource {
       await this.bootstrap.setGroup(this.wakeupCapability.discoveryKey)
     }
 
-    this.store.notifyGroup(this.wakeupCapability.discoveryKey, () => {
-      this.bumpSoon()
-    })
+    this._notifyHandler = this.store.notifyGroup(this.wakeupCapability.discoveryKey)
+    this._notifyHandler.on('update', this._bumpSoonBound)
 
     const system = result.system || EMPTY_HEAD
 
@@ -367,8 +369,7 @@ module.exports = class Autobee extends ReadyResource {
   async _flushWakeup() {
     const hints = this._wakeup.flush()
 
-    const group = this.wakeupCapability.discoveryKey
-    for await (const key of this.store.getGroupUpdates(group, { since: this.previousDrain })) {
+    for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
       const hex = b4a.toString(key, 'hex')
       hints.set(hex, -1)
     }
