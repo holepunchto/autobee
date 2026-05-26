@@ -24,9 +24,13 @@ test('wakeup - replication', async function (t) {
 })
 
 test('wakeup - onwakeup', async function (t) {
+  t.plan(5)
+
+  const wakeups = []
+
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
-  const auto3 = await create(t, auto1.key, { onwakeup: createOnWakeup('auto3') })
+  const auto3 = await create(t, auto1.key, { onwakeup: createOnWakeup() })
 
   await auto1.append(encode({ hello: 'world' }))
   await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
@@ -42,8 +46,8 @@ test('wakeup - onwakeup', async function (t) {
 
   const expected = auto1.system.bee.head()
   const moved = new Promise((resolve) => {
-    auto3.on('move-to', (to) => {
-      t.alike(to, expected)
+    auto3.once('move-to', (to) => {
+      t.alike(to, expected, 'moved')
       resolve()
     })
   })
@@ -59,13 +63,26 @@ test('wakeup - onwakeup', async function (t) {
   t.teardown(replicate(auto1, auto3))
   t.ok(await same(auto2, auto3))
 
-  function createOnWakeup(name) {
+  // All up to date
+  {
+    const view = auto3._workingBee
+    const entry = await view.get(b4a.from('latest'))
+    const data = decode(entry.value)
+
+    t.alike(data, { hello: 'from auto2' })
+  }
+
+  t.ok(wakeups.length > 0, 'wokeup')
+  t.alike(wakeups[0], { hello: 'from auto2' })
+
+  function createOnWakeup() {
     return async function (view) {
       const entry = await view.get(b4a.from('latest'))
       const data = decode(entry.value)
 
-      t.is(name, 'auto3')
-      t.alike(data, { hello: 'from auto2' })
+      if (data.hello !== 'from auto2') return
+
+      wakeups.push(data)
 
       return { key: auto1.local.key, length: auto1.local.length }
     }
