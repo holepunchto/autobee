@@ -11,10 +11,12 @@ async function runTests() {
   await import('./batch.js')
   await import('./concurrent-writes.js')
   await import('./encryption.js')
+  await import('./links.js')
   await import('./optimistic-race.js')
   await import('./perf.js')
   await import('./updates.js')
   await import('./view-consistency.js')
+  await import('./wakeup.js')
   await import('./writer-management.js')
 
   test.resume()
