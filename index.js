@@ -229,7 +229,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootState() {
-    if (!this._bootGuard.enter()) return
+    if (!this._bootGuard.enter()) return this._bootGuard.ready()
 
     const result = await boot(this.store, this.key, {
       encryptionKey: this.encryptionKey,
@@ -281,6 +281,8 @@ module.exports = class Autobee extends ReadyResource {
     await this.writers.updateLocalState()
 
     this._bootGuard.exit()
+
+    return this._bootGuard.ready()
   }
 
   async _bootAll() {
@@ -752,7 +754,7 @@ module.exports = class Autobee extends ReadyResource {
 
     let trusted = null
     try {
-      trusted = await this._handlers.onwakeup(view, this)
+      trusted = await this._handlers.onwakeup(view)
       if (!trusted || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
