@@ -1,4 +1,5 @@
 const ReadyResource = require('ready-resource')
+const ReadyGuard = require('ready-guard')
 const b4a = require('b4a')
 const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
@@ -41,7 +42,7 @@ module.exports = class Autobee extends ReadyResource {
       // defer one tick to ensure consistent state, then return state prom
       preload: async () => {
         await 1
-        await this._bootingState
+        if (!this._bootGuard.opened) await this._bootGuard.ready()
       },
       getEncryptionProvider: this._getEncryptionProviderBound
     })
@@ -80,6 +81,7 @@ module.exports = class Autobee extends ReadyResource {
     this._appending = []
     this._draining = null
 
+    this._bootGuard = new ReadyGuard()
     this._bootingState = null
     this._bootingAll = null
 
@@ -227,6 +229,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootState() {
+    if (!this._bootGuard.enter()) return this._bootGuard.ready()
+
     const result = await boot(this.store, this.key, {
       encryptionKey: this.encryptionKey,
       keyPair: this.keyPair
@@ -275,10 +279,14 @@ module.exports = class Autobee extends ReadyResource {
     this.bee.move(view)
 
     await this.writers.updateLocalState()
+
+    this._bootGuard.exit()
+
+    return this._bootGuard.ready()
   }
 
   async _bootAll() {
-    await this._bootingState
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
 
     for await (const node of this.system.list()) {
       await this.writers.add(node.key)
@@ -345,6 +353,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
+
     if (this._updateLocalCore !== null) {
       await this._rotateLocalWriter(this._updateLocalCore)
     }
@@ -675,7 +685,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async wakeup({ key, length }) {
-    await this._bootingState
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
     await this.writers.wakeup(key, length)
     await this._bump()
   }
