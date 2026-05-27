@@ -1,14 +1,18 @@
 {
   "name": "autobee",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Bee based autobase",
   "license": "Apache-2.0",
   "author": "Holepunch Inc.",
   "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holepunchto/autobee.git"
+  },
   "files": [
     "index.js",
     "lib/*.js",
-    "spec"
+    "encoding"
   ],
   "scripts": {
     "format": "prettier . --write",

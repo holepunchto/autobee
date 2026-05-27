@@ -141,6 +141,22 @@ module.exports = class Autobee extends ReadyResource {
     this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
   }
 
+  getExternalWriters() {
+    const keys = []
+    for (const w of this.writers.active.values()) {
+      if (w === this.writers.localWriter) continue
+      keys.push(w.core.key)
+    }
+    return keys
+  }
+
+  async getWriterViews(key) {
+    const id = b4a.toString(key, 'hex')
+    const w = this.writers.active.get(id)
+    if (!w) return []
+    return w.views()
+  }
+
   views() {
     const sys = this.system.bee.context.local
     const view = this._workingBee.context.local
