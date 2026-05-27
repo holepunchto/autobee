@@ -393,8 +393,6 @@ module.exports = class Autobee extends ReadyResource {
     this.previousDrain = Date.now()
     this.queueWakeupFastForward(hints).catch(noop)
 
-    // @todo fast-forward
-
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
       if (this.writers.has(hex)) continue
