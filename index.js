@@ -810,7 +810,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _reapply({ system, verified }) {
     const sys = this.system.bee.checkout(system)
-    const t = await topo.rollBack(this, sys, verified)
+    const t = await topo.rollback(this, sys, verified)
     await sys.close()
 
     return this._processApplyBatch(t)
