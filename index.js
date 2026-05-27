@@ -410,6 +410,7 @@ module.exports = class Autobee extends ReadyResource {
     await core.ready()
 
     const target = length >= 0 ? length : core.length
+    if (target === 0) return null
 
     const buf = await core.get(target - 1)
     await core.close()
