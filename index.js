@@ -71,7 +71,7 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
-    this.fastForward = null
+    this.fastForward = handlers.fastForward || null
     this.fastForwarding = null
     this.fastForwardTo = null
 
@@ -359,6 +359,11 @@ module.exports = class Autobee extends ReadyResource {
       await this._rotateLocalWriter(this._updateLocalCore)
     }
 
+    if (this.fastForward) {
+      this._initFastForward(this.fastForward)
+      this.fastForward = null
+    }
+
     await this._flushWakeup()
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
@@ -413,6 +418,10 @@ module.exports = class Autobee extends ReadyResource {
       }
       await this.writers.wakeup(key, length === -1 ? 0 : length)
     }
+  }
+
+  _initFastForward({ key, length }) {
+    this.moveTo({ key, length }, { system: { key, length }, verified: null })
   }
 
   async _getOplog(key, length) {
@@ -719,7 +728,7 @@ module.exports = class Autobee extends ReadyResource {
 
   moveTo(head, tip) {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
-    return this._runFastForward(new FastForward(this, head, tip, { verified: false })).catch(noop)
+    return this._runFastForward(new FastForward(this, head, tip)).catch(noop)
   }
 
   async queueWakeupFastForward(hints) {
@@ -820,6 +829,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _reapply({ system, verified }) {
+    // verified is null when tip.system === head (i.e. handlers.fastForward set)
+    if (!verified) return
+
     const sys = this.system.bee.checkout(system)
     const t = await topo.rollback(this, sys, verified)
     await sys.close()
