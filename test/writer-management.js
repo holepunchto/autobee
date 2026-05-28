@@ -471,7 +471,7 @@ test('writer-management - get writer views', async function (t) {
 })
 
 test('writer-management - setLocal during in-flight drain rotates', async function (t) {
-  const { promise: release, resolve: resolveDrain  } = Promise.withResolvers()
+  const { promise: release, resolve: resolveDrain } = Promise.withResolvers()
   const { promise: entered, resolve: resolveEntered } = Promise.withResolvers()
 
   const auto1 = await create(t)
