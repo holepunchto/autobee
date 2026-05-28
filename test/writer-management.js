@@ -1,5 +1,5 @@
 const test = require('brittle')
-const { create, replicateAndSync, encode, encryptionKey } = require('./helpers')
+const { create, replicate, replicateAndSync, encode, decode, encryptionKey } = require('./helpers')
 
 test('writer-management - add writer', async function (t) {
   const auto1 = await create(t)
@@ -468,6 +468,46 @@ test('writer-management - get writer views', async function (t) {
     t.alike(views[0].key, auto1.views()[0].key, 'system key matches')
     t.ok(views[0].length >= 0, 'view has valid length')
   }
+})
+
+test('writer-management - setLocal during in-flight drain rotates', async function (t) {
+  const { promise: release, resolve: resolveDrain } = Promise.withResolvers()
+  const { promise: entered, resolve: resolveEntered } = Promise.withResolvers()
+
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key, {
+    apply: async (nodes, view, host) => {
+      for (const node of nodes) {
+        const data = decode(node.value)
+        if (data.addWriter) host.addWriter(data.addWriter)
+        if (data.pauseHere) {
+          resolveEntered()
+          await release
+        }
+      }
+    }
+  })
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto1.append(encode({ pauseHere: true }))
+  const done = replicate(auto1, auto2)
+
+  await entered
+
+  const newLocal = auto2.store.get({ name: 'rotate-target' })
+  await newLocal.ready()
+
+  const rotated = new Promise((resolve) => auto2.once('rotate-local-writer', resolve))
+  await auto2.setLocal(newLocal.key)
+
+  resolveDrain()
+
+  await rotated
+  t.alike(auto2.local.key, newLocal.key, 'local key rotated')
+
+  await done()
 })
 
 async function getExternalViews(auto) {

@@ -355,10 +355,6 @@ module.exports = class Autobee extends ReadyResource {
   async _drain() {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
 
-    if (this._updateLocalCore !== null) {
-      await this._rotateLocalWriter(this._updateLocalCore)
-    }
-
     if (this.fastForward) {
       this._initFastForward(this.fastForward)
       this.fastForward = null
@@ -369,8 +365,14 @@ module.exports = class Autobee extends ReadyResource {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
+    // Anything expecting work to be done during bumpSoon should do it here
     while (!this._interrupting && this.bumping > 0) {
       if (this._interrupting) break
+
+      // Ensure we catch updates during the drain (i.e. setLocal will bump)
+      if (this._updateLocalCore !== null) {
+        await this._rotateLocalWriter(this._updateLocalCore)
+      }
 
       try {
         while (!this._interrupting) {
