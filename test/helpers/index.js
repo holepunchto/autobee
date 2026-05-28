@@ -27,6 +27,8 @@ function decode(val) {
 }
 
 async function same(...autos) {
+  for (const a of autos) await a.updated()
+
   for (let i = 0; i < autos.length - 1; i++) {
     const a = autos[i]
     const b = autos[i + 1]
