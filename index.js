@@ -421,7 +421,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   _initFastForward({ key, length }) {
-    this.moveTo({ key, length }, { system: { key, length }, verified: null })
+    this.moveTo({ key, length })
   }
 
   async _getOplog(key, length) {
@@ -825,13 +825,13 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('move-to', to, from)
     this.fastForward.resolve({ to, from })
 
+    // tip is null when handlers.fastForward set
+    if (!tip) return
+
     return this._reapply(tip)
   }
 
   async _reapply({ system, verified }) {
-    // verified is null when tip.system === head (i.e. handlers.fastForward set)
-    if (!verified) return
-
     const sys = this.system.bee.checkout(system)
     const t = await topo.rollback(this, sys, verified)
     await sys.close()
