@@ -390,6 +390,10 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
+    if (this._updateLocalCore !== null) {
+      await this._rotateLocalWriter(this._updateLocalCore)
+    }
+
     this._draining = null
     if (this._interrupting) return
 
