@@ -71,7 +71,8 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
-    this.fastForward = handlers.fastForward || null
+    this.fastForwardBoot = handlers.fastForward || null
+    this.fastForward = null
     this.fastForwarding = null
     this.fastForwardTo = null
 
@@ -355,9 +356,9 @@ module.exports = class Autobee extends ReadyResource {
   async _drain() {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
 
-    if (this.fastForward) {
-      this._initFastForward(this.fastForward)
-      this.fastForward = null
+    if (this.fastForwardBoot) {
+      this._initFastForward(this.fastForwardBoot)
+      this.fastForwardBoot = null
     }
 
     await this._flushWakeup()
