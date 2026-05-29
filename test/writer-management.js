@@ -2,7 +2,15 @@ const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 const Autobee = require('../index.js')
-const { apply, create, replicate, replicateAndSync, encode, decode, encryptionKey } = require('./helpers')
+const {
+  apply,
+  create,
+  replicate,
+  replicateAndSync,
+  encode,
+  decode,
+  encryptionKey
+} = require('./helpers')
 
 test('writer-management - add writer', async function (t) {
   const auto1 = await create(t)
