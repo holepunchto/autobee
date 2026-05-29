@@ -1,4 +1,5 @@
 const test = require('brittle')
+const b4a = require('b4a')
 const { create, replicate, replicateAndSync, encode, decode, encryptionKey } = require('./helpers')
 
 test('writer-management - add writer', async function (t) {
@@ -508,6 +509,55 @@ test('writer-management - setLocal during in-flight drain rotates', async functi
   t.alike(auto2.local.key, newLocal.key, 'local key rotated')
 
   await done()
+})
+
+test('writer-management - emits writer event on setLocal rotation', async function (t) {
+  const auto1 = await create(t)
+
+  const newLocal = auto1.store.get({ name: 'rotate-target' })
+  await newLocal.ready()
+
+  const { promise, resolve } = Promise.withResolvers()
+  auto1.once('writer', resolve)
+
+  await auto1.setLocal(newLocal.key)
+  await new Promise((res) => auto1.once('rotate-local-writer', res))
+
+  const w = await promise
+  t.alike(w.core.key, newLocal.key, 'writer event emitted with the new local writer key')
+})
+
+test('writer-management - emits writer event when writer is attached', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  const writers = []
+  const writers2 = []
+  auto1.on('writer', (w) => writers.push(w))
+  auto2.on('writer', (w) => writers2.push(w))
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+
+  t.not(writers2.length, 'auto2 has no writers yet')
+  t.is(writers.length, 2, 'auto1 has writer')
+
+  // auto1 has the right keys
+  {
+    const keys = writers.map((w) => b4a.toString(w.core.key, 'hex'))
+    t.ok(keys.includes(b4a.toString(auto1.local.key, 'hex')), 'writer event emitted for auto1')
+    t.ok(keys.includes(b4a.toString(auto2.local.key, 'hex')), 'writer event emitted for auto2')
+  }
+
+  await replicateAndSync(auto1, auto2)
+
+  t.is(writers2.length, 2, 'auto2 has writer')
+
+  // auto2 has the right keys
+  {
+    const keys = writers.map((w) => b4a.toString(w.core.key, 'hex'))
+    t.ok(keys.includes(b4a.toString(auto2.local.key, 'hex')), 'writer event emitted for auto1')
+    t.ok(keys.includes(b4a.toString(auto2.local.key, 'hex')), 'writer event emitted for auto2')
+  }
 })
 
 async function getExternalViews(auto) {
