@@ -153,7 +153,7 @@ module.exports = class Autobee extends ReadyResource {
     return keys
   }
 
-  async getWriterViews(key) {
+  getWriterViews(key) {
     const id = b4a.toString(key, 'hex')
     const w = this.writers.active.get(id)
     if (!w) return []
@@ -298,7 +298,7 @@ module.exports = class Autobee extends ReadyResource {
     this._bump().catch(safetyCatch)
   }
 
-  async _bump() {
+  _bump() {
     this.bumping++
 
     if (!this._draining) {
