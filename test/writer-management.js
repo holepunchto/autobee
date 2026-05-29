@@ -1,5 +1,16 @@
 const test = require('brittle')
-const { create, replicate, replicateAndSync, encode, decode, encryptionKey } = require('./helpers')
+const b4a = require('b4a')
+const Corestore = require('corestore')
+const Autobee = require('../index.js')
+const {
+  apply,
+  create,
+  replicate,
+  replicateAndSync,
+  encode,
+  decode,
+  encryptionKey
+} = require('./helpers')
 
 test('writer-management - add writer', async function (t) {
   const auto1 = await create(t)
@@ -508,6 +519,74 @@ test('writer-management - setLocal during in-flight drain rotates', async functi
   t.alike(auto2.local.key, newLocal.key, 'local key rotated')
 
   await done()
+})
+
+test('writer-management - emits writer event on setLocal rotation', async function (t) {
+  const auto1 = await create(t)
+
+  const newLocal = auto1.store.get({ name: 'rotate-target' })
+  await newLocal.ready()
+
+  const { promise, resolve } = Promise.withResolvers()
+  auto1.once('writer', resolve)
+
+  await auto1.setLocal(newLocal.key)
+  await new Promise((res) => auto1.once('rotate-local-writer', res))
+
+  const w = await promise
+  t.alike(w.core.key, newLocal.key, 'writer event emitted with the new local writer key')
+})
+
+test('writer-management - emits writer event when writer is attached', async function (t) {
+  const writers = []
+  const writers2 = []
+
+  const storage1 = await t.tmp()
+  const store1 = new Corestore(storage1, { manifestVersion: 2 })
+  const auto1 = new Autobee(store1, null, {
+    encryptionKey,
+    encrypted: !!encryptionKey,
+    name: '#' + t.tick++,
+    apply
+  })
+  auto1.on('writer', (w) => writers.push(w))
+  t.teardown(() => auto1.close())
+  await auto1.ready()
+
+  const storage2 = await t.tmp()
+  const store2 = new Corestore(storage2, { manifestVersion: 2 })
+  const auto2 = new Autobee(store2, auto1.key, {
+    encryptionKey,
+    encrypted: !!encryptionKey,
+    name: '#' + t.tick++,
+    apply
+  })
+  t.teardown(() => auto2.close())
+  auto2.on('writer', (w) => writers2.push(w))
+  await auto2.ready()
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+
+  t.is(writers.length, 2, 'auto1 has both writers')
+  t.is(writers2.length, 2, 'auto2 has both writers')
+
+  // auto1 has the right keys
+  {
+    const keys = writers.map((w) => b4a.toString(w.core.key, 'hex'))
+    t.ok(keys.includes(b4a.toString(auto1.local.key, 'hex')), 'writer event emitted for auto1')
+    t.ok(keys.includes(b4a.toString(auto2.local.key, 'hex')), 'writer event emitted for auto2')
+  }
+
+  await replicateAndSync(auto1, auto2)
+
+  t.is(writers2.length, 2, 'auto2 has writer')
+
+  // auto2 has the right keys
+  {
+    const keys = writers.map((w) => b4a.toString(w.core.key, 'hex'))
+    t.ok(keys.includes(b4a.toString(auto2.local.key, 'hex')), 'writer event emitted for auto1')
+    t.ok(keys.includes(b4a.toString(auto2.local.key, 'hex')), 'writer event emitted for auto2')
+  }
 })
 
 async function getExternalViews(auto) {
