@@ -550,6 +550,7 @@ test('writer-management - emits writer event when writer is attached', async fun
     apply
   })
   auto1.on('writer', (w) => writers.push(w))
+  t.teardown(() => auto1.close())
   await auto1.ready()
 
   const storage2 = await t.tmp()
@@ -560,6 +561,7 @@ test('writer-management - emits writer event when writer is attached', async fun
     name: '#' + t.tick++,
     apply
   })
+  t.teardown(() => auto2.close())
   auto2.on('writer', (w) => writers2.push(w))
   await auto2.ready()
 
