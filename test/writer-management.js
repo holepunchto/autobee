@@ -1,6 +1,8 @@
 const test = require('brittle')
 const b4a = require('b4a')
-const { create, replicate, replicateAndSync, encode, decode, encryptionKey } = require('./helpers')
+const Corestore = require('corestore')
+const Autobee = require('../index.js')
+const { apply, create, replicate, replicateAndSync, encode, decode, encryptionKey } = require('./helpers')
 
 test('writer-management - add writer', async function (t) {
   const auto1 = await create(t)
@@ -528,18 +530,35 @@ test('writer-management - emits writer event on setLocal rotation', async functi
 })
 
 test('writer-management - emits writer event when writer is attached', async function (t) {
-  const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key)
-
   const writers = []
   const writers2 = []
+
+  const storage1 = await t.tmp()
+  const store1 = new Corestore(storage1, { manifestVersion: 2 })
+  const auto1 = new Autobee(store1, null, {
+    encryptionKey,
+    encrypted: !!encryptionKey,
+    name: '#' + t.tick++,
+    apply
+  })
   auto1.on('writer', (w) => writers.push(w))
+  await auto1.ready()
+
+  const storage2 = await t.tmp()
+  const store2 = new Corestore(storage2, { manifestVersion: 2 })
+  const auto2 = new Autobee(store2, auto1.key, {
+    encryptionKey,
+    encrypted: !!encryptionKey,
+    name: '#' + t.tick++,
+    apply
+  })
   auto2.on('writer', (w) => writers2.push(w))
+  await auto2.ready()
 
   await auto1.append(encode({ addWriter: auto2.local.id }))
 
-  t.not(writers2.length, 'auto2 has no writers yet')
-  t.is(writers.length, 2, 'auto1 has writer')
+  t.is(writers.length, 2, 'auto1 has both writers')
+  t.is(writers2.length, 2, 'auto2 has both writers')
 
   // auto1 has the right keys
   {
