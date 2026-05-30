@@ -410,7 +410,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this.previousDrain = Date.now()
-    this.queueWakeupFastForward(hints).catch(noop)
+    await this.queueWakeupFastForward(hints).catch(noop)
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
@@ -774,13 +774,17 @@ module.exports = class Autobee extends ReadyResource {
 
     const oplog = await this._getOplog(trusted.key, trusted.length)
 
-    return this.moveTo(oplog.views.system, {
+    // Initiate fast-forward but do not await the completion promise — it resolves
+    // only inside _applyFastForward which runs later in the same drain cycle.
+    this.moveTo(oplog.views.system, {
       system: best.system,
       verified: {
         node: trusted,
         flushes: oplog.views.flushes
       }
     })
+
+    return true
   }
 
   async _runFastForward(ff) {
