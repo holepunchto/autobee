@@ -141,7 +141,7 @@ test('wakeup - onwakeup replication streams stay open', async function (t) {
   t.ok(wakeups.length > 0, 'wokeup')
   t.alike(wakeups[0], { hello: 'from auto2' })
 
-  function createOnWakeup () {
+  function createOnWakeup() {
     return async function (view) {
       // Yield to the event loop before accessing the view.
       // Without the fix (_flushWakeup not awaiting queueWakeupFastForward),
