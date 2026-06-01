@@ -90,56 +90,88 @@ test('wakeup - onwakeup', async function (t) {
 })
 
 test('wakeup - onwakeup via store', async function (t) {
-  const auto1 = await create(t)
   const dir = await t.tmp()
-  let auto2 = await create(t, auto1.key, { storage: dir })
-  const auto3 = await create(t, auto1.key)
-  const a2c3 = auto2.store.get(auto3.local.key)
+
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+  let auto3 = await create(t, auto1.key, { storage: dir })
+
+  const a2c3 = auto3.store.get(auto2.local.key)
 
   await auto1.append(encode({ hello: 'world' }))
-  await auto1.append(encode({ addWriter: auto3.local.id, weight: 1 }))
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
 
-  await replicateAndSync(auto1, auto2, auto3)
+  await replicateAndSync(auto1, auto3, auto2)
 
   await a2c3.ready()
 
-  t.is(auto3.local.length, a2c3.length, 'auto2 got auto1 writer')
+  t.is(auto2.local.length, a2c3.length, 'auto3 got auto1 writer')
   await a2c3.close()
   t.ok(
-    auto2.store.cores.map.has(auto3.local.discoveryKey.toString('hex')),
-    'auto3 core loaded in auto2 before reopening'
+    auto3.store.cores.map.has(auto2.local.discoveryKey.toString('hex')),
+    'auto2 core loaded in auto3 before reopening'
   )
-  await auto2.close()
+  await auto3.close()
 
-  t.comment('reopen auto2 to clear corestore cores')
-  auto2 = await create(t, auto1.key, { storage: dir })
+  t.comment('reopen auto3 to clear corestore cores')
+  auto3 = await create(t, auto1.key, { storage: dir })
 
   t.absent(
-    auto2.store.cores.map.has(auto3.local.key.toString('hex')),
-    'auto3 core not loaded in auto2 store after reopen'
+    auto3.store.cores.map.has(auto2.local.key.toString('hex')),
+    'auto2 core not loaded in auto3 store after reopen'
   )
 
   // Only replicate stores so no wakeup protomux messages
-  t.teardown(replicate(auto1.store, auto2.store))
+  t.teardown(replicate(auto1.store, auto3.store))
 
-  await auto2.writers.refresh()
+  await auto3.writers.refresh()
 
   t.absent(
-    auto2.store.cores.map.has(auto3.local.key.toString('hex')),
-    'auto3 core not loaded in auto2 store after reopen'
+    auto3.store.cores.map.has(auto2.local.key.toString('hex')),
+    'auto2 core not loaded in auto3 store after reopen'
   )
   t.absent(
-    auto2.writers.has(auto3.local.key.toString('hex')),
-    'auto3 core not loaded as active writer in auto2 after reopen'
+    auto3.writers.has(auto2.local.key.toString('hex')),
+    'auto2 core not loaded as active writer in auto3 after reopen'
   )
 
-  await auto3.append(encode({ foo: 'bar' }))
-  await replicateAndSync(auto1, auto3)
+  await auto2.append(encode({ foo: 'bar' }))
+  await replicateAndSync(auto1, auto2)
 
-  t.ok(await same(auto2, auto3), 'autobees match')
+  t.ok(await same(auto3, auto2), 'autobees match')
   {
-    const entry = await auto2.view.get(b4a.from('latest'))
+    const entry = await auto3.view.get(b4a.from('latest'))
     const data = decode(entry.value)
-    t.alike(data, { foo: 'bar' }, 'auto2 has updates from auto3')
+    t.alike(data, { foo: 'bar' }, 'auto3 has updates from auto3')
   }
+})
+
+test('wakeup - previous drain', async function (t) {
+  const dir = await t.tmp()
+
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+  let auto3 = await create(t, auto1.key, { storage: dir })
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+
+  await replicateAndSync(auto1, auto3, auto2)
+
+  await auto3.writers.refresh()
+
+  t.absent(
+    auto3.writers.has(auto2.local.key.toString('hex')),
+    'auto2 core not loaded as active writer in auto3 after reopen'
+  )
+
+  await auto2.append(encode({ foo: 'bar' }))
+  await replicateAndSync(auto1, auto2, auto3)
+
+  const previousDrain = auto3.previousDrain
+
+  await auto3.close()
+  auto3 = await create(t, auto1.key, { storage: dir })
+
+  t.is(auto3.previousDrain, previousDrain)
 })
