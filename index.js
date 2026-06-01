@@ -776,15 +776,18 @@ module.exports = class Autobee extends ReadyResource {
       view.close()
     }
 
-    const oplog = await this._getOplog(trusted.key, trusted.length)
+    const oplog = await this._getOplog(trusted.key, trusted.length - 1)
+    if (!oplog) return false
 
-    if (oplog.views.flushes - this.system.flushes < MIN_FF_GAP) return false
+    const { op } = oplog
 
-    return this.moveTo(oplog.views.system, {
+    if (op.views.flushes - this.system.flushes < MIN_FF_GAP) return false
+
+    return this.moveTo(op.views.system, {
       system: best.system,
       verified: {
         node: oplog,
-        flushes: oplog.views.flushes
+        flushes: op.views.flushes
       }
     })
   }
@@ -831,13 +834,21 @@ module.exports = class Autobee extends ReadyResource {
       await this._handlers.update(this.view, changes)
     }
 
-    this.emit('move-to', to, from)
     this.fastForward.resolve({ to, from })
 
     // tip is null when handlers.fastForward set
-    if (!tip) return
+    if (!tip) {
+      this.emit('move-to', to, from)
+      return
+    }
 
-    return this._reapply(tip)
+    try {
+      await this._reapply(tip)
+      this.emit('move-to', tip.system, from)
+    } catch (err) {
+      this.emit('move-to', to, from)
+      throw err
+    }
   }
 
   async _reapply({ system, verified }) {
