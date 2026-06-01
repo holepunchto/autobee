@@ -439,7 +439,11 @@ module.exports = class Autobee extends ReadyResource {
 
     if (buf === null) return null
 
-    return encoding.decodeOplog(buf)
+    return {
+      key,
+      length: target,
+      op: encoding.decodeOplog(buf)
+    }
   }
 
   _update(changes) {
@@ -751,12 +755,12 @@ module.exports = class Autobee extends ReadyResource {
     let best = null
     let bestFlushes = -1
 
-    for (const msg of ops) {
-      if (msg === null) continue
+    for (const { op } of ops) {
+      if (op === null) continue
 
-      if (msg.views && msg.views.flushes > bestFlushes) {
-        bestFlushes = msg.views.flushes
-        best = msg.views
+      if (op.views && op.views.flushes > bestFlushes) {
+        bestFlushes = op.views.flushes
+        best = op.views
       }
     }
 
@@ -764,20 +768,20 @@ module.exports = class Autobee extends ReadyResource {
 
     const view = this.bee.checkout(best.view)
 
-    let trusted = null
+    let trustedKey = null
     try {
-      trusted = await this._handlers.onwakeup(view, this)
-      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
+      trustedKey = await this._handlers.onwakeup(view, this)
+      if (!trustedKey || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
     }
 
-    const oplog = await this._getOplog(trusted.key, trusted.length)
+    const oplog = await this._getOplog(trustedKey, -1)
 
     return this.moveTo(oplog.views.system, {
       system: best.system,
       verified: {
-        node: trusted,
+        node: oplog,
         flushes: oplog.views.flushes
       }
     })
