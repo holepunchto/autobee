@@ -768,15 +768,15 @@ module.exports = class Autobee extends ReadyResource {
 
     const view = this.bee.checkout(best.view)
 
-    let trustedKey = null
+    let trusted = null
     try {
-      trustedKey = await this._handlers.onwakeup(view, this)
-      if (!trustedKey || this.fastForwarding || this.fastForwardTo) return false
+      trusted = await this._handlers.onwakeup(view, this)
+      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
     }
 
-    const oplog = await this._getOplog(trustedKey, -1)
+    const oplog = await this._getOplog(trusted.key, trusted.length)
 
     if (oplog.views.flushes - this.system.flushes < MIN_FF_GAP) return false
 
