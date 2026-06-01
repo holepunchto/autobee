@@ -766,7 +766,7 @@ module.exports = class Autobee extends ReadyResource {
 
     let trusted = null
     try {
-      trusted = await this._handlers.onwakeup(view)
+      trusted = await this._handlers.onwakeup(view, this)
       if (!trusted || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
