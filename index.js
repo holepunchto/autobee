@@ -797,6 +797,8 @@ module.exports = class Autobee extends ReadyResource {
 
     const oplog = await this._getOplog(trustedKey, -1)
 
+    if (oplog.views.flushes - this.system.flushes < MIN_FF_GAP) return false
+
     return this.moveTo(oplog.views.system, {
       system: best.system,
       verified: {
