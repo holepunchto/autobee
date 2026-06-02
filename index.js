@@ -736,7 +736,8 @@ module.exports = class Autobee extends ReadyResource {
 
   async queueWakeupFastForward(hints) {
     if (!this._handlers.onwakeup) return false
-    if (!hints.size || this.fastForwarding || this.fastForwardTo) return false
+    if (!hints.size || this.fastForwarding || this.fastForwardTo || this.fastForwardBoot)
+      return false
 
     const promises = []
     for (const [hex, length] of hints) {
