@@ -299,7 +299,11 @@ module.exports = class Autobee extends ReadyResource {
     this._bump().catch(safetyCatch)
   }
 
-  _bump() {
+  async _bump() {
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
+
+    await this._flushWakeup()
+
     this.bumping++
 
     if (!this._draining) {
@@ -354,14 +358,10 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
-
     if (this.fastForwardBoot) {
       this._initFastForward(this.fastForwardBoot)
       this.fastForwardBoot = null
     }
-
-    await this._flushWakeup()
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
@@ -736,7 +736,9 @@ module.exports = class Autobee extends ReadyResource {
 
   async queueWakeupFastForward(hints) {
     if (!this._handlers.onwakeup) return false
-    if (!hints.size || this.fastForwarding || this.fastForwardTo) return false
+    if (!hints.size || this.fastForwarding || this.fastForwardTo || this.fastForwardBoot) {
+      return false
+    }
 
     const promises = []
     for (const [hex, length] of hints) {
