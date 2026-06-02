@@ -101,7 +101,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
-    this._previousDrain = 0
+    this.previousDrain = 0
 
     this.ready().catch(noop)
   }
@@ -243,6 +243,7 @@ module.exports = class Autobee extends ReadyResource {
     this.discoveryKey = result.bootstrap.core.discoveryKey
     this.id = result.bootstrap.core.id
     this.encryptionKey = result.encryptionKey
+    this.previousDrain = result.previousDrain
 
     if (this.encrypted) {
       asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
@@ -688,9 +689,20 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   _storeBoot() {
+    const proms = []
+    proms.push(
+      this.local.setUserData(
+        'autobee/previous-drain',
+        encoding.encodePreviousDrain(this.previousDrain)
+      )
+    )
+
     const boot = this.system.bootRecord()
-    if (!boot) return
-    return this.local.setUserData('autobee/head', encoding.encodeBootRecord(boot))
+    if (boot) {
+      proms.push(this.local.setUserData('autobee/head', encoding.encodeBootRecord(boot)))
+    }
+
+    return Promise.all(proms)
   }
 
   static decodeValue(buf, opts) {
