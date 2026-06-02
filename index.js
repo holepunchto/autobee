@@ -141,6 +141,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   _registerWakeup() {
+    if (!this.wakeupCapability) return
     this._wakeup.recouple()
     this._wakeup.setCapability(this.wakeupCapability.key, this.wakeupCapability.discoveryKey)
   }
@@ -261,12 +262,14 @@ module.exports = class Autobee extends ReadyResource {
 
     this._registerWakeup()
 
-    if (this.bootstrap !== this.local) {
-      await this.bootstrap.setGroup(this.wakeupCapability.discoveryKey)
-    }
+    if (this.wakeupCapability) {
+      if (this.bootstrap !== this.local) {
+        await this.bootstrap.setGroup(this.wakeupCapability.discoveryKey)
+      }
 
-    this._notifyHandler = this.store.notifyGroup(this.wakeupCapability.discoveryKey)
-    this._notifyHandler.on('update', this._bumpSoonBound)
+      this._notifyHandler = this.store.notifyGroup(this.wakeupCapability.discoveryKey)
+      this._notifyHandler.on('update', this._bumpSoonBound)
+    }
 
     const system = result.system || EMPTY_HEAD
 
@@ -404,9 +407,11 @@ module.exports = class Autobee extends ReadyResource {
   async _flushWakeup() {
     const hints = this._wakeup.flush()
 
-    for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
-      const hex = b4a.toString(key, 'hex')
-      hints.set(hex, -1)
+    if (this._notifyHandler) {
+      for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
+        const hex = b4a.toString(key, 'hex')
+        hints.set(hex, -1)
+      }
     }
 
     this.previousDrain = Date.now()
