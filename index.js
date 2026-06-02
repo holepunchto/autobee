@@ -589,6 +589,11 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
+    // gc writers
+    if (!this.system.isGenesis()) {
+      await this.writers.refresh()
+    }
+
     return updated
   }
 
