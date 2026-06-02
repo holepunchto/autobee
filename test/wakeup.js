@@ -1,5 +1,5 @@
 const test = require('brittle')
-const { create, replicate, replicateAndSync, encode, same, decode } = require('./helpers')
+const { create, replicate, replicateAndSync, encode, same, decode, apply } = require('./helpers')
 const b4a = require('b4a')
 
 test('wakeup - replication', async function (t) {
@@ -23,21 +23,22 @@ test('wakeup - replication', async function (t) {
   t.ok(await same(auto2, auto3))
 })
 
-test('wakeup - onwakeup', async function (t) {
-  t.plan(5)
+test.solo('wakeup - onwakeup', async function (t) {
+  t.plan(6)
 
   const wakeups = []
 
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
-  const auto3 = await create(t, auto1.key, { onwakeup: createOnWakeup() })
+  const auto3 = await create(t, auto1.key, { apply: applyWithStall, onwakeup: createOnWakeup() })
 
   await auto1.append(encode({ hello: 'world' }))
   await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
 
   await replicateAndSync(auto1, auto2, auto3)
 
-  for (let i = 0; i < 100; i++) {
+  const MESSAGES = 100
+  for (let i = 0; i < MESSAGES; i++) {
     await auto1.append(encode({ hello: 'world' + i }))
   }
   await auto3.writers.refresh()
@@ -45,9 +46,11 @@ test('wakeup - onwakeup', async function (t) {
   await replicateAndSync(auto1, auto2)
 
   const expected = auto1.system.bee.head()
-  const moved = new Promise((resolve) => {
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(reject, 2_000)
     auto3.once('move-to', (to) => {
-      t.alike(to, expected, 'moved')
+      clearTimeout(timer)
+      t.alike(to, expected)
       resolve()
     })
   })
@@ -57,7 +60,14 @@ test('wakeup - onwakeup', async function (t) {
   t.comment('sync 2<>3')
 
   await replicateAndSync(auto1, auto2, auto3)
-  await moved
+
+  try {
+    await moved
+    t.pass('moved')
+  } catch {
+    t.fail('did not move')
+    return
+  }
 
   // replicate since auto3 is sparse now
   t.teardown(replicate(auto1, auto3))
@@ -86,6 +96,15 @@ test('wakeup - onwakeup', async function (t) {
 
       return { key: auto1.local.key, length: auto1.local.length }
     }
+  }
+
+  function applyWithStall(nodes, view, base) {
+    const node = nodes[0]
+
+    // short circuit normal sync
+    if (b4a.equals(node.key, auto1.local.key) && node.length > 2) return
+
+    return apply(nodes, view, base)
   }
 })
 
