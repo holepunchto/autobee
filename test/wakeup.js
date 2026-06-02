@@ -23,7 +23,7 @@ test('wakeup - replication', async function (t) {
   t.ok(await same(auto2, auto3))
 })
 
-test.solo('wakeup - onwakeup', async function (t) {
+test('wakeup - onwakeup', async function (t) {
   t.plan(6)
 
   const wakeups = []
