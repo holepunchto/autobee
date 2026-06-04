@@ -445,7 +445,11 @@ module.exports = class Autobee extends ReadyResource {
 
     if (buf === null) return null
 
-    return encoding.decodeOplog(buf)
+    return {
+      key,
+      length: target,
+      op: encoding.decodeOplog(buf)
+    }
   }
 
   _update(changes) {
@@ -770,12 +774,12 @@ module.exports = class Autobee extends ReadyResource {
     let best = null
     let bestFlushes = -1
 
-    for (const msg of ops) {
-      if (msg === null) continue
+    for (const { op } of ops) {
+      if (op === null) continue
 
-      if (msg.views && msg.views.flushes > bestFlushes) {
-        bestFlushes = msg.views.flushes
-        best = msg.views
+      if (op.views && op.views.flushes > bestFlushes) {
+        bestFlushes = op.views.flushes
+        best = op.views
       }
     }
 
@@ -791,13 +795,18 @@ module.exports = class Autobee extends ReadyResource {
       view.close()
     }
 
-    const oplog = await this._getOplog(trusted.key, trusted.length)
+    const oplog = await this._getOplog(trusted.key, trusted.length - 1)
+    if (!oplog) return false
 
-    return this.moveTo(oplog.views.system, {
+    const { op } = oplog
+
+    if (op.views.flushes - this.system.flushes < MIN_FF_GAP) return false
+
+    return this.moveTo(op.views.system, {
       system: best.system,
       verified: {
-        node: trusted,
-        flushes: oplog.views.flushes
+        node: oplog,
+        flushes: op.views.flushes
       }
     })
   }
@@ -844,13 +853,21 @@ module.exports = class Autobee extends ReadyResource {
       await this._handlers.update(this.view, changes)
     }
 
-    this.emit('move-to', to, from)
     this.fastForward.resolve({ to, from })
 
     // tip is null when handlers.fastForward set
-    if (!tip) return
+    if (!tip) {
+      this.emit('move-to', to, from)
+      return
+    }
 
-    return this._reapply(tip)
+    try {
+      await this._reapply(tip)
+      this.emit('move-to', tip.system, from)
+    } catch (err) {
+      this.emit('move-to', to, from)
+      throw err
+    }
   }
 
   async _reapply({ system, verified }) {
