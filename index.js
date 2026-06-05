@@ -776,7 +776,7 @@ module.exports = class Autobee extends ReadyResource {
       view.close()
     }
 
-    const oplog = await this._getOplog(trusted.key, trusted.length - 1)
+    const oplog = await this._getOplog(trusted.key, trusted.length)
     if (!oplog) return false
 
     const { op } = oplog
@@ -844,7 +844,7 @@ module.exports = class Autobee extends ReadyResource {
 
     try {
       await this._reapply(tip)
-      this.emit('move-to', tip.system, from)
+      this.emit('move-to', this._workingBee.head(), from)
     } catch (err) {
       this.emit('move-to', to, from)
       throw err
