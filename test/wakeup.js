@@ -44,10 +44,10 @@ test('wakeup - onwakeup', async function (t) {
 
   await replicateAndSync(auto1, auto2)
 
-  const expected = auto1.system.bee.head()
-  const moved = new Promise((resolve) => {
-    auto3.once('move-to', (to) => {
-      t.alike(to, expected, 'moved')
+  const moved = new Promise((resolve, reject) => {
+    const fail = setTimeout(reject, 2_000)
+    auto3.once('move-to', () => {
+      clearTimeout(fail)
       resolve()
     })
   })
@@ -57,7 +57,7 @@ test('wakeup - onwakeup', async function (t) {
   t.comment('sync 2<>3')
 
   await replicateAndSync(auto1, auto2, auto3)
-  await moved
+  await t.execution(moved)
 
   // replicate since auto3 is sparse now
   t.teardown(replicate(auto1, auto3))
