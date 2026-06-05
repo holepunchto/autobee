@@ -36,7 +36,9 @@ module.exports = class Autobee extends ReadyResource {
     const { name = null, encrypted, encryptionKey, viewName = 'view' } = handlers
 
     this.encrypted = encrypted === true || !!encryptionKey
-    this._viewName = viewName
+
+    this.getSystemEncryption = this._getEncryptionProvider.bind(this, '_system')
+    this.getViewEncryption = this._getEncryptionProvider.bind(this, viewName)
 
     const bee = new Hyperbee(store.namespace('view'), {
       // defer one tick to ensure consistent state, then return state prom
@@ -44,9 +46,7 @@ module.exports = class Autobee extends ReadyResource {
         await 1
         if (!this._bootGuard.opened) await this._bootGuard.ready()
       },
-      getEncryptionProvider: () => {
-        return this._getEncryptionProvider({ view: this._viewName })
-      }
+      getEncryptionProvider: this.getViewEncryption
     })
 
     this.store = store
@@ -58,7 +58,7 @@ module.exports = class Autobee extends ReadyResource {
     this.handlers = handlers
 
     this.system = new System(this.store.namespace('system'), this.name, {
-      getEncryptionProvider: () => this._getEncryptionProvider({ view: '_system' }),
+      getEncryptionProvider: this.getSystemEncryption,
       encrypted: this.encrypted
     })
 
@@ -214,7 +214,7 @@ module.exports = class Autobee extends ReadyResource {
     return this.store.get({ key, encryption })
   }
 
-  _getEncryptionProvider({ view } = {}) {
+  _getEncryptionProvider(view) {
     if (!this.encrypted) return null
     if (view) return new ViewEncryption(this, view)
     return new WriterEncryption(this)
