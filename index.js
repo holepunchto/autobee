@@ -287,6 +287,7 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       // clear legacy data
+      await this.bootstrap.setUserData('autobase/local', null)
       await this.local.setUserData('autobase/boot', null)
       await this.local.setUserData('autobase/encryption', null)
     }
@@ -513,10 +514,10 @@ module.exports = class Autobee extends ReadyResource {
 
     this.local.setUserData('referrer', this.key)
     if (this.encryptionKey) {
-      await this.local.setUserData('autobase/encryption', this.encryptionKey)
+      await this.local.setUserData('autobee/encryption', this.encryptionKey)
     }
 
-    await this.bootstrap.setUserData('autobase/local', this.local.key)
+    await this.bootstrap.setUserData('autobee/local', this.local.key)
     await oldLocal.close()
 
     // done, soft reboot
