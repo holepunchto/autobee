@@ -283,7 +283,7 @@ module.exports = class Autobee extends ReadyResource {
     // @todo migration
     if (result.migration) {
       if (this.handlers.migrate) {
-        await this.handlers.migrate(result.migration.views)
+        await this.handlers.migrate(result.migration.findViewByName)
       }
 
       // clear legacy data
