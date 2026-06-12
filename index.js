@@ -492,7 +492,7 @@ module.exports = class Autobee extends ReadyResource {
     const oldLocal = this.local
 
     this.local = newLocal
-    this.writers.rotateLocalWriter(this.local)
+    await this.writers.rotateLocalWriter(this.local)
 
     this._updateLocalCore = null
 
