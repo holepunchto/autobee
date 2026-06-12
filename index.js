@@ -5,7 +5,7 @@ const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const rrp = require('resolve-reject-promise')
-const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
+const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('autobee-encryption')
 const AutobeeWakeup = require('autobee-wakeup')
 const Hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
@@ -33,10 +33,12 @@ module.exports = class Autobee extends ReadyResource {
       key = null
     }
 
-    const { name = null, encrypted, encryptionKey } = handlers
+    const { name = null, encrypted, encryptionKey, viewName = 'view' } = handlers
 
     this.encrypted = encrypted === true || !!encryptionKey
-    this._getEncryptionProviderBound = this._getEncryptionProvider.bind(this)
+
+    this.getSystemEncryption = this._getEncryptionProvider.bind(this, '_system')
+    this.getViewEncryption = this._getEncryptionProvider.bind(this, viewName)
 
     const bee = new Hyperbee(store.namespace('view'), {
       // defer one tick to ensure consistent state, then return state prom
@@ -44,7 +46,7 @@ module.exports = class Autobee extends ReadyResource {
         await 1
         if (!this._bootGuard.opened) await this._bootGuard.ready()
       },
-      getEncryptionProvider: this._getEncryptionProviderBound
+      getEncryptionProvider: this.getViewEncryption
     })
 
     this.store = store
@@ -53,9 +55,10 @@ module.exports = class Autobee extends ReadyResource {
     this.discoveryKey = null
     this.id = null
     this.bootstrap = null
+    this.handlers = handlers
 
     this.system = new System(this.store.namespace('system'), this.name, {
-      getEncryptionProvider: this._getEncryptionProviderBound,
+      getEncryptionProvider: this.getSystemEncryption,
       encrypted: this.encrypted
     })
 
@@ -211,8 +214,9 @@ module.exports = class Autobee extends ReadyResource {
     return this.store.get({ key, encryption })
   }
 
-  _getEncryptionProvider() {
+  _getEncryptionProvider(view) {
     if (!this.encrypted) return null
+    if (view) return new ViewEncryption(this, view)
     return new WriterEncryption(this)
   }
 
@@ -275,6 +279,18 @@ module.exports = class Autobee extends ReadyResource {
     const system = result.system || EMPTY_HEAD
 
     await this.system.boot(system)
+
+    // @todo migration
+    if (result.migration) {
+      if (this.handlers.migrate) {
+        await this.handlers.migrate(result.migration.views)
+      }
+
+      // clear legacy data
+      await this.bootstrap.setUserData('autobase/local', null)
+      await this.local.setUserData('autobase/boot', null)
+      await this.local.setUserData('autobase/encryption', null)
+    }
 
     // Use the view position from the system info (authoritative, post-processing)
     // rather than from the oplog (stale, captured at append time before _bump)
@@ -498,10 +514,10 @@ module.exports = class Autobee extends ReadyResource {
 
     this.local.setUserData('referrer', this.key)
     if (this.encryptionKey) {
-      await this.local.setUserData('autobase/encryption', this.encryptionKey)
+      await this.local.setUserData('autobee/encryption', this.encryptionKey)
     }
 
-    await this.bootstrap.setUserData('autobase/local', this.local.key)
+    await this.bootstrap.setUserData('autobee/local', this.local.key)
     await oldLocal.close()
 
     // done, soft reboot
@@ -859,6 +875,10 @@ module.exports = class Autobee extends ReadyResource {
     await sys.close()
 
     return this._processApplyBatch(t)
+  }
+
+  replay() {
+    return topo.replay(this)
   }
 }
 
