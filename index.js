@@ -284,12 +284,18 @@ module.exports = class Autobee extends ReadyResource {
     if (result.migration) {
       if (this.handlers.migrate) {
         await this.handlers.migrate(result.migration.findViewByName)
+        this._catchupMigratedNodes = result.migration.catchup
       }
 
       // clear legacy data
       await this.bootstrap.setUserData('autobase/local', null)
       await this.local.setUserData('autobase/boot', null)
       await this.local.setUserData('autobase/encryption', null)
+
+      for (const batch of result.migration.catchup) {
+        const { key, length } = batch[batch.length - 1]
+        this.writers.wakeup(key, length)
+      }
     }
 
     // Use the view position from the system info (authoritative, post-processing)
@@ -576,7 +582,18 @@ module.exports = class Autobee extends ReadyResource {
     return anchor
   }
 
+  async _bumpMigratedWriters() {
+    for (const batch of this._catchupMigratedNodes) {
+      await this._processBatch(batch)
+    }
+  }
+
   async _bumpPendingWriters() {
+    if (this._catchupMigratedNodes !== null) {
+      await this._bumpMigratedWriters()
+      this._catchupMigratedNodes = null
+    }
+
     let updated = false
 
     const pending = this.writers.pending.slice()
