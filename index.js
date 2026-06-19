@@ -169,6 +169,10 @@ module.exports = class Autobee extends ReadyResource {
     return w.views()
   }
 
+  static getViewEncryption(bootstrap, encryptionKey, name) {
+    return AutobeeEncryption.getViewEncryption(bootstrap, encryptionKey, name)
+  }
+
   views() {
     const sys = this.system.bee.context.local
     const view = this._workingBee.context.local
