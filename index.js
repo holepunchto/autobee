@@ -85,6 +85,8 @@ module.exports = class Autobee extends ReadyResource {
     this._appending = []
     this._draining = null
 
+    this.legacyViews = handlers.legacyViews || []
+
     this._bootGuard = new ReadyGuard()
     this._bootingState = null
     this._bootingAll = null
@@ -239,7 +241,7 @@ module.exports = class Autobee extends ReadyResource {
   async _bootState() {
     if (!this._bootGuard.enter()) return this._bootGuard.ready()
 
-    const result = await boot(this.store, this.key, {
+    const result = await boot(this.store, this.key, this.legacyViews, {
       encryptionKey: this.encryptionKey,
       keyPair: this.keyPair
     })
@@ -285,7 +287,7 @@ module.exports = class Autobee extends ReadyResource {
     // @todo migration
     if (result.migration) {
       if (this.handlers.migrate) {
-        await this.handlers.migrate(result.migration.findViewByName)
+        await this.handlers.migrate(result.migration.views)
         this._catchupMigratedNodes = result.migration.catchup
       }
 
