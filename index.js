@@ -106,6 +106,8 @@ module.exports = class Autobee extends ReadyResource {
     this._wakeup = new AutobeeWakeup(this, handlers)
     this.previousDrain = 0
 
+    this._catchupMigratedNodes = null
+
     this.ready().catch(noop)
   }
 
