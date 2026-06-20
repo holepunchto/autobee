@@ -12,8 +12,10 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
+const { AUTOBEE_VERSION } = require('./lib/constants.js')
 const encoding = require('./lib/encoding.js')
 const FastForward = require('./lib/fast-forward.js')
+const Migration = require('./lib/migration.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
@@ -78,6 +80,10 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForward = null
     this.fastForwarding = null
     this.fastForwardTo = null
+
+    this.migrate = null
+    this.migrating = null
+    this.migrateTo = null
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -413,6 +419,11 @@ module.exports = class Autobee extends ReadyResource {
 
       try {
         while (!this._interrupting) {
+          if (this.migrateTo !== null) {
+            await this._applyMigration()
+            break // revaluate conditions...
+          }
+
           if (this.fastForwardTo !== null) {
             await this._applyFastForward()
             break // revaluate conditions...
@@ -473,11 +484,50 @@ module.exports = class Autobee extends ReadyResource {
     if (target === 0) return null
 
     const buf = await core.get(target - 1)
+    let node = encoding.decodeOplog(buf)
+
+    if (node.version < 3) {
+      node = await this._inflateLegacyOplog(buf, core, target - 1)
+    }
+
     await core.close()
 
     if (buf === null) return null
 
-    return encoding.decodeOplog(buf)
+    return {
+      key,
+      length: target,
+      node
+    }
+  }
+
+  async _inflateLegacyOplog(buf, core, seq) {
+    const m = encoding.decodeRawOplog(buf)
+    const fetches = []
+
+    fetches.push(m.digest.pointer ? core.get(seq - m.digest.pointer) : buf)
+    fetches.push(m.checkpoint.pointer ? core.get(seq - m.checkpoint.system.checkpointer) : buf)
+
+    const [digestNode, checkpointNode] = await Promise.all(fetches)
+
+    const { digest } = encoding.decodeRawOplog(digestNode)
+    const { checkpoint } = encoding.decodeRawOplog(checkpointNode)
+
+    return {
+      version: m.version,
+      timestamp: 0,
+      links: m.node.heads,
+      batch: { start: 0, end: m.node.batch - 1 },
+      views: {
+        system: {
+          key: digest.key,
+          length: checkpoint.system.checkpoint.length
+        },
+        flushes: seq
+      },
+      optimistic: !!m.optimistic,
+      value: m.node.value
+    }
   }
 
   _update(changes) {
@@ -794,7 +844,56 @@ module.exports = class Autobee extends ReadyResource {
     return this._runFastForward(new FastForward(this, head, tip)).catch(noop)
   }
 
-  async queueWakeupFastForward(hints) {
+  async _forceMigrateFromHead(head) {
+    const node = await this._getOplog(head.key, head.length)
+    const system = node.node.views.system
+
+    if (await this._runMigration(new Migration(this, system, this.legacyViews))) return
+    this.hintWakeup(head)
+    this.bumpSoon()
+    return this.queueWakeupFastForward(new Map([[head.key, head.length]]), { force: true })
+  }
+
+  async _runMigration(migration) {
+    this.migration = migration
+
+    const result = await migration.run()
+    await migration.close()
+
+    if (this.migration === migration) this.migration = null
+
+    if (!result) return null
+
+    this.migrateTo = result
+    this.migrate = rrp()
+
+    this.bumpSoon()
+
+    return this.migrate.promise
+  }
+
+  async _applyMigration(system, legacyViews) {
+    const info = this.migrateTo
+
+    // todo: update handler for migrate
+    const from = this.system.bee.head()
+    const to = info.system
+
+    this.system.bee.move(to)
+    await this.system.reset()
+
+    this.bee.move(info.view)
+    this._workingBee.move(info.view)
+
+    await this.writers.refresh()
+
+    await this.handlers.migrate(info.views)
+
+    this.emit('move-to', to, from)
+    return true
+  }
+
+  async queueWakeupFastForward(hints, { force = false } = {}) {
     if (!this._handlers.onwakeup) return false
     if (!hints.size || this.fastForwarding || this.fastForwardTo || this.fastForwardBoot) {
       return false
@@ -816,15 +915,25 @@ module.exports = class Autobee extends ReadyResource {
     for (const msg of ops) {
       if (msg === null) continue
 
-      if (msg.views && msg.views.flushes > bestFlushes) {
-        bestFlushes = msg.views.flushes
-        best = msg.views
+      if (msg.node.views && msg.node.views.flushes > bestFlushes) {
+        bestFlushes = msg.node.views.flushes
+        best = msg
       }
+    }
+
+    if (best && force) {
+      return this.moveTo(best.node.views.system, {
+        system: best.node.views.system,
+        verified: {
+          node: best,
+          flushes: best.node.views.flushes
+        }
+      })
     }
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
-    const view = this.bee.checkout(best.view)
+    const view = this.bee.checkout(best.node.views.view)
 
     let trusted = null
     try {
@@ -836,11 +945,11 @@ module.exports = class Autobee extends ReadyResource {
 
     const oplog = await this._getOplog(trusted.key, trusted.length)
 
-    return this.moveTo(oplog.views.system, {
-      system: best.system,
+    return this.moveTo(oplog.node.views.system, {
+      system: best.node.views.system,
       verified: {
         node: trusted,
-        flushes: oplog.views.flushes
+        flushes: oplog.node.views.flushes
       }
     })
   }
@@ -865,7 +974,6 @@ module.exports = class Autobee extends ReadyResource {
 
   async _applyFastForward() {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
-    if (changes) changes.track(this._applyState)
 
     const { head, tip } = this.fastForwardTo
 
