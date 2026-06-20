@@ -175,12 +175,14 @@ module.exports = class Autobee extends ReadyResource {
 
   views() {
     const sys = this.system.bee.context.local
+    const head = this.system.bee.head()
     const view = this._workingBee.context.local
 
     // signedLength for autobase compat
     return [
       { key: sys.key, length: sys.length, signedLength: sys.length },
-      { key: view.key, length: view.length, signedLength: view.length }
+      { key: view.key, length: view.length, signedLength: view.length },
+      { key: head.key, length: head.length, signedLength: head.length }
     ]
   }
 
