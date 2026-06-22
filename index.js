@@ -76,11 +76,12 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
-    this.fastForwardBoot = handlers.fastForward || null
+    this.fastForwardBoot = handlers.fastForwardTo || null
     this.fastForward = null
     this.fastForwarding = null
     this.fastForwardTo = null
 
+    this.migrateBoot = handlers.migrateBoot || null
     this.migrate = null
     this.migrating = null
     this.migrateTo = null
@@ -400,6 +401,11 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
+    if (this.migrateBoot) {
+      await this._initMigrate(this.migrateBoot)
+      this.migrateBoot = null
+    }
+
     if (this.fastForwardBoot) {
       this._initFastForward(this.fastForwardBoot)
       this.fastForwardBoot = null
@@ -849,9 +855,12 @@ module.exports = class Autobee extends ReadyResource {
     const system = node.node.views.system
 
     if (await this._runMigration(new Migration(this, system, this.legacyViews))) return
-    this.hintWakeup(head)
-    this.bumpSoon()
     return this.queueWakeupFastForward(new Map([[head.key, head.length]]), { force: true })
+  }
+
+  async _initMigrate(head) {
+    if (await this._runMigration(new Migration(this, head, this.legacyViews))) return
+    return this._initFastForward(head)
   }
 
   async _runMigration(migration) {
