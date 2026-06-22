@@ -182,8 +182,11 @@ module.exports = class Autobee extends ReadyResource {
 
   views() {
     const sys = this.system.bee.context.local
-    const head = this.system.bee.head()
     const view = this._workingBee.context.local
+
+    // todo: figure out why blind-peer doesn't mirror core
+    // without adding it to mirror request here
+    const head = this.system.bee.head()
 
     // signedLength for autobase compat
     return [
