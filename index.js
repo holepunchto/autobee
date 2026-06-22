@@ -871,17 +871,21 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.migration === migration) this.migration = null
 
-    if (!result) return null
+    if (!result || result.version >= AUTOBEE_VERSION) {
+      return false
+    }
 
     this.migrateTo = result
     this.migrate = rrp()
 
     this.bumpSoon()
 
-    return this.migrate.promise
+    return true
   }
 
   async _applyMigration(system, legacyViews) {
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+
     const info = this.migrateTo
 
     // todo: update handler for migrate
@@ -894,9 +898,16 @@ module.exports = class Autobee extends ReadyResource {
     this.bee.move(info.view)
     this._workingBee.move(info.view)
 
+    this.migrateTo = null
+
     await this.writers.refresh()
 
     await this.handlers.migrate(info.views)
+
+    if (changes) {
+      changes.finalise()
+      await this._handlers.update(this.view, changes)
+    }
 
     this.emit('move-to', to, from)
     return true
