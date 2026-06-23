@@ -445,7 +445,9 @@ module.exports = class Autobee extends ReadyResource {
 
     if (buf === null) return null
 
-    return encoding.decodeOplog(buf)
+    const oplog = encoding.decodeOplog(buf)
+    oplog.length = target
+    return oplog
   }
 
   _update(changes) {
@@ -758,9 +760,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const promises = []
+    const keys = []
     for (const [hex, length] of hints) {
       if (length === 0) continue
       const key = b4a.from(hex, 'hex')
+      keys.push(key)
       promises.push(this._getOplog(key, length))
     }
 
@@ -768,14 +772,17 @@ module.exports = class Autobee extends ReadyResource {
     if (this.fastForwarding || this.fastForwardTo) return false
 
     let best = null
+    let bestHead = null
     let bestFlushes = -1
 
-    for (const msg of ops) {
+    for (let i = 0; i < ops.length; i++) {
+      const msg = ops[i]
       if (msg === null) continue
 
       if (msg.views && msg.views.flushes > bestFlushes) {
         bestFlushes = msg.views.flushes
         best = msg.views
+        bestHead = { key: keys[i], length: msg.length }
       }
     }
 
@@ -785,7 +792,7 @@ module.exports = class Autobee extends ReadyResource {
 
     let trusted = null
     try {
-      trusted = await this._handlers.onwakeup(view, this)
+      trusted = await this._handlers.onwakeup(bestHead, view, this)
       if (!trusted || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
