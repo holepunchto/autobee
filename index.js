@@ -142,6 +142,9 @@ module.exports = class Autobee extends ReadyResource {
     await this.bee.ready()
     await this._bootingState
 
+    this._localSystemStart = this.system.bee.context.local.length
+    this._localViewStart = this._workingBee.context.local.length
+
     this.bumpSoon()
   }
 
@@ -670,8 +673,6 @@ module.exports = class Autobee extends ReadyResource {
 
   async _applyBatch(batch, optimistic) {
     const local = batch[0].core === this.local
-    const localSystemStart = this.system.bee.context.local.length
-    const localViewStart = this._workingBee.context.local.length
 
     const userBatch = []
     for (const node of batch) {
@@ -690,10 +691,8 @@ module.exports = class Autobee extends ReadyResource {
     const changed = await this.system.flush(batch, this._workingBee)
 
     if (local) {
-      this._localSystemStart = localSystemStart
-      this._localSystemLength = this.system.bee.context.local.length - localSystemStart
-      this._localViewStart = localViewStart
-      this._localViewLength = this._workingBee.context.local.length - localViewStart
+      this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
+      this._localViewLength = this._workingBee.context.local.length - this._localViewStart
     }
 
     await this._storeBoot()
@@ -771,6 +770,9 @@ module.exports = class Autobee extends ReadyResource {
         length: this._localViewLength
       }
     })
+
+    this._localSystemStart = this.system.bee.context.local.length
+    this._localViewStart = this._workingBee.context.local.length
   }
 
   moveTo(head, tip) {
