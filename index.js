@@ -79,6 +79,11 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
 
+    this._localSystemStart = 0
+    this._localSystemLength = 0
+    this._localViewStart = 0
+    this._localViewLength = 0
+
     this._appending = []
     this._draining = null
 
@@ -98,6 +103,7 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = false
     this._onErrorBound = this._onError.bind(this)
     this._bumpSoonBound = this.bumpSoon.bind(this)
+    this._onGroupUpdateBound = this._onGroupUpdate.bind(this)
 
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
@@ -136,6 +142,9 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.bee.ready()
     await this._bootingState
+
+    this._localSystemStart = this.system.bee.context.local.length
+    this._localViewStart = this._workingBee.context.local.length
 
     this.bumpSoon()
   }
@@ -269,7 +278,8 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       this._notifyHandler = this.store.notifyGroup(this.wakeupCapability.discoveryKey)
-      this._notifyHandler.on('update', this._bumpSoonBound)
+      this._notifyHandler.on('update', this._onGroupUpdateBound)
+      await this._drainBootHints()
     }
 
     const system = result.system || EMPTY_HEAD
@@ -405,15 +415,37 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  _onGroupUpdate({ key, length }) {
+    this._wakeup.hint({ key, length })
+    this.bumpSoon()
+  }
+
+  async _drainBootHints() {
+    if (!this._notifyHandler) return
+
+    const keys = []
+    for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
+      keys.push(key)
+    }
+    if (!keys.length) return
+
+    // read the lengths straight from storage in one batch instead of opening cores
+    const discoveryKeys = keys.map((key) => crypto.discoveryKey(key))
+    const infos = await this.store.storage.getInfos(discoveryKeys, {
+      auth: false,
+      head: true,
+      hints: false
+    })
+
+    for (let i = 0; i < keys.length; i++) {
+      const info = infos[i]
+      const length = info && info.head ? info.head.length : 0
+      this._wakeup.hint({ key: keys[i], length })
+    }
+  }
+
   async _flushWakeup() {
     const hints = this._wakeup.flush()
-
-    if (this._notifyHandler) {
-      for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
-        const hex = b4a.toString(key, 'hex')
-        hints.set(hex, -1)
-      }
-    }
 
     this.previousDrain = Date.now()
     this.queueWakeupFastForward(hints).catch(noop)
@@ -421,11 +453,7 @@ module.exports = class Autobee extends ReadyResource {
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
       if (this.writers.has(hex)) continue
-      if (length !== -1) {
-        const info = await this.system.get(key)
-        if (info && length <= info.length) continue // stale hint
-      }
-      await this.writers.wakeup(key, length === -1 ? 0 : length)
+      await this.writers.wakeup(key, length)
     }
   }
 
@@ -668,6 +696,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
+    const local = batch[0].core === this.local
+
     const userBatch = []
     for (const node of batch) {
       this.system.addNode(node)
@@ -683,6 +713,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const changed = await this.system.flush(batch, this._workingBee)
+
+    if (local) {
+      this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
+      this._localViewLength = this._workingBee.context.local.length - this._localViewStart
+    }
 
     await this._storeBoot()
 
@@ -746,8 +781,24 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
-    // analyze is worth the trade off adding the view here also (technically not needed)
-    await this.writers.flushLocal(this._workingBee.head())
+    await this.writers.flushLocal({
+      flushes: this.system.flushes,
+      system: {
+        key: this.system.bee.context.local.key,
+        start: this._localSystemStart,
+        length: this._localSystemLength
+      },
+      view: {
+        key: this._workingBee.context.local.key,
+        start: this._localViewStart,
+        length: this._localViewLength
+      }
+    })
+
+    this._localSystemStart = this.system.bee.context.local.length
+    this._localSystemLength = 0
+    this._localViewStart = this._workingBee.context.local.length
+    this._localViewLength = 0
   }
 
   moveTo(head, tip) {
@@ -762,9 +813,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const promises = []
+    const heads = []
     for (const [hex, length] of hints) {
       if (length === 0) continue
       const key = b4a.from(hex, 'hex')
+      heads.push({ key, length })
       promises.push(this._getOplog(key, length))
     }
 
@@ -772,24 +825,31 @@ module.exports = class Autobee extends ReadyResource {
     if (this.fastForwarding || this.fastForwardTo) return false
 
     let best = null
+    let bestHead = null
     let bestFlushes = -1
 
-    for (const { op } of ops) {
-      if (op === null) continue
+    for (let i = 0; i < ops.length; i++) {
+      const res = ops[i]
+      if (res === null) continue
 
+      const { op } = res
       if (op.views && op.views.flushes > bestFlushes) {
         bestFlushes = op.views.flushes
         best = op.views
+        bestHead = heads[i]
       }
     }
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
-    const view = this.bee.checkout(best.view)
+    const view = this.bee.checkout({
+      key: best.view.key,
+      length: best.view.start + best.view.length
+    })
 
     let trusted = null
     try {
-      trusted = await this._handlers.onwakeup(view, this)
+      trusted = await this._handlers.onwakeup(bestHead, view, this)
       if (!trusted || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
@@ -802,13 +862,19 @@ module.exports = class Autobee extends ReadyResource {
 
     if (op.views.flushes - this.system.flushes < MIN_FF_GAP) return false
 
-    return this.moveTo(op.views.system, {
-      system: best.system,
-      verified: {
-        node: oplog,
-        flushes: op.views.flushes
+    return this.moveTo(
+      {
+        key: op.views.system.key,
+        length: op.views.system.start + op.views.system.length
+      },
+      {
+        system: { key: best.system.key, length: best.system.start + best.system.length },
+        verified: {
+          node: oplog,
+          flushes: op.views.flushes
+        }
       }
-    })
+    )
   }
 
   async _runFastForward(ff) {

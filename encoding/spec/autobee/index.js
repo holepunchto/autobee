@@ -645,8 +645,33 @@ const encoding21 = {
 // @autobee/link
 const encoding22 = encoding0
 
-// @autobee/batch
+// @autobee/external-batch
 const encoding23 = {
+  preencode(state, m) {
+    c.fixed32.preencode(state, m.key)
+    c.uint.preencode(state, m.start)
+    c.uint.preencode(state, m.length)
+  },
+  encode(state, m) {
+    c.fixed32.encode(state, m.key)
+    c.uint.encode(state, m.start)
+    c.uint.encode(state, m.length)
+  },
+  decode(state) {
+    const r0 = c.fixed32.decode(state)
+    const r1 = c.uint.decode(state)
+    const r2 = c.uint.decode(state)
+
+    return {
+      key: r0,
+      start: r1,
+      length: r2
+    }
+  }
+}
+
+// @autobee/batch
+const encoding24 = {
   preencode(state, m) {
     c.uint.preencode(state, m.start)
     c.uint.preencode(state, m.end)
@@ -667,72 +692,72 @@ const encoding23 = {
 }
 
 // @autobee/views
-const encoding24 = {
+const encoding25 = {
   preencode(state, m) {
-    encoding22.preencode(state, m.system)
     c.uint.preencode(state, m.flushes)
+    encoding23.preencode(state, m.system)
     state.end++ // flags are fixed size
 
-    if (m.view) encoding22.preencode(state, m.view)
+    if (m.view) encoding23.preencode(state, m.view)
   },
   encode(state, m) {
     const flags = m.view ? 1 : 0
 
-    encoding22.encode(state, m.system)
     c.uint.encode(state, m.flushes)
+    encoding23.encode(state, m.system)
     c.uint8.encode(state, flags)
 
-    if (m.view) encoding22.encode(state, m.view)
+    if (m.view) encoding23.encode(state, m.view)
   },
   decode(state) {
-    const r0 = encoding22.decode(state)
-    const r1 = c.uint.decode(state)
+    const r0 = c.uint.decode(state)
+    const r1 = encoding23.decode(state)
     const flags = c.uint8.decode(state)
 
     return {
-      system: r0,
-      flushes: r1,
-      view: (flags & 1) !== 0 ? encoding22.decode(state) : null
+      flushes: r0,
+      system: r1,
+      view: (flags & 1) !== 0 ? encoding23.decode(state) : null
     }
   }
 }
 
 // @autobee/views (inline)
-const encoding24_inline = {
+const encoding25_inline = {
   preencode(state, m) {
-    encoding22.preencode(state, m.system)
     c.uint.preencode(state, m.flushes)
+    encoding23.preencode(state, m.system)
 
-    if (m.view) encoding22.preencode(state, m.view)
+    if (m.view) encoding23.preencode(state, m.view)
   },
   encode(state, m) {
-    encoding22.encode(state, m.system)
     c.uint.encode(state, m.flushes)
+    encoding23.encode(state, m.system)
 
-    if (m.view) encoding22.encode(state, m.view)
+    if (m.view) encoding23.encode(state, m.view)
   },
   decode(state, inlining) {
-    const r0 = encoding22.decode(state)
-    const r1 = c.uint.decode(state)
+    const r0 = c.uint.decode(state)
+    const r1 = encoding23.decode(state)
     const flags = inlining
 
     return {
-      system: r0,
-      flushes: r1,
-      view: (flags & 1) !== 0 ? encoding22.decode(state) : null
+      flushes: r0,
+      system: r1,
+      view: (flags & 1) !== 0 ? encoding23.decode(state) : null
     }
   }
 }
 
 // @autobee/oplog-message-v3
-const encoding25 = {
+const encoding26 = {
   preencode(state, m) {
     c.uint.preencode(state, m.timestamp)
-    encoding25_1.preencode(state, m.links)
+    encoding26_1.preencode(state, m.links)
     state.end++ // max flag is 16 so always one byte
 
-    if (m.batch) encoding23.preencode(state, m.batch)
-    if (m.views) encoding24_inline.preencode(state, m.views)
+    if (m.batch) encoding24.preencode(state, m.batch)
+    if (m.views) encoding25_inline.preencode(state, m.views)
     if (m.value) c.buffer.preencode(state, m.value)
   },
   encode(state, m) {
@@ -742,25 +767,25 @@ const encoding25 = {
     }
 
     c.uint.encode(state, m.timestamp)
-    encoding25_1.encode(state, m.links)
+    encoding26_1.encode(state, m.links)
     c.uint.encode(state, flags)
 
-    if (m.batch) encoding23.encode(state, m.batch)
-    if (m.views) encoding24_inline.encode(state, m.views)
+    if (m.batch) encoding24.encode(state, m.batch)
+    if (m.views) encoding25_inline.encode(state, m.views)
     if (m.value) c.buffer.encode(state, m.value)
   },
   decode(state) {
     const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
-    const r1 = encoding25_1.decode(state)
+    const r1 = encoding26_1.decode(state)
     const flags = c.uint.decode(state)
 
     return {
       version: v,
       timestamp: r0,
       links: r1,
-      batch: (flags & 1) !== 0 ? encoding23.decode(state) : null,
-      views: (flags & 2) !== 0 ? encoding24_inline.decode(state, flags >>> 2) : null,
+      batch: (flags & 1) !== 0 ? encoding24.decode(state) : null,
+      views: (flags & 2) !== 0 ? encoding25_inline.decode(state, flags >>> 2) : null,
       optimistic: (flags & 8) !== 0,
       value: (flags & 16) !== 0 ? c.buffer.decode(state) : null
     }
@@ -768,7 +793,7 @@ const encoding25 = {
 }
 
 // @autobee/oplog
-const encoding26 = {
+const encoding27 = {
   preencode(state, m) {
     c.uint.preencode(state, m.version)
     switch (m.version) {
@@ -782,7 +807,7 @@ const encoding26 = {
         encoding14.preencode(state, m)
         break
       case 3:
-        encoding25.preencode(state, m)
+        encoding26.preencode(state, m)
         break
       default:
         throw new Error('Unsupported version')
@@ -801,7 +826,7 @@ const encoding26 = {
         encoding14.encode(state, m)
         break
       case 3:
-        encoding25.encode(state, m)
+        encoding26.encode(state, m)
         break
       default:
         throw new Error('Unsupported version')
@@ -825,7 +850,7 @@ const encoding26 = {
         return decoded
       }
       case 3: {
-        const decoded = encoding25.decode(state)
+        const decoded = encoding26.decode(state)
         return decoded
       }
       default:
@@ -835,7 +860,7 @@ const encoding26 = {
 }
 
 // @autobee/manifest-data
-const encoding27 = {
+const encoding28 = {
   preencode(state, m) {
     c.uint.preencode(state, m.version)
     state.end++ // max flag is 2 so always one byte
@@ -869,7 +894,7 @@ const encoding18_3 = c.array(encoding22)
 // @autobee/system-info-v3.indexers, deferred due to recusive use
 const encoding18_4 = encoding18_3
 // @autobee/oplog-message-v3.links, deferred due to recusive use
-const encoding25_1 = encoding18_3
+const encoding26_1 = encoding18_3
 
 function setVersion(v) {
   version = v
@@ -940,16 +965,18 @@ function getEncoding(name) {
       return encoding21
     case '@autobee/link':
       return encoding22
-    case '@autobee/batch':
+    case '@autobee/external-batch':
       return encoding23
-    case '@autobee/views':
+    case '@autobee/batch':
       return encoding24
-    case '@autobee/oplog-message-v3':
+    case '@autobee/views':
       return encoding25
-    case '@autobee/oplog':
+    case '@autobee/oplog-message-v3':
       return encoding26
-    case '@autobee/manifest-data':
+    case '@autobee/oplog':
       return encoding27
+    case '@autobee/manifest-data':
+      return encoding28
     default:
       throw new Error('Encoder not found ' + name)
   }
