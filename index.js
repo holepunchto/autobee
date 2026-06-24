@@ -803,7 +803,10 @@ module.exports = class Autobee extends ReadyResource {
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
-    const view = this.bee.checkout({ key: best.view.key, length: best.view.end })
+    const view = this.bee.checkout({
+      key: best.view.key,
+      length: best.view.start + best.view.length
+    })
 
     let trusted = null
     try {
@@ -816,9 +819,15 @@ module.exports = class Autobee extends ReadyResource {
     const oplog = await this._getOplog(trusted.key, trusted.length)
 
     return this.moveTo(
-      { key: oplog.views.system.key, length: oplog.views.system.end },
       {
-        system: { key: best.system.key, length: best.system.end },
+        key: oplog.views.system.key,
+        length: oplog.views.system.start + oplog.views.system.length
+      },
+      {
+        system: {
+          key: best.system.key,
+          length: best.system.start + best.system.length
+        },
         verified: {
           node: trusted,
           flushes: oplog.views.flushes

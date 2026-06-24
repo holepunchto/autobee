@@ -26,7 +26,7 @@ test('view range - remote applies do not inflate our range', async function (t) 
   const sysAfter = a1.system.bee.head().length
 
   t.is(op.views.view.start, viewBefore, 'view range starts after the remote blocks, not at 0')
-  t.is(op.views.view.end, viewAfter, 'view range ends at our post-commit head')
+  t.is(op.views.view.length, viewAfter - viewBefore, 'view length covers exactly our blocks')
   t.is(op.views.system.start, sysBefore, 'system range starts after the remote blocks')
-  t.is(op.views.system.end, sysAfter, 'system range ends at our post-commit head')
+  t.is(op.views.system.length, sysAfter - sysBefore, 'system length covers exactly our blocks')
 })

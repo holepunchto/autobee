@@ -650,12 +650,12 @@ const encoding23 = {
   preencode(state, m) {
     c.fixed32.preencode(state, m.key)
     c.uint.preencode(state, m.start)
-    c.uint.preencode(state, m.end)
+    c.uint.preencode(state, m.length)
   },
   encode(state, m) {
     c.fixed32.encode(state, m.key)
     c.uint.encode(state, m.start)
-    c.uint.encode(state, m.end)
+    c.uint.encode(state, m.length)
   },
   decode(state) {
     const r0 = c.fixed32.decode(state)
@@ -665,7 +665,7 @@ const encoding23 = {
     return {
       key: r0,
       start: r1,
-      end: r2
+      length: r2
     }
   }
 }

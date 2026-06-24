@@ -142,7 +142,7 @@ auto.register({
       required: true
     },
     {
-      name: 'end',
+      name: 'length',
       type: 'uint',
       required: true
     }
