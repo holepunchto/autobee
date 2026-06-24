@@ -26,7 +26,7 @@ test('wakeup - replication', async function (t) {
 })
 
 test('wakeup - onwakeup', async function (t) {
-  t.plan(7)
+  t.plan(6)
 
   const wakeups = []
   const heads = []
@@ -48,12 +48,10 @@ test('wakeup - onwakeup', async function (t) {
 
   await replicateAndSync(auto1, auto2)
 
-  const expected = auto1.system.bee.head()
   const moved = new Promise((resolve, reject) => {
     const timer = setTimeout(reject, 2_000)
-    auto3.once('move-to', (to) => {
+    auto3.once('move-to', () => {
       clearTimeout(timer)
-      t.alike(to, expected)
       resolve()
     })
   })

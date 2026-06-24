@@ -473,8 +473,11 @@ module.exports = class Autobee extends ReadyResource {
 
     if (buf === null) return null
 
-    const oplog = encoding.decodeOplog(buf)
-    return oplog
+    return {
+      key,
+      length: target,
+      op: encoding.decodeOplog(buf)
+    }
   }
 
   _update(changes) {
@@ -826,12 +829,13 @@ module.exports = class Autobee extends ReadyResource {
     let bestFlushes = -1
 
     for (let i = 0; i < ops.length; i++) {
-      const msg = ops[i]
-      if (msg === null) continue
+      const res = ops[i]
+      if (res === null) continue
 
-      if (msg.views && msg.views.flushes > bestFlushes) {
-        bestFlushes = msg.views.flushes
-        best = msg.views
+      const { op } = res
+      if (op.views && op.views.flushes > bestFlushes) {
+        bestFlushes = op.views.flushes
+        best = op.views
         bestHead = heads[i]
       }
     }
@@ -852,17 +856,22 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const oplog = await this._getOplog(trusted.key, trusted.length)
+    if (!oplog) return false
+
+    const { op } = oplog
+
+    if (op.views.flushes - this.system.flushes < MIN_FF_GAP) return false
 
     return this.moveTo(
       {
-        key: oplog.views.system.key,
-        length: oplog.views.system.start + oplog.views.system.length
+        key: op.views.system.key,
+        length: op.views.system.start + op.views.system.length
       },
       {
         system: { key: best.system.key, length: best.system.start + best.system.length },
         verified: {
-          node: trusted,
-          flushes: oplog.views.flushes
+          node: oplog,
+          flushes: op.views.flushes
         }
       }
     )
@@ -910,13 +919,21 @@ module.exports = class Autobee extends ReadyResource {
       await this._handlers.update(this.view, changes)
     }
 
-    this.emit('move-to', to, from)
     this.fastForward.resolve({ to, from })
 
     // tip is null when handlers.fastForward set
-    if (!tip) return
+    if (!tip) {
+      this.emit('move-to', to, from)
+      return
+    }
 
-    return this._reapply(tip)
+    try {
+      await this._reapply(tip)
+      this.emit('move-to', this._workingBee.head(), from)
+    } catch (err) {
+      this.emit('move-to', to, from)
+      throw err
+    }
   }
 
   async _reapply({ system, verified }) {
