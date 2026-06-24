@@ -802,7 +802,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
-    if (!best.view) return false // cannot fast-forward to a checkpoint with no view
+    if (!best.view) return false
 
     const view = this.bee.checkout({ key: best.view.key, length: best.view.end })
 
