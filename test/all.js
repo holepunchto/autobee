@@ -16,6 +16,7 @@ async function runTests() {
   await import('./perf.js')
   await import('./updates.js')
   await import('./view-consistency.js')
+  await import('./view-range.js')
   await import('./wakeup.js')
   await import('./writer-management.js')
 

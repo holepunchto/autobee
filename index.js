@@ -79,6 +79,11 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
 
+    this._localSystemStart = 0
+    this._localSystemLength = 0
+    this._localViewStart = 0
+    this._localViewLength = 0
+
     this._appending = []
     this._draining = null
 
@@ -137,6 +142,9 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.bee.ready()
     await this._bootingState
+
+    this._localSystemStart = this.system.bee.context.local.length
+    this._localViewStart = this._workingBee.context.local.length
 
     this.bumpSoon()
   }
@@ -685,6 +693,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
+    const local = batch[0].core === this.local
+
     const userBatch = []
     for (const node of batch) {
       this.system.addNode(node)
@@ -700,6 +710,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const changed = await this.system.flush(batch, this._workingBee)
+
+    if (local) {
+      this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
+      this._localViewLength = this._workingBee.context.local.length - this._localViewStart
+    }
 
     await this._storeBoot()
 
@@ -763,8 +778,24 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
-    // analyze is worth the trade off adding the view here also (technically not needed)
-    await this.writers.flushLocal(this._workingBee.head())
+    await this.writers.flushLocal({
+      flushes: this.system.flushes,
+      system: {
+        key: this.system.bee.context.local.key,
+        start: this._localSystemStart,
+        length: this._localSystemLength
+      },
+      view: {
+        key: this._workingBee.context.local.key,
+        start: this._localViewStart,
+        length: this._localViewLength
+      }
+    })
+
+    this._localSystemStart = this.system.bee.context.local.length
+    this._localSystemLength = 0
+    this._localViewStart = this._workingBee.context.local.length
+    this._localViewLength = 0
   }
 
   moveTo(head, tip) {
@@ -807,7 +838,10 @@ module.exports = class Autobee extends ReadyResource {
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
-    const view = this.bee.checkout(best.view)
+    const view = this.bee.checkout({
+      key: best.view.key,
+      length: best.view.start + best.view.length
+    })
 
     let trusted = null
     try {
@@ -819,13 +853,19 @@ module.exports = class Autobee extends ReadyResource {
 
     const oplog = await this._getOplog(trusted.key, trusted.length)
 
-    return this.moveTo(oplog.views.system, {
-      system: best.system,
-      verified: {
-        node: trusted,
-        flushes: oplog.views.flushes
+    return this.moveTo(
+      {
+        key: oplog.views.system.key,
+        length: oplog.views.system.start + oplog.views.system.length
+      },
+      {
+        system: { key: best.system.key, length: best.system.start + best.system.length },
+        verified: {
+          node: trusted,
+          flushes: oplog.views.flushes
+        }
       }
-    })
+    )
   }
 
   async _runFastForward(ff) {
