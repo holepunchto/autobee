@@ -19,6 +19,7 @@ const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const UpdateChanges = require('./lib/updates.js')
+const WriteBatch = require('./lib/write-batch.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
@@ -79,7 +80,7 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
 
-    this._lastViews = { system: 0, view: 0 }
+    this._localViews = null
 
     this._appending = []
     this._draining = null
@@ -284,9 +285,6 @@ module.exports = class Autobee extends ReadyResource {
 
     this._workingBee.move(view)
     this.bee.move(view)
-
-    // booted to the last checkpoint: next view batch starts where these heads are
-    this._lastViews = { system: system.length, view: view.length }
 
     await this.writers.updateLocalState()
 
@@ -605,7 +603,6 @@ module.exports = class Autobee extends ReadyResource {
 
     if (t.view) {
       this._workingBee.move(t.view)
-      this._lastViews = { system: t.undo.length, view: t.view.length }
     }
 
     let failed = true
@@ -653,7 +650,6 @@ module.exports = class Autobee extends ReadyResource {
 
     if (t.view) {
       this._workingBee.move(t.view)
-      this._lastViews = { system: t.undo.length, view: t.view.length }
     }
 
     return this._processApplyBatch(t)
@@ -671,6 +667,10 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
+    // track the view/system block range our own batch writes (for its oplog views)
+    const local = b4a.equals(batch[0].key, this.local.key)
+    const writeBatch = local ? new WriteBatch(this._workingBee, this.system.bee) : null
+
     const userBatch = []
     for (const node of batch) {
       this.system.addNode(node)
@@ -686,6 +686,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const changed = await this.system.flush(batch, this._workingBee)
+
+    if (writeBatch !== null) {
+      writeBatch.finalize()
+      this._localViews = writeBatch
+    }
 
     await this._storeBoot()
 
@@ -749,23 +754,19 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
-    if (!this.writers.localWriter.appending) return
+    let writeBatch = this._localViews
+    this._localViews = null
 
-    const sys = this.system.bee.head()
-    const view = this._workingBee.head()
+    if (writeBatch === null) {
+      writeBatch = new WriteBatch(this._workingBee, this.system.bee)
+      writeBatch.finalize()
+    }
 
-    const views = {
-      system: { key: sys.key, start: this._lastViews.system, end: sys.length },
+    await this.writers.flushLocal({
+      system: writeBatch.system,
       flushes: this.system.flushes,
-      view: view ? { key: view.key, start: this._lastViews.view, end: view.length } : null
-    }
-
-    await this.writers.flushLocal(views)
-
-    this._lastViews = {
-      system: sys.length,
-      view: view ? view.length : this._lastViews.view
-    }
+      view: writeBatch.view
+    })
   }
 
   moveTo(head, tip) {
@@ -802,7 +803,6 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
-    if (!best.view) return false
 
     const view = this.bee.checkout({ key: best.view.key, length: best.view.end })
 
@@ -860,9 +860,6 @@ module.exports = class Autobee extends ReadyResource {
 
     this.bee.move(this.system.view)
     this._workingBee.move(this.system.view)
-
-    // jumped to a new checkpoint: next view batch starts where these heads are
-    this._lastViews = { system: head.length, view: this.system.view.length }
 
     this.fastForwardTo = null
 
