@@ -19,7 +19,6 @@ const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const UpdateChanges = require('./lib/updates.js')
-const WriteBatch = require('./lib/write-batch.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
@@ -80,7 +79,10 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
 
-    this._localViews = null
+    this._localSystemStart = 0
+    this._localSystemLength = 0
+    this._localViewStart = 0
+    this._localViewLength = 0
 
     this._appending = []
     this._draining = null
@@ -668,7 +670,8 @@ module.exports = class Autobee extends ReadyResource {
 
   async _applyBatch(batch, optimistic) {
     const local = batch[0].core === this.local
-    const writeBatch = local ? new WriteBatch(this._workingBee, this.system.bee) : null
+    const localSystemStart = this.system.bee.context.local.length
+    const localViewStart = this._workingBee.context.local.length
 
     const userBatch = []
     for (const node of batch) {
@@ -686,9 +689,11 @@ module.exports = class Autobee extends ReadyResource {
 
     const changed = await this.system.flush(batch, this._workingBee)
 
-    if (writeBatch !== null) {
-      writeBatch.finalize()
-      this._localViews = writeBatch
+    if (local) {
+      this._localSystemStart = localSystemStart
+      this._localSystemLength = this.system.bee.context.local.length - localSystemStart
+      this._localViewStart = localViewStart
+      this._localViewLength = this._workingBee.context.local.length - localViewStart
     }
 
     await this._storeBoot()
@@ -753,18 +758,18 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
-    let writeBatch = this._localViews
-    this._localViews = null
-
-    if (writeBatch === null) {
-      writeBatch = new WriteBatch(this._workingBee, this.system.bee)
-      writeBatch.finalize()
-    }
-
     await this.writers.flushLocal({
       flushes: this.system.flushes,
-      system: writeBatch.system,
-      view: writeBatch.view
+      system: {
+        key: this.system.bee.context.local.key,
+        start: this._localSystemStart,
+        length: this._localSystemLength
+      },
+      view: {
+        key: this._workingBee.context.local.key,
+        start: this._localViewStart,
+        length: this._localViewLength
+      }
     })
   }
 
@@ -803,7 +808,10 @@ module.exports = class Autobee extends ReadyResource {
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
-    const view = this.bee.checkout({ key: best.view.key, length: WriteBatch.end(best.view) })
+    const view = this.bee.checkout({
+      key: best.view.key,
+      length: best.view.start + best.view.length
+    })
 
     let trusted = null
     try {
@@ -816,9 +824,12 @@ module.exports = class Autobee extends ReadyResource {
     const oplog = await this._getOplog(trusted.key, trusted.length)
 
     return this.moveTo(
-      { key: oplog.views.system.key, length: WriteBatch.end(oplog.views.system) },
       {
-        system: { key: best.system.key, length: WriteBatch.end(best.system) },
+        key: oplog.views.system.key,
+        length: oplog.views.system.start + oplog.views.system.length
+      },
+      {
+        system: { key: best.system.key, length: best.system.start + best.system.length },
         verified: {
           node: trusted,
           flushes: oplog.views.flushes
