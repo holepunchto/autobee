@@ -605,6 +605,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (t.view) {
       this._workingBee.move(t.view)
+      this._lastViews = { system: t.undo.length, view: t.view.length }
     }
 
     let failed = true
@@ -652,6 +653,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (t.view) {
       this._workingBee.move(t.view)
+      this._lastViews = { system: t.undo.length, view: t.view.length }
     }
 
     return this._processApplyBatch(t)
@@ -800,6 +802,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
+    if (!best.view) return false // cannot fast-forward to a checkpoint with no view
 
     const view = this.bee.checkout({ key: best.view.key, length: best.view.end })
 
