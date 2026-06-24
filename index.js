@@ -79,6 +79,8 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
 
+    this._lastViews = { system: 0, view: 0 }
+
     this._appending = []
     this._draining = null
 
@@ -282,6 +284,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this._workingBee.move(view)
     this.bee.move(view)
+
+    // booted to the last checkpoint: next view batch starts where these heads are
+    this._lastViews = { system: system.length, view: view.length }
 
     await this.writers.updateLocalState()
 
@@ -742,8 +747,23 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
-    // analyze is worth the trade off adding the view here also (technically not needed)
-    await this.writers.flushLocal(this._workingBee.head())
+    if (!this.writers.localWriter.appending) return
+
+    const sys = this.system.bee.head()
+    const view = this._workingBee.head()
+
+    const views = {
+      system: { key: sys.key, start: this._lastViews.system, end: sys.length },
+      flushes: this.system.flushes,
+      view: view ? { key: view.key, start: this._lastViews.view, end: view.length } : null
+    }
+
+    await this.writers.flushLocal(views)
+
+    this._lastViews = {
+      system: sys.length,
+      view: view ? view.length : this._lastViews.view
+    }
   }
 
   moveTo(head, tip) {
@@ -781,7 +801,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
-    const view = this.bee.checkout(best.view)
+    const view = this.bee.checkout({ key: best.view.key, length: best.view.end })
 
     let trusted = null
     try {
@@ -793,13 +813,16 @@ module.exports = class Autobee extends ReadyResource {
 
     const oplog = await this._getOplog(trusted.key, trusted.length)
 
-    return this.moveTo(oplog.views.system, {
-      system: best.system,
-      verified: {
-        node: trusted,
-        flushes: oplog.views.flushes
+    return this.moveTo(
+      { key: oplog.views.system.key, length: oplog.views.system.end },
+      {
+        system: { key: best.system.key, length: best.system.end },
+        verified: {
+          node: trusted,
+          flushes: oplog.views.flushes
+        }
       }
-    })
+    )
   }
 
   async _runFastForward(ff) {
@@ -834,6 +857,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this.bee.move(this.system.view)
     this._workingBee.move(this.system.view)
+
+    // jumped to a new checkpoint: next view batch starts where these heads are
+    this._lastViews = { system: head.length, view: this.system.view.length }
 
     this.fastForwardTo = null
 

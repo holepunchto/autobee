@@ -128,6 +128,28 @@ auto.register({
 })
 
 auto.register({
+  name: 'external-batch',
+  compact: true,
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'start',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'end',
+      type: 'uint',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'batch',
   compact: true,
   fields: [
@@ -150,7 +172,7 @@ auto.register({
   fields: [
     {
       name: 'system',
-      type: '@autobee/link',
+      type: '@autobee/external-batch',
       required: true
     },
     {
@@ -160,7 +182,7 @@ auto.register({
     },
     {
       name: 'view',
-      type: '@autobee/link',
+      type: '@autobee/external-batch',
       required: false
     }
   ]

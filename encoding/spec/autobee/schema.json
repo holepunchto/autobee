@@ -527,6 +527,32 @@
       ]
     },
     {
+      "name": "external-batch",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "start",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "end",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "batch",
       "namespace": "autobee",
       "compact": true,
@@ -555,7 +581,7 @@
         {
           "name": "system",
           "required": true,
-          "type": "@autobee/link",
+          "type": "@autobee/external-batch",
           "version": 1
         },
         {
@@ -567,7 +593,7 @@
         {
           "name": "view",
           "required": false,
-          "type": "@autobee/link",
+          "type": "@autobee/external-batch",
           "version": 1
         }
       ]
