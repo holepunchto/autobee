@@ -793,7 +793,9 @@ module.exports = class Autobee extends ReadyResource {
     })
 
     this._localSystemStart = this.system.bee.context.local.length
+    this._localSystemLength = 0
     this._localViewStart = this._workingBee.context.local.length
+    this._localViewLength = 0
   }
 
   moveTo(head, tip) {
