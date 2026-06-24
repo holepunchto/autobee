@@ -579,15 +579,15 @@
       "flagsPosition": 2,
       "fields": [
         {
-          "name": "system",
-          "required": true,
-          "type": "@autobee/external-batch",
-          "version": 1
-        },
-        {
           "name": "flushes",
           "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "system",
+          "required": true,
+          "type": "@autobee/external-batch",
           "version": 1
         },
         {

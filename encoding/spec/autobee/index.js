@@ -694,8 +694,8 @@ const encoding24 = {
 // @autobee/views
 const encoding25 = {
   preencode(state, m) {
-    encoding23.preencode(state, m.system)
     c.uint.preencode(state, m.flushes)
+    encoding23.preencode(state, m.system)
     state.end++ // flags are fixed size
 
     if (m.view) encoding23.preencode(state, m.view)
@@ -703,20 +703,20 @@ const encoding25 = {
   encode(state, m) {
     const flags = m.view ? 1 : 0
 
-    encoding23.encode(state, m.system)
     c.uint.encode(state, m.flushes)
+    encoding23.encode(state, m.system)
     c.uint8.encode(state, flags)
 
     if (m.view) encoding23.encode(state, m.view)
   },
   decode(state) {
-    const r0 = encoding23.decode(state)
-    const r1 = c.uint.decode(state)
+    const r0 = c.uint.decode(state)
+    const r1 = encoding23.decode(state)
     const flags = c.uint8.decode(state)
 
     return {
-      system: r0,
-      flushes: r1,
+      flushes: r0,
+      system: r1,
       view: (flags & 1) !== 0 ? encoding23.decode(state) : null
     }
   }
@@ -725,25 +725,25 @@ const encoding25 = {
 // @autobee/views (inline)
 const encoding25_inline = {
   preencode(state, m) {
-    encoding23.preencode(state, m.system)
     c.uint.preencode(state, m.flushes)
+    encoding23.preencode(state, m.system)
 
     if (m.view) encoding23.preencode(state, m.view)
   },
   encode(state, m) {
-    encoding23.encode(state, m.system)
     c.uint.encode(state, m.flushes)
+    encoding23.encode(state, m.system)
 
     if (m.view) encoding23.encode(state, m.view)
   },
   decode(state, inlining) {
-    const r0 = encoding23.decode(state)
-    const r1 = c.uint.decode(state)
+    const r0 = c.uint.decode(state)
+    const r1 = encoding23.decode(state)
     const flags = inlining
 
     return {
-      system: r0,
-      flushes: r1,
+      flushes: r0,
+      system: r1,
       view: (flags & 1) !== 0 ? encoding23.decode(state) : null
     }
   }

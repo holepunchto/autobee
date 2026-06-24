@@ -171,13 +171,13 @@ auto.register({
   compact: true,
   fields: [
     {
-      name: 'system',
-      type: '@autobee/external-batch',
+      name: 'flushes',
+      type: 'uint',
       required: true
     },
     {
-      name: 'flushes',
-      type: 'uint',
+      name: 'system',
+      type: '@autobee/external-batch',
       required: true
     },
     {

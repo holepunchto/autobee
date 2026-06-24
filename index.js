@@ -762,8 +762,8 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     await this.writers.flushLocal({
-      system: writeBatch.system,
       flushes: this.system.flushes,
+      system: writeBatch.system,
       view: writeBatch.view
     })
   }
