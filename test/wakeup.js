@@ -1,6 +1,8 @@
 const test = require('brittle')
+const Corestore = require('corestore')
 const { create, replicate, replicateAndSync, encode, same, decode, apply } = require('./helpers')
 const b4a = require('b4a')
+const encoding = require('../lib/encoding.js')
 
 test('wakeup - replication', async function (t) {
   const auto1 = await create(t)
@@ -86,10 +88,7 @@ test('wakeup - onwakeup', async function (t) {
   t.ok(wakeups.length > 0, 'wokeup')
   t.alike(wakeups[0], { hello: 'from auto2' })
 
-  t.ok(
-    b4a.isBuffer(heads[0].key) && heads[0].length > 0,
-    'onwakeup received head { key, length }'
-  )
+  t.ok(b4a.isBuffer(heads[0].key) && heads[0].length > 0, 'onwakeup received head { key, length }')
 
   function createOnWakeup() {
     return async function (head, view) {
@@ -195,9 +194,16 @@ test('wakeup - previous drain', async function (t) {
   await replicateAndSync(auto1, auto2, auto3)
 
   const previousDrain = auto3.previousDrain
+  const localKey = auto3.local.key
 
   await auto3.close()
-  auto3 = await create(t, auto1.key, { storage: dir })
 
-  t.is(auto3.previousDrain, previousDrain)
+  const store = new Corestore(dir, { manifestVersion: 2 })
+  t.teardown(() => store.close())
+
+  const local = store.get({ key: localKey })
+  await local.ready()
+
+  const buf = await local.getUserData('autobee/previous-drain')
+  t.is(encoding.decodePreviousDrain(buf), previousDrain)
 })

@@ -98,6 +98,7 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = false
     this._onErrorBound = this._onError.bind(this)
     this._bumpSoonBound = this.bumpSoon.bind(this)
+    this._onGroupUpdateBound = this._onGroupUpdate.bind(this)
 
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
@@ -269,7 +270,8 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       this._notifyHandler = this.store.notifyGroup(this.wakeupCapability.discoveryKey)
-      this._notifyHandler.on('update', this._bumpSoonBound)
+      this._notifyHandler.on('update', this._onGroupUpdateBound)
+      await this._drainBootHints()
     }
 
     const system = result.system || EMPTY_HEAD
@@ -405,15 +407,26 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _flushWakeup() {
-    const hints = this._wakeup.flush()
+  _onGroupUpdate({ key, length }) {
+    this._wakeup.hint({ key, length })
+    this.bumpSoon()
+  }
 
-    if (this._notifyHandler) {
-      for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
-        const hex = b4a.toString(key, 'hex')
-        hints.set(hex, -1)
+  async _drainBootHints() {
+    if (!this._notifyHandler) return
+    for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
+      const core = this.openCore(key)
+      try {
+        await core.ready()
+        this._wakeup.hint({ key, length: core.length })
+      } finally {
+        await core.close()
       }
     }
+  }
+
+  async _flushWakeup() {
+    const hints = this._wakeup.flush()
 
     this.previousDrain = Date.now()
     this.queueWakeupFastForward(hints).catch(noop)
@@ -421,11 +434,7 @@ module.exports = class Autobee extends ReadyResource {
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
       if (this.writers.has(hex)) continue
-      if (length !== -1) {
-        const info = await this.system.get(key)
-        if (info && length <= info.length) continue // stale hint
-      }
-      await this.writers.wakeup(key, length === -1 ? 0 : length)
+      await this.writers.wakeup(key, length)
     }
   }
 
@@ -446,7 +455,6 @@ module.exports = class Autobee extends ReadyResource {
     if (buf === null) return null
 
     const oplog = encoding.decodeOplog(buf)
-    oplog.length = target
     return oplog
   }
 
@@ -760,11 +768,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const promises = []
-    const keys = []
+    const heads = []
     for (const [hex, length] of hints) {
       if (length === 0) continue
       const key = b4a.from(hex, 'hex')
-      keys.push(key)
+      heads.push({ key, length })
       promises.push(this._getOplog(key, length))
     }
 
@@ -782,7 +790,7 @@ module.exports = class Autobee extends ReadyResource {
       if (msg.views && msg.views.flushes > bestFlushes) {
         bestFlushes = msg.views.flushes
         best = msg.views
-        bestHead = { key: keys[i], length: msg.length }
+        bestHead = heads[i]
       }
     }
 
