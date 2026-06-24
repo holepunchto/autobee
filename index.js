@@ -667,8 +667,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
-    // track the view/system block range our own batch writes (for its oplog views)
-    const local = b4a.equals(batch[0].key, this.local.key)
+    const local = batch[0].core === this.local
     const writeBatch = local ? new WriteBatch(this._workingBee, this.system.bee) : null
 
     const userBatch = []
