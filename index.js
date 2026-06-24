@@ -98,6 +98,7 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = false
     this._onErrorBound = this._onError.bind(this)
     this._bumpSoonBound = this.bumpSoon.bind(this)
+    this._onGroupUpdateBound = this._onGroupUpdate.bind(this)
 
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
@@ -269,7 +270,8 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       this._notifyHandler = this.store.notifyGroup(this.wakeupCapability.discoveryKey)
-      this._notifyHandler.on('update', this._bumpSoonBound)
+      this._notifyHandler.on('update', this._onGroupUpdateBound)
+      await this._drainBootHints()
     }
 
     const system = result.system || EMPTY_HEAD
@@ -405,15 +407,37 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  _onGroupUpdate({ key, length }) {
+    this._wakeup.hint({ key, length })
+    this.bumpSoon()
+  }
+
+  async _drainBootHints() {
+    if (!this._notifyHandler) return
+
+    const keys = []
+    for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
+      keys.push(key)
+    }
+    if (!keys.length) return
+
+    // read the lengths straight from storage in one batch instead of opening cores
+    const discoveryKeys = keys.map((key) => crypto.discoveryKey(key))
+    const infos = await this.store.storage.getInfos(discoveryKeys, {
+      auth: false,
+      head: true,
+      hints: false
+    })
+
+    for (let i = 0; i < keys.length; i++) {
+      const info = infos[i]
+      const length = info && info.head ? info.head.length : 0
+      this._wakeup.hint({ key: keys[i], length })
+    }
+  }
+
   async _flushWakeup() {
     const hints = this._wakeup.flush()
-
-    if (this._notifyHandler) {
-      for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
-        const hex = b4a.toString(key, 'hex')
-        hints.set(hex, -1)
-      }
-    }
 
     this.previousDrain = Date.now()
     this.queueWakeupFastForward(hints).catch(noop)
@@ -421,11 +445,7 @@ module.exports = class Autobee extends ReadyResource {
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
       if (this.writers.has(hex)) continue
-      if (length !== -1) {
-        const info = await this.system.get(key)
-        if (info && length <= info.length) continue // stale hint
-      }
-      await this.writers.wakeup(key, length === -1 ? 0 : length)
+      await this.writers.wakeup(key, length)
     }
   }
 
@@ -445,7 +465,8 @@ module.exports = class Autobee extends ReadyResource {
 
     if (buf === null) return null
 
-    return encoding.decodeOplog(buf)
+    const oplog = encoding.decodeOplog(buf)
+    return oplog
   }
 
   _update(changes) {
@@ -758,9 +779,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const promises = []
+    const heads = []
     for (const [hex, length] of hints) {
       if (length === 0) continue
       const key = b4a.from(hex, 'hex')
+      heads.push({ key, length })
       promises.push(this._getOplog(key, length))
     }
 
@@ -768,14 +791,17 @@ module.exports = class Autobee extends ReadyResource {
     if (this.fastForwarding || this.fastForwardTo) return false
 
     let best = null
+    let bestHead = null
     let bestFlushes = -1
 
-    for (const msg of ops) {
+    for (let i = 0; i < ops.length; i++) {
+      const msg = ops[i]
       if (msg === null) continue
 
       if (msg.views && msg.views.flushes > bestFlushes) {
         bestFlushes = msg.views.flushes
         best = msg.views
+        bestHead = heads[i]
       }
     }
 
@@ -785,7 +811,7 @@ module.exports = class Autobee extends ReadyResource {
 
     let trusted = null
     try {
-      trusted = await this._handlers.onwakeup(view, this)
+      trusted = await this._handlers.onwakeup(bestHead, view, this)
       if (!trusted || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
