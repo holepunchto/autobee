@@ -414,14 +414,25 @@ module.exports = class Autobee extends ReadyResource {
 
   async _drainBootHints() {
     if (!this._notifyHandler) return
+
+    const keys = []
     for await (const key of this._notifyHandler.updates({ since: this.previousDrain })) {
-      const core = this.openCore(key)
-      try {
-        await core.ready()
-        this._wakeup.hint({ key, length: core.length })
-      } finally {
-        await core.close()
-      }
+      keys.push(key)
+    }
+    if (!keys.length) return
+
+    // read the lengths straight from storage in one batch instead of opening cores
+    const discoveryKeys = keys.map((key) => crypto.discoveryKey(key))
+    const infos = await this.store.storage.getInfos(discoveryKeys, {
+      auth: false,
+      head: true,
+      hints: false
+    })
+
+    for (let i = 0; i < keys.length; i++) {
+      const info = infos[i]
+      const length = info && info.head ? info.head.length : 0
+      this._wakeup.hint({ key: keys[i], length })
     }
   }
 

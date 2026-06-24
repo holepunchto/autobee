@@ -207,3 +207,54 @@ test('wakeup - previous drain', async function (t) {
   const buf = await local.getUserData('autobee/previous-drain')
   t.is(encoding.decodePreviousDrain(buf), previousDrain)
 })
+
+test('wakeup - boot catch-up surfaces offline group updates', async function (t) {
+  const dir = await t.tmp()
+
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+  let auto3 = await create(t, auto1.key, { storage: dir })
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2, auto3)
+
+  await auto3.close()
+
+  // auto2 writes more while auto3 is offline
+  await auto2.append(encode({ a: 1 }))
+  await auto2.append(encode({ b: 2 }))
+  await auto2.append(encode({ foo: 'bar' }))
+  await replicateAndSync(auto1, auto2)
+
+  // Pull auto2's new blocks into auto3's storage via a plain store session — no autobee
+  // is draining, so this records group updates dated after auto3's previousDrain. These
+  // never fire a live 'update' event for auto3, so only the boot catch-up can surface them.
+  {
+    const store = new Corestore(dir, { manifestVersion: 2 })
+    await store.ready()
+    const done = replicate(auto1.store, store)
+    const core = store.get({ key: auto2.local.key })
+    await core.ready()
+    await core.download({ start: 0, end: auto2.local.length }).done()
+    await core.close()
+    await done()
+    await store.close()
+  }
+
+  // Reopen with NO live peers: convergence can only come from _drainBootHints replaying
+  // the offline group updates via _notifyHandler.updates({ since: previousDrain }), which
+  // wakes auto2's writer so the new node gets applied on drain.
+  auto3 = await create(t, auto1.key, { storage: dir })
+
+  let data = null
+  for (let i = 0; i < 40 && (!data || data.foo !== 'bar'); i++) {
+    await auto3.update()
+    await auto3.updated()
+    await new Promise((r) => setTimeout(r, 20))
+    const entry = await auto3.view.get(b4a.from('latest'))
+    data = entry && decode(entry.value)
+  }
+
+  t.alike(data, { foo: 'bar' }, 'auto3 converged via boot catch-up alone')
+})
