@@ -76,12 +76,13 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
-    this.fastForwardBoot = handlers.fastForwardTo || null
+    // system head to boot from: migrates or fast-forwards depending on its version
+    this.bootFrom = handlers.bootFrom || null
+
     this.fastForward = null
     this.fastForwarding = null
     this.fastForwardTo = null
 
-    this.migrateBoot = handlers.migrateBoot || null
     this.migrate = null
     this.migrating = null
     this.migrateTo = null
@@ -404,14 +405,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
-    if (this.migrateBoot) {
-      await this._initMigrate(this.migrateBoot)
-      this.migrateBoot = null
-    }
-
-    if (this.fastForwardBoot) {
-      this._initFastForward(this.fastForwardBoot)
-      this.fastForwardBoot = null
+    if (this.bootFrom) {
+      await this._initBoot(this.bootFrom)
+      this.bootFrom = null
     }
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
@@ -479,10 +475,6 @@ module.exports = class Autobee extends ReadyResource {
       }
       await this.writers.wakeup(key, length === -1 ? 0 : length)
     }
-  }
-
-  _initFastForward({ key, length }) {
-    this.moveTo({ key, length })
   }
 
   async _getOplog(key, length) {
@@ -848,77 +840,9 @@ module.exports = class Autobee extends ReadyResource {
     await this.writers.flushLocal(this._workingBee.head())
   }
 
-  moveTo(head, tip) {
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
-    return this._runFastForward(new FastForward(this, head, tip)).catch(noop)
-  }
-
-  async _forceMigrateFromHead(head) {
-    const node = await this._getOplog(head.key, head.length)
-    const system = node.node.views.system
-
-    if (await this._runMigration(new Migration(this, system, this.legacyViews))) return
-    return this.queueWakeupFastForward(new Map([[head.key, head.length]]), { force: true })
-  }
-
-  async _initMigrate(head) {
-    if (await this._runMigration(new Migration(this, head, this.legacyViews))) return
-    return this._initFastForward(head)
-  }
-
-  async _runMigration(migration) {
-    this.migration = migration
-
-    const result = await migration.run()
-    await migration.close()
-
-    if (this.migration === migration) this.migration = null
-
-    if (!result || result.version >= AUTOBEE_VERSION) {
-      return false
-    }
-
-    this.migrateTo = result
-    this.migrate = rrp()
-
-    this.bumpSoon()
-
-    return true
-  }
-
-  async _applyMigration(system, legacyViews) {
-    const changes = this._hasUpdate ? new UpdateChanges(this) : null
-
-    const info = this.migrateTo
-
-    // todo: update handler for migrate
-    const from = this.system.bee.head()
-    const to = info.system
-
-    this.system.bee.move(to)
-    await this.system.reset()
-
-    this.bee.move(info.view)
-    this._workingBee.move(info.view)
-
-    this.migrateTo = null
-
-    await this.writers.refresh()
-
-    await this.handlers.migrate(info.views)
-
-    if (changes) {
-      changes.finalise()
-      await this._handlers.update(this.view, changes)
-    }
-
-    this.emit('move-to', to, from)
-    return true
-  }
-
   async queueWakeupFastForward(hints, { force = false } = {}) {
     if (!this._handlers.onwakeup) return false
-    if (!hints.size || this.fastForwarding || this.fastForwardTo || this.fastForwardBoot) {
+    if (!hints.size || this.fastForwarding || this.fastForwardTo || this.bootFrom) {
       return false
     }
 
@@ -977,6 +901,50 @@ module.exports = class Autobee extends ReadyResource {
     })
   }
 
+  // same as moveTo except we don't return the final promise
+  async _initBoot(head, tip) {
+    // before fast-forwarding, check whether this head needs migrating instead
+    if (await this._runMigration(new Migration(this, head, this.legacyViews))) return true
+    if (await this._runFastForward(new FastForward(this, head, tip))) return true
+    return false
+  }
+
+  // head is a system head; migration takes precedence over fast-forward
+  async moveTo(head, tip) {
+    if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
+    if (this.migrateTo !== null || this.migrating !== null) return null
+
+    // before fast-forwarding, check whether this head needs migrating instead
+    if (await this._runMigration(new Migration(this, head, this.legacyViews))) {
+      return this.migrate.promise
+    }
+
+    if (await this._runFastForward(new FastForward(this, head, tip))) {
+      return this.fastForward.promise
+    }
+
+    return null
+  }
+
+  async _runMigration(migration) {
+    this.migrating = migration
+
+    const result = await migration.run()
+
+    if (this.migrating === migration) this.migrating = null
+
+    if (!result || result.version >= AUTOBEE_VERSION) {
+      return false
+    }
+
+    this.migrateTo = result
+    this.migrate = rrp()
+
+    this.bumpSoon()
+
+    return true
+  }
+
   async _runFastForward(ff) {
     this.fastForwarding = ff
 
@@ -985,14 +953,45 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.fastForwarding === ff) this.fastForwarding = null
 
-    if (!result) return null
+    if (!result) return false
 
     this.fastForwardTo = result
     this.fastForward = rrp()
 
     this.bumpSoon()
 
-    return this.fastForward.promise
+    return true
+  }
+
+  async _applyMigration(system, legacyViews) {
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+
+    const info = this.migrateTo
+
+    // todo: update handler for migrate
+    const from = this.system.bee.head()
+    const to = info.system
+
+    this.system.bee.move(to)
+    await this.system.reset()
+
+    this.bee.move(info.view)
+    this._workingBee.move(info.view)
+
+    this.migrateTo = null
+
+    await this.writers.refresh()
+
+    await this.handlers.migrate(info.views)
+
+    if (changes) {
+      changes.finalise()
+      await this._handlers.update(this.view, changes)
+    }
+
+    this.emit('move-to', to, from)
+    this.migrate.resolve({ to, from })
+    return true
   }
 
   async _applyFastForward() {
