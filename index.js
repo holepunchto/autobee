@@ -13,7 +13,7 @@ const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
 const encoding = require('./lib/encoding.js')
-const FastForward = require('./lib/fast-forward.js')
+const Reboot = require('./lib/reboot.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
@@ -77,9 +77,9 @@ module.exports = class Autobee extends ReadyResource {
     // system head to boot from: migrates or fast-forwards depending on its version
     this.bootFrom = handlers.bootFrom || null
 
-    this.fastForward = null
-    this.fastForwarding = null
-    this.fastForwardTo = null
+    this.reboot = null
+    this.rebooting = null
+    this.rebootTo = null
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -400,7 +400,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _drain() {
     if (this.bootFrom) {
-      await this._initBoot(this.bootFrom)
+      await this._initReboot(this.bootFrom)
       this.bootFrom = null
     }
 
@@ -418,8 +418,8 @@ module.exports = class Autobee extends ReadyResource {
 
       try {
         while (!this._interrupting) {
-          if (this.fastForwardTo !== null) {
-            await this._applyFastForward()
+          if (this.rebootTo !== null) {
+            await this._applyReboot()
             break // revaluate conditions...
           }
 
@@ -453,7 +453,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this.previousDrain = Date.now()
-    this.queueWakeupFastForward(hints).catch(noop)
+    this.queueWakeupReboot(hints).catch(noop)
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
@@ -829,9 +829,9 @@ module.exports = class Autobee extends ReadyResource {
     await this.writers.flushLocal(this._workingBee.head())
   }
 
-  async queueWakeupFastForward(hints, { force = false } = {}) {
+  async queueWakeupReboot(hints, { force = false } = {}) {
     if (!this._handlers.onwakeup) return false
-    if (!hints.size || this.fastForwarding || this.fastForwardTo || this.bootFrom) {
+    if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
       return false
     }
 
@@ -843,7 +843,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const ops = await Promise.all(promises)
-    if (this.fastForwarding || this.fastForwardTo) return false
+    if (this.rebooting || this.rebootTo) return false
 
     let best = null
     let bestFlushes = -1
@@ -874,7 +874,7 @@ module.exports = class Autobee extends ReadyResource {
     let trusted = null
     try {
       trusted = await this._handlers.onwakeup(view, this)
-      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
+      if (!trusted || this.rebooting || this.rebootTo) return false
     } finally {
       view.close()
     }
@@ -891,43 +891,43 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // same as moveTo except we don't return the final promise
-  _initBoot(head, tip) {
-    return this._runFastForward(new FastForward(this, head, tip))
+  _initReboot(head, tip) {
+    return this._runReboot(new Reboot(this, head, tip))
   }
 
-  // head is a system head; fast-forward migrates in place if it's a legacy version
+  // head is a system head; reboots onto it, migrating in place if it's a legacy version
   async moveTo(head, tip) {
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
+    if (this.rebootTo !== null || this.rebooting !== null) return null
 
-    if (await this._runFastForward(new FastForward(this, head, tip))) {
-      return this.fastForward.promise
+    if (await this._runReboot(new Reboot(this, head, tip))) {
+      return this.reboot.promise
     }
 
     return null
   }
 
-  async _runFastForward(ff) {
-    this.fastForwarding = ff
+  async _runReboot(reboot) {
+    this.rebooting = reboot
 
-    const result = await ff.upgrade()
-    await ff.close()
+    const result = await reboot.run()
+    await reboot.close()
 
-    if (this.fastForwarding === ff) this.fastForwarding = null
+    if (this.rebooting === reboot) this.rebooting = null
 
     if (!result) return false
 
-    this.fastForwardTo = result
-    this.fastForward = rrp()
+    this.rebootTo = result
+    this.reboot = rrp()
 
     this.bumpSoon()
 
     return true
   }
 
-  async _applyFastForward() {
+  async _applyReboot() {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
 
-    const { head, tip, migrate } = this.fastForwardTo
+    const { head, tip, migrate } = this.rebootTo
 
     const from = this.system.bee.head()
     const to = head
@@ -938,8 +938,8 @@ module.exports = class Autobee extends ReadyResource {
     this.bee.move(this.system.view)
     this._workingBee.move(this.system.view)
 
-    this.fastForwardTo = null
 
+    this.rebootTo = null
     await this.writers.refresh()
 
     // migrate is set when fast-forwarding from a legacy head
@@ -951,7 +951,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this.emit('move-to', to, from)
-    this.fastForward.resolve({ to, from })
+    this.reboot.resolve({ to, from })
 
     // tip is null during boot
     if (!tip) return
