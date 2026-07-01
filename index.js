@@ -13,7 +13,7 @@ const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
 const encoding = require('./lib/encoding.js')
-const { FastForward, FastForwardMigration } = require('./lib/fast-forward.js')
+const FastForward = require('./lib/fast-forward.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
@@ -891,21 +891,13 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // same as moveTo except we don't return the final promise
-  async _initBoot(head, tip) {
-    // a legacy head migrates, otherwise it fast-forwards
-    if (await this._runFastForward(new FastForwardMigration(this, head, this.legacyViews))) return true
-    if (await this._runFastForward(new FastForward(this, head, tip))) return true
-    return false
+  _initBoot(head, tip) {
+    return this._runFastForward(new FastForward(this, head, tip))
   }
 
-  // head is a system head; migration takes precedence over fast-forward
+  // head is a system head; fast-forward migrates in place if it's a legacy version
   async moveTo(head, tip) {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
-
-    // a legacy head migrates, otherwise it fast-forwards
-    if (await this._runFastForward(new FastForwardMigration(this, head, this.legacyViews))) {
-      return this.fastForward.promise
-    }
 
     if (await this._runFastForward(new FastForward(this, head, tip))) {
       return this.fastForward.promise
