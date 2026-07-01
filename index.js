@@ -453,7 +453,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this.previousDrain = Date.now()
-    this.queueWakeupReboot(hints).catch(noop)
+    this.queueReboot(hints).catch(noop)
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
@@ -829,14 +829,14 @@ module.exports = class Autobee extends ReadyResource {
     await this.writers.flushLocal(this._workingBee.head())
   }
 
-  async queueWakeupReboot(hints, { force = false } = {}) {
+  async queueReboot(heads, { force = false } = {}) {
     if (!this._handlers.onwakeup) return false
-    if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
+    if (!heads.size || this.rebooting || this.rebootTo || this.bootFrom) {
       return false
     }
 
     const promises = []
-    for (const [hex, length] of hints) {
+    for (const [hex, length] of heads) {
       if (length === 0) continue
       const key = b4a.from(hex, 'hex')
       promises.push(this._getOplog(key, length))
