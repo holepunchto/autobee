@@ -295,10 +295,14 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.system.boot(system)
 
+    // Use the view position from the system info (authoritative, post-processing)
+    // rather than from the oplog (stale, captured at append time before _bump)
+    let view = this.system.view || EMPTY_HEAD
+
     // @todo migration
     if (result.migration) {
       if (this.handlers.migrate) {
-        await this.handlers.migrate(result.migration.views)
+        view = (await this.handlers.migrate(result.migration.views)) || EMPTY_HEAD
         this._catchupMigratedNodes = result.migration.catchup
       }
 
@@ -312,10 +316,6 @@ module.exports = class Autobee extends ReadyResource {
         this.writers.wakeup(key, length)
       }
     }
-
-    // Use the view position from the system info (authoritative, post-processing)
-    // rather than from the oplog (stale, captured at append time before _bump)
-    const view = this.system.view || EMPTY_HEAD
 
     this._workingBee.move(view)
     this.bee.move(view)
@@ -935,15 +935,18 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    this.bee.move(this.system.view)
-    this._workingBee.move(this.system.view)
-
+    // migrate is set when fast-forwarding from a legacy head
+    if (migrate) {
+      const view = (await this.handlers.migrate(migrate)) || EMPTY_HEAD
+      this.bee.move(view)
+      this._workingBee.move(view)
+    } else {
+      this.bee.move(this.system.view)
+      this._workingBee.move(this.system.view)
+    }
 
     this.rebootTo = null
     await this.writers.refresh()
-
-    // migrate is set when fast-forwarding from a legacy head
-    if (migrate) await this.handlers.migrate(migrate)
 
     if (changes) {
       changes.finalise()
