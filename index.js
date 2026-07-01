@@ -12,10 +12,8 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
-const { AUTOBEE_VERSION } = require('./lib/constants.js')
 const encoding = require('./lib/encoding.js')
-const FastForward = require('./lib/fast-forward.js')
-const Migration = require('./lib/migration.js')
+const { FastForward, FastForwardMigration } = require('./lib/fast-forward.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
@@ -82,10 +80,6 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForward = null
     this.fastForwarding = null
     this.fastForwardTo = null
-
-    this.migrate = null
-    this.migrating = null
-    this.migrateTo = null
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -424,11 +418,6 @@ module.exports = class Autobee extends ReadyResource {
 
       try {
         while (!this._interrupting) {
-          if (this.migrateTo !== null) {
-            await this._applyMigration()
-            break // revaluate conditions...
-          }
-
           if (this.fastForwardTo !== null) {
             await this._applyFastForward()
             break // revaluate conditions...
@@ -903,8 +892,8 @@ module.exports = class Autobee extends ReadyResource {
 
   // same as moveTo except we don't return the final promise
   async _initBoot(head, tip) {
-    // before fast-forwarding, check whether this head needs migrating instead
-    if (await this._runMigration(new Migration(this, head, this.legacyViews))) return true
+    // a legacy head migrates, otherwise it fast-forwards
+    if (await this._runFastForward(new FastForwardMigration(this, head, this.legacyViews))) return true
     if (await this._runFastForward(new FastForward(this, head, tip))) return true
     return false
   }
@@ -912,11 +901,10 @@ module.exports = class Autobee extends ReadyResource {
   // head is a system head; migration takes precedence over fast-forward
   async moveTo(head, tip) {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
-    if (this.migrateTo !== null || this.migrating !== null) return null
 
-    // before fast-forwarding, check whether this head needs migrating instead
-    if (await this._runMigration(new Migration(this, head, this.legacyViews))) {
-      return this.migrate.promise
+    // a legacy head migrates, otherwise it fast-forwards
+    if (await this._runFastForward(new FastForwardMigration(this, head, this.legacyViews))) {
+      return this.fastForward.promise
     }
 
     if (await this._runFastForward(new FastForward(this, head, tip))) {
@@ -924,25 +912,6 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     return null
-  }
-
-  async _runMigration(migration) {
-    this.migrating = migration
-
-    const result = await migration.run()
-
-    if (this.migrating === migration) this.migrating = null
-
-    if (!result || result.version >= AUTOBEE_VERSION) {
-      return false
-    }
-
-    this.migrateTo = result
-    this.migrate = rrp()
-
-    this.bumpSoon()
-
-    return true
   }
 
   async _runFastForward(ff) {
@@ -963,41 +932,10 @@ module.exports = class Autobee extends ReadyResource {
     return true
   }
 
-  async _applyMigration(system, legacyViews) {
-    const changes = this._hasUpdate ? new UpdateChanges(this) : null
-
-    const info = this.migrateTo
-
-    // todo: update handler for migrate
-    const from = this.system.bee.head()
-    const to = info.system
-
-    this.system.bee.move(to)
-    await this.system.reset()
-
-    this.bee.move(info.view)
-    this._workingBee.move(info.view)
-
-    this.migrateTo = null
-
-    await this.writers.refresh()
-
-    await this.handlers.migrate(info.views)
-
-    if (changes) {
-      changes.finalise()
-      await this._handlers.update(this.view, changes)
-    }
-
-    this.emit('move-to', to, from)
-    this.migrate.resolve({ to, from })
-    return true
-  }
-
   async _applyFastForward() {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
 
-    const { head, tip } = this.fastForwardTo
+    const { head, tip, migrate } = this.fastForwardTo
 
     const from = this.system.bee.head()
     const to = head
@@ -1012,6 +950,9 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.writers.refresh()
 
+    // migrate is set when fast-forwarding from a legacy head
+    if (migrate) await this.handlers.migrate(migrate)
+
     if (changes) {
       changes.finalise()
       await this._handlers.update(this.view, changes)
@@ -1020,7 +961,7 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('move-to', to, from)
     this.fastForward.resolve({ to, from })
 
-    // tip is null when handlers.fastForward set
+    // tip is null during boot
     if (!tip) return
 
     return this._reapply(tip)
