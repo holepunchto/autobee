@@ -2,6 +2,8 @@ const test = require('brittle')
 const Corestore = require('corestore')
 const { create, replicate, replicateAndSync, encode, same, decode, apply } = require('./helpers')
 const b4a = require('b4a')
+const ProtomuxWakeup = require('protomux-wakeup')
+
 const encoding = require('../lib/encoding.js')
 
 test('wakeup - replication', async function (t) {
@@ -205,3 +207,68 @@ test('wakeup - previous drain', async function (t) {
   const buf = await local.getUserData('autobee/previous-drain')
   t.is(encoding.decodePreviousDrain(buf), previousDrain)
 })
+
+test('wakeup - handle malicious wakeup', async function (t) {
+  const auto1 = await create(t)
+  await auto1.append(encode({ hello: 'world' }))
+
+  // a peer that is not a real writer, wired up over raw protomux-wakeup, announcing
+  // a core filled with data that is not a valid oplog encoding
+  const attackerStore = new Corestore(await t.tmp(), { manifestVersion: 2 })
+  t.teardown(() => attackerStore.close())
+
+  const bogus = attackerStore.get({ name: 'bogus-writer' })
+  await bogus.ready()
+  await bogus.append([b4a.from('not a valid oplog entry'), b4a.from('still garbage')])
+
+  const s1 = auto1.replicate(false)
+  const s2 = attackerStore.replicate(true)
+
+  s1.pipe(s2).pipe(s1)
+  t.teardown(() => {
+    s1.destroy()
+    s2.destroy()
+  })
+
+  const attackerWakeup = new ProtomuxWakeup()
+  attackerWakeup.addStream(s2)
+
+  attackerWakeup.session(auto1.wakeupCapability.key, {
+    discoveryKey: auto1.wakeupCapability.discoveryKey,
+    onpeeractive(peer, session) {
+      session.announce(peer, [{ key: bogus.key, length: bogus.length }])
+    }
+  })
+
+  const id = b4a.toString(bogus.key, 'hex')
+
+  const writer = await new Promise((resolve) => {
+    auto1.on('writer', function onwriter(w) {
+      if (w.id !== id) return
+      auto1.off('writer', onwriter)
+      resolve(w)
+    })
+  })
+
+  await waitFor(() => writer.isFrozen)
+  t.ok(writer.isFrozen, 'writer is marked frozen after failing to decode bogus data')
+  t.absent(auto1.closing, 'autobase did not close itself over the bad writer data')
+
+  // autobase as a whole should still be fully functional afterwards
+  await auto1.append(encode({ still: 'alive' }))
+
+  const entry = await auto1.view.get(b4a.from('latest'))
+  t.alike(
+    decode(entry.value),
+    { still: 'alive' },
+    'autobase keeps processing writes after a bad writer'
+  )
+})
+
+async function waitFor(cond, timeout = 5000) {
+  const start = Date.now()
+  while (!cond()) {
+    if (Date.now() - start > timeout) throw new Error('timed out waiting for condition')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
