@@ -899,6 +899,7 @@ module.exports = class Autobee extends ReadyResource {
     if (this.rebooting || this.rebootTo) return false
 
     let best = null
+    let bestHead = null
     let bestFlushes = -1
 
     for (let i = 0; i < ops.length; i++) {
