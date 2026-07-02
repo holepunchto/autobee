@@ -258,6 +258,10 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  getMostRecentHead() {
+    return topo.getMostRecentHead(this, this.system.bee.snapshot())
+  }
+
   async _bootState() {
     if (!this._bootGuard.enter()) return this._bootGuard.ready()
 
@@ -410,7 +414,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _drain() {
     if (this.bootFrom) {
-      await this._initMoveTo(this.bootFrom)
+      await this._initFromHead(this.bootFrom)
       this.bootFrom = null
     }
 
@@ -912,7 +916,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (best && force) {
-      return this._rebootFromHead(best, null, true)
+      return this._rebootFromHead(best, null, { force: true })
     }
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
@@ -930,42 +934,53 @@ module.exports = class Autobee extends ReadyResource {
       view.close()
     }
 
-    return this._rebootFromHead(trusted, best, false)
+    return this._rebootFromHead(trusted, best)
   }
 
-  async _rebootFromHead(head, trusted, force) {
+  async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
     const oplog = await this._getOplog(head.key, head.length)
     if (!oplog) return false
 
     const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
 
+    if (!verified.op.views) return null
+
     if (!force && verified.op.views.flushes - this.system.flushes < MIN_FF_GAP) {
       return false
     }
 
-    return this._moveTo(batchToHead(verified.op.views.system), {
+    const moved = await this._moveTo(batchToHead(verified.op.views.system), {
       system: batchToHead(oplog.op.views.system),
       verified: {
         op: trusted || head,
         flushes: verified.op.views.flushes
       }
     })
+
+    if (moved && wait) return this.reboot.promise
+
+    return null
   }
 
   // same as moveTo except we don't return the final promise
-  _initMoveTo(head, tip) {
-    return this._runReboot(new Reboot(this, head, tip))
+  _initFromHead(head, tip) {
+    if (!head.length) {
+      // legacy fastForward boot
+      return this._runReboot(new Reboot(this, head, tip))
+    }
+
+    return this._rebootFromHead(head, null, { force: true, wait: false })
   }
 
   // head is a system head; reboots onto it, migrating in place if it's a legacy version
-  async _moveTo(head, tip) {
-    if (this.rebootTo !== null || this.rebooting !== null) return null
+  async _moveTo(systemHead, tip) {
+    if (this.rebootTo !== null || this.rebooting !== null) return false
 
-    if (await this._runReboot(new Reboot(this, head, tip))) {
-      return this.reboot.promise
+    if (await this._runReboot(new Reboot(this, systemHead, tip))) {
+      return true
     }
 
-    return null
+    return false
   }
 
   async _runReboot(reboot) {
