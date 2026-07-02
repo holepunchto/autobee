@@ -1,6 +1,6 @@
 {
   "name": "autobee",
-  "version": "1.0.8",
+  "version": "1.0.10",
   "description": "Bee based autobase",
   "license": "Apache-2.0",
   "author": "Holepunch Inc.",
@@ -24,11 +24,11 @@
   },
   "dependencies": {
     "autobee-encryption": "^0.1.2",
-    "autobee-wakeup": "^1.0.5",
+    "autobee-wakeup": "^1.1.3",
     "b4a": "^1.8.0",
     "compact-encoding": "^2.18.0",
-    "hyperbee2": "^2.8.0",
-    "hypercore": "^11.33.0",
+    "hyperbee2": "^2.10.3",
+    "hypercore": "^11.33.2",
     "hypercore-id-encoding": "^1.3.0",
     "hyperschema": "^1.20.1",
     "ready-guard": "^1.0.0",
@@ -38,7 +38,7 @@
   },
   "devDependencies": {
     "brittle": "^3.19.1",
-    "corestore": "^7.10.0",
+    "corestore": "^7.11.0",
     "hypercore-crypto": "^3.6.1",
     "lunte": "^1.6.0",
     "prettier": "^3.8.1",
