@@ -5,7 +5,7 @@ const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const rrp = require('resolve-reject-promise')
-const { AutobeeEncryption, WriterEncryption } = require('autobee-encryption')
+const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('autobee-encryption')
 const AutobeeWakeup = require('autobee-wakeup')
 const Hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
@@ -13,7 +13,7 @@ const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
 const encoding = require('./lib/encoding.js')
-const FastForward = require('./lib/fast-forward.js')
+const Reboot = require('./lib/reboot.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
@@ -33,10 +33,12 @@ module.exports = class Autobee extends ReadyResource {
       key = null
     }
 
-    const { name = null, encrypted, encryptionKey } = handlers
+    const { name = null, encrypted, encryptionKey, viewName = 'view' } = handlers
 
     this.encrypted = encrypted === true || !!encryptionKey
-    this._getEncryptionProviderBound = this._getEncryptionProvider.bind(this)
+
+    this.getSystemEncryption = this._getEncryptionProvider.bind(this, '_system')
+    this.getViewEncryption = this._getEncryptionProvider.bind(this, viewName)
 
     const bee = new Hyperbee(store.namespace('view'), {
       // defer one tick to ensure consistent state, then return state prom
@@ -44,7 +46,7 @@ module.exports = class Autobee extends ReadyResource {
         await 1
         if (!this._bootGuard.opened) await this._bootGuard.ready()
       },
-      getEncryptionProvider: this._getEncryptionProviderBound
+      getEncryptionProvider: this.getViewEncryption
     })
 
     this.store = store
@@ -53,9 +55,10 @@ module.exports = class Autobee extends ReadyResource {
     this.discoveryKey = null
     this.id = null
     this.bootstrap = null
+    this.handlers = handlers
 
     this.system = new System(this.store.namespace('system'), this.name, {
-      getEncryptionProvider: this._getEncryptionProviderBound,
+      getEncryptionProvider: this.getSystemEncryption,
       encrypted: this.encrypted
     })
 
@@ -71,10 +74,12 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
-    this.fastForwardBoot = handlers.fastForward || null
-    this.fastForward = null
-    this.fastForwarding = null
-    this.fastForwardTo = null
+    // system head to boot from: migrates or fast-forwards depending on its version
+    this.bootFrom = handlers.bootFrom || null
+
+    this.reboot = null
+    this.rebooting = null
+    this.rebootTo = null
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -86,6 +91,8 @@ module.exports = class Autobee extends ReadyResource {
 
     this._appending = []
     this._draining = null
+
+    this.legacyViews = handlers.legacyViews || []
 
     this._bootGuard = new ReadyGuard()
     this._bootingState = null
@@ -108,6 +115,8 @@ module.exports = class Autobee extends ReadyResource {
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
     this.previousDrain = 0
+
+    this._catchupMigratedNodes = null
 
     this.ready().catch(noop)
   }
@@ -171,14 +180,23 @@ module.exports = class Autobee extends ReadyResource {
     return w.views()
   }
 
+  static getViewEncryption(bootstrap, encryptionKey, name) {
+    return AutobeeEncryption.getViewEncryption(bootstrap, encryptionKey, name)
+  }
+
   views() {
     const sys = this.system.bee.context.local
     const view = this._workingBee.context.local
 
+    // todo: figure out why blind-peer doesn't mirror core
+    // without adding it to mirror request here
+    const head = this.system.bee.head()
+
     // signedLength for autobase compat
     return [
       { key: sys.key, length: sys.length, signedLength: sys.length },
-      { key: view.key, length: view.length, signedLength: view.length }
+      { key: view.key, length: view.length, signedLength: view.length },
+      { key: head.key, length: head.length, signedLength: head.length }
     ]
   }
 
@@ -220,8 +238,9 @@ module.exports = class Autobee extends ReadyResource {
     return this.store.get({ key, encryption })
   }
 
-  _getEncryptionProvider() {
+  _getEncryptionProvider(view) {
     if (!this.encrypted) return null
+    if (view) return new ViewEncryption(this, view)
     return new WriterEncryption(this)
   }
 
@@ -239,10 +258,14 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  getMostRecentHead() {
+    return topo.getMostRecentHead(this, this.system.bee.snapshot())
+  }
+
   async _bootState() {
     if (!this._bootGuard.enter()) return this._bootGuard.ready()
 
-    const result = await boot(this.store, this.key, {
+    const result = await boot(this.store, this.key, this.legacyViews, {
       encryptionKey: this.encryptionKey,
       keyPair: this.keyPair
     })
@@ -288,7 +311,25 @@ module.exports = class Autobee extends ReadyResource {
 
     // Use the view position from the system info (authoritative, post-processing)
     // rather than from the oplog (stale, captured at append time before _bump)
-    const view = this.system.view || EMPTY_HEAD
+    let view = this.system.view || EMPTY_HEAD
+
+    // @todo migration
+    if (result.migration) {
+      if (this.handlers.migrate) {
+        view = (await this.handlers.migrate(result.migration.views)) || EMPTY_HEAD
+        this._catchupMigratedNodes = result.migration.catchup
+      }
+
+      // clear legacy data
+      await this.bootstrap.setUserData('autobase/local', null)
+      await this.local.setUserData('autobase/boot', null)
+      await this.local.setUserData('autobase/encryption', null)
+
+      for (const batch of result.migration.catchup) {
+        const { key, length } = batch[batch.length - 1]
+        this.writers.wakeup(key, length)
+      }
+    }
 
     this._workingBee.move(view)
     this.bee.move(view)
@@ -372,9 +413,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
-    if (this.fastForwardBoot) {
-      this._initFastForward(this.fastForwardBoot)
-      this.fastForwardBoot = null
+    if (this.bootFrom) {
+      await this._initFromHead(this.bootFrom)
+      this.bootFrom = null
     }
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
@@ -391,8 +432,8 @@ module.exports = class Autobee extends ReadyResource {
 
       try {
         while (!this._interrupting) {
-          if (this.fastForwardTo !== null) {
-            await this._applyFastForward()
+          if (this.rebootTo !== null) {
+            await this._applyReboot()
             break // revaluate conditions...
           }
 
@@ -448,17 +489,13 @@ module.exports = class Autobee extends ReadyResource {
     const hints = this._wakeup.flush()
 
     this.previousDrain = Date.now()
-    this.queueWakeupFastForward(hints).catch(noop)
+    this.rebootFromHeads(hints).catch(noop)
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
       if (this.writers.has(hex)) continue
       await this.writers.wakeup(key, length)
     }
-  }
-
-  _initFastForward({ key, length }) {
-    this.moveTo({ key, length })
   }
 
   async _getOplog(key, length) {
@@ -469,6 +506,12 @@ module.exports = class Autobee extends ReadyResource {
     if (target === 0) return null
 
     const buf = await core.get(target - 1)
+    let op = encoding.decodeOplog(buf)
+
+    if (op.version < 3) {
+      op = await this._inflateLegacyOplog(buf, core, target - 1)
+    }
+
     await core.close()
 
     if (buf === null) return null
@@ -476,7 +519,36 @@ module.exports = class Autobee extends ReadyResource {
     return {
       key,
       length: target,
-      op: encoding.decodeOplog(buf)
+      op
+    }
+  }
+
+  async _inflateLegacyOplog(buf, core, seq) {
+    const m = encoding.decodeRawOplog(buf)
+    const fetches = []
+
+    fetches.push(m.digest.pointer ? core.get(seq - m.digest.pointer) : buf)
+    fetches.push(m.checkpoint.pointer ? core.get(seq - m.checkpoint.system.checkpointer) : buf)
+
+    const [digestNode, checkpointNode] = await Promise.all(fetches)
+
+    const { digest } = encoding.decodeRawOplog(digestNode)
+    const { checkpoint } = encoding.decodeRawOplog(checkpointNode)
+
+    return {
+      version: m.version,
+      timestamp: 0,
+      links: m.node.heads,
+      batch: { start: 0, end: m.node.batch - 1 },
+      views: {
+        system: {
+          key: digest.key,
+          length: checkpoint.system.checkpoint.length
+        },
+        flushes: seq
+      },
+      optimistic: !!m.optimistic,
+      value: m.node.value
     }
   }
 
@@ -530,10 +602,10 @@ module.exports = class Autobee extends ReadyResource {
 
     this.local.setUserData('referrer', this.key)
     if (this.encryptionKey) {
-      await this.local.setUserData('autobase/encryption', this.encryptionKey)
+      await this.local.setUserData('autobee/encryption', this.encryptionKey)
     }
 
-    await this.bootstrap.setUserData('autobase/local', this.local.key)
+    await this.bootstrap.setUserData('autobee/local', this.local.key)
     await oldLocal.close()
 
     // done, soft reboot
@@ -592,7 +664,18 @@ module.exports = class Autobee extends ReadyResource {
     return anchor
   }
 
+  async _bumpMigratedWriters() {
+    for (const batch of this._catchupMigratedNodes) {
+      await this._processBatch(batch)
+    }
+  }
+
   async _bumpPendingWriters() {
+    if (this._catchupMigratedNodes !== null) {
+      await this._bumpMigratedWriters()
+      this._catchupMigratedNodes = null
+    }
+
     let updated = false
 
     const pending = this.writers.pending.slice()
@@ -801,14 +884,9 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  moveTo(head, tip) {
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) return null
-    return this._runFastForward(new FastForward(this, head, tip)).catch(noop)
-  }
-
-  async queueWakeupFastForward(hints) {
+  async rebootFromHeads(hints, { force = false } = {}) {
     if (!this._handlers.onwakeup) return false
-    if (!hints.size || this.fastForwarding || this.fastForwardTo || this.fastForwardBoot) {
+    if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
       return false
     }
 
@@ -822,84 +900,111 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const ops = await Promise.all(promises)
-    if (this.fastForwarding || this.fastForwardTo) return false
+    if (this.rebooting || this.rebootTo) return false
 
     let best = null
-    let bestHead = null
     let bestFlushes = -1
 
     for (let i = 0; i < ops.length; i++) {
       const res = ops[i]
       if (res === null) continue
 
-      const { op } = res
-      if (op.views && op.views.flushes > bestFlushes) {
-        bestFlushes = op.views.flushes
-        best = op.views
-        bestHead = heads[i]
+      if (res.op.views && res.op.views.flushes > bestFlushes) {
+        bestFlushes = res.op.views.flushes
+        best = res
       }
+    }
+
+    if (best && force) {
+      return this._rebootFromHead(best, null, { force: true })
     }
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
-    const view = this.bee.checkout({
-      key: best.view.key,
-      length: best.view.start + best.view.length
-    })
+    const head = { key: best.key, length: best.length }
+
+    const v = best.op.views.view
+    const view = this.bee.checkout({ key: v.key, length: v.start + v.length })
 
     let trusted = null
     try {
-      trusted = await this._handlers.onwakeup(bestHead, view, this)
-      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
+      trusted = await this._handlers.onwakeup(head, view, this)
+      if (!trusted || this.rebooting || this.rebootTo) return false
     } finally {
       view.close()
     }
 
-    const oplog = await this._getOplog(trusted.key, trusted.length)
-    if (!oplog) return false
-
-    const { op } = oplog
-
-    if (op.views.flushes - this.system.flushes < MIN_FF_GAP) return false
-
-    return this.moveTo(
-      {
-        key: op.views.system.key,
-        length: op.views.system.start + op.views.system.length
-      },
-      {
-        system: { key: best.system.key, length: best.system.start + best.system.length },
-        verified: {
-          node: oplog,
-          flushes: op.views.flushes
-        }
-      }
-    )
+    return this._rebootFromHead(best, trusted)
   }
 
-  async _runFastForward(ff) {
-    this.fastForwarding = ff
+  async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
+    const oplog = await this._getOplog(head.key, head.length)
+    if (!oplog) return false
 
-    const result = await ff.upgrade()
-    await ff.close()
+    const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
 
-    if (this.fastForwarding === ff) this.fastForwarding = null
+    if (!verified.op.views) return null
 
-    if (!result) return null
+    if (!force && verified.op.views.flushes - this.system.flushes < MIN_FF_GAP) {
+      return false
+    }
 
-    this.fastForwardTo = result
-    this.fastForward = rrp()
+    const moved = await this._moveTo(batchToHead(verified.op.views.system), {
+      system: batchToHead(oplog.op.views.system),
+      verified: {
+        op: trusted || head,
+        flushes: verified.op.views.flushes
+      }
+    })
+
+    if (moved && wait) return this.reboot.promise
+
+    return null
+  }
+
+  // same as moveTo except we don't return the final promise
+  _initFromHead(head, tip) {
+    if (!head.length) {
+      // legacy fastForward boot
+      return this._runReboot(new Reboot(this, head, tip))
+    }
+
+    return this._rebootFromHead(head, null, { force: true, wait: false })
+  }
+
+  // head is a system head; reboots onto it, migrating in place if it's a legacy version
+  async _moveTo(systemHead, tip) {
+    if (this.rebootTo !== null || this.rebooting !== null) return false
+
+    if (await this._runReboot(new Reboot(this, systemHead, tip))) {
+      return true
+    }
+
+    return false
+  }
+
+  async _runReboot(reboot) {
+    this.rebooting = reboot
+
+    const result = await reboot.run()
+    await reboot.close()
+
+    if (this.rebooting === reboot) this.rebooting = null
+
+    if (!result) return false
+
+    this.rebootTo = result
+    this.reboot = rrp()
 
     this.bumpSoon()
 
-    return this.fastForward.promise
+    return true
   }
 
-  async _applyFastForward() {
+  async _applyReboot() {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
-    if (changes) changes.track(this._applyState)
 
-    const { head, tip } = this.fastForwardTo
+    const { head, tip, migrate } = this.rebootTo
 
     const from = this.system.bee.head()
     const to = head
@@ -907,11 +1012,17 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    this.bee.move(this.system.view)
-    this._workingBee.move(this.system.view)
+    // migrate is set when fast-forwarding from a legacy head
+    if (migrate) {
+      const view = (await this.handlers.migrate(migrate)) || EMPTY_HEAD
+      this.bee.move(view)
+      this._workingBee.move(view)
+    } else {
+      this.bee.move(this.system.view)
+      this._workingBee.move(this.system.view)
+    }
 
-    this.fastForwardTo = null
-
+    this.rebootTo = null
     await this.writers.refresh()
 
     if (changes) {
@@ -919,13 +1030,11 @@ module.exports = class Autobee extends ReadyResource {
       await this._handlers.update(this.view, changes)
     }
 
-    this.fastForward.resolve({ to, from })
+    this.emit('move-to', to, from)
+    this.reboot.resolve({ to, from })
 
-    // tip is null when handlers.fastForward set
-    if (!tip) {
-      this.emit('move-to', to, from)
-      return
-    }
+    // tip is null during boot
+    if (!tip) return
 
     try {
       await this._reapply(tip)
@@ -942,6 +1051,10 @@ module.exports = class Autobee extends ReadyResource {
     await sys.close()
 
     return this._processApplyBatch(t)
+  }
+
+  replay() {
+    return topo.replay(this)
   }
 }
 
@@ -976,4 +1089,11 @@ function crashSoon(err) {
     throw err
   })
   throw err
+}
+
+function batchToHead(b) {
+  return {
+    key: b.key,
+    length: b.start + b.length
+  }
 }

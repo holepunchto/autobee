@@ -215,6 +215,7 @@ const OplogMessageV1 = {
     throw new Error('Encoding not supported')
   },
   decode(state) {
+    c.uint.decode(state) // version
     const maxSupportedVersion = c.uint.decode(state)
 
     const flags = c.uint.decode(state)
@@ -245,6 +246,7 @@ const OplogMessageV0 = {
     throw new Error('Encoding not supported')
   },
   decode(state) {
+    c.uint.decode(state) // version
     const flags = c.uint.decode(state)
 
     const isCheckpointer = (flags & 1) !== 0
@@ -288,13 +290,12 @@ const SystemWriterV0 = {
 function infoLegacyMap(info) {
   return {
     version: info.version,
-    members: info.members,
-    pendingIndexers: info.pendingIndexers,
-    indexers: info.indexers,
-    heads: info.heads,
+    timestamp: 0,
+    flushes: 0,
+    view: null,
     views: info.views,
-    encryptionLength: 0,
-    entropy: null
+    heads: info.heads,
+    indexers: info.indexers
   }
 }
 
