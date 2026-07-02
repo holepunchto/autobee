@@ -131,6 +131,10 @@ module.exports = class Autobee extends ReadyResource {
     return this.writers
   }
 
+  get core() {
+    return this.system.bee.core
+  }
+
   async _open() {
     await this._preBoot()
 
