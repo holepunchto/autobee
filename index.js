@@ -934,7 +934,7 @@ module.exports = class Autobee extends ReadyResource {
       view.close()
     }
 
-    return this._rebootFromHead(trusted, best)
+    return this._rebootFromHead(best, trusted)
   }
 
   async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
