@@ -410,7 +410,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _drain() {
     if (this.bootFrom) {
-      await this._initReboot(this.bootFrom)
+      await this._initMoveTo(this.bootFrom)
       this.bootFrom = null
     }
 
@@ -485,7 +485,7 @@ module.exports = class Autobee extends ReadyResource {
     const hints = this._wakeup.flush()
 
     this.previousDrain = Date.now()
-    this.queueReboot(hints).catch(noop)
+    this.rebootFromHeads(hints).catch(noop)
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
@@ -880,7 +880,7 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  async queueReboot(hints, { force = false } = {}) {
+  async rebootFromHeads(hints, { force = false } = {}) {
     if (!this._handlers.onwakeup) return false
     if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
       return false
@@ -912,13 +912,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (best && force) {
-      return this.moveTo(batchToHead(best.op.views.system), {
-        system: batchToHead(best.op.views.system),
-        verified: {
-          op: best,
-          flushes: best.op.views.flushes
-        }
-      })
+      return this._rebootFromHead(best, null, true)
     }
 
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
@@ -936,29 +930,35 @@ module.exports = class Autobee extends ReadyResource {
       view.close()
     }
 
-    const oplog = await this._getOplog(trusted.key, trusted.length)
+    return this._rebootFromHead(trusted, best, false)
+  }
+
+  async _rebootFromHead(head, trusted, force) {
+    const oplog = await this._getOplog(head.key, head.length)
     if (!oplog) return false
 
-    const { views } = oplog.op
+    const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
 
-    if (views.flushes - this.system.flushes < MIN_FF_GAP) return false
+    if (!force && verified.op.views.flushes - this.system.flushes < MIN_FF_GAP) {
+      return false
+    }
 
-    return this.moveTo(batchToHead(views.system), {
-      system: batchToHead(best.op.views.system),
+    return this._moveTo(batchToHead(verified.op.views.system), {
+      system: batchToHead(oplog.op.views.system),
       verified: {
-        op: trusted,
-        flushes: oplog.op.views.flushes
+        op: trusted || head,
+        flushes: verified.op.views.flushes
       }
     })
   }
 
   // same as moveTo except we don't return the final promise
-  _initReboot(head, tip) {
+  _initMoveTo(head, tip) {
     return this._runReboot(new Reboot(this, head, tip))
   }
 
   // head is a system head; reboots onto it, migrating in place if it's a legacy version
-  async moveTo(head, tip) {
+  async _moveTo(head, tip) {
     if (this.rebootTo !== null || this.rebooting !== null) return null
 
     if (await this._runReboot(new Reboot(this, head, tip))) {
