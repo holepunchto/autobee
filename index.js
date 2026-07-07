@@ -785,8 +785,8 @@ module.exports = class Autobee extends ReadyResource {
     for (const node of batch) {
       this.system.addNode(node)
 
-      // compat: autobase nodes may be null
-      if (node.value) userBatch.push(node)
+      // compat: autobase nodes may be null (legacy null decodes to 0-length buffer)
+      if (node.value && node.value.length) userBatch.push(node)
     }
 
     if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
