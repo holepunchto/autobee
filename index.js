@@ -1038,18 +1038,19 @@ module.exports = class Autobee extends ReadyResource {
 
     try {
       await this._reapply(tip)
-      this.emit('move-to', this._workingBee.head(), from)
     } catch (err) {
-      this.emit('move-to', to, from)
       throw err
     }
   }
 
   async _reapply({ system, verified }) {
+    const changes = this._hasUpdate ? new UpdateChanges(this) : null
+
     const sys = this.system.bee.checkout(system)
     const t = await topo.rollback(this, sys, verified)
     await sys.close()
 
+    await this._update(changes)
     return this._processApplyBatch(t)
   }
 
