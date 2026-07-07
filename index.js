@@ -452,7 +452,7 @@ module.exports = class Autobee extends ReadyResource {
     if (this._interrupting) return
 
     if (this._needsUpdate) {
-      this._update(changes)
+      await this._update(changes)
     }
   }
 
@@ -552,14 +552,14 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  _update(changes) {
+  async _update(changes) {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
 
     if (!changes) return
 
     changes.finalise()
-    this._handlers.update(this.view, changes)
+    await this._handlers.update(this.view, changes)
   }
 
   async setLocal(key, { keyPair } = {}) {
