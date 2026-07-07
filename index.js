@@ -1050,8 +1050,8 @@ module.exports = class Autobee extends ReadyResource {
     const t = await topo.rollback(this, sys, verified)
     await sys.close()
 
-    await this._update(changes)
-    return this._processApplyBatch(t)
+    await this._processApplyBatch(t)
+    return this._update(changes)
   }
 
   replay() {
