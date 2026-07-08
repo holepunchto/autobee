@@ -795,7 +795,7 @@ module.exports = class Autobee extends ReadyResource {
       this._host.applying = null
     }
 
-    const changed = await this.system.flush(batch, this._workingBee)
+    const changed = await this.system.flush(batch, this._workingBee, batch[0].weight)
 
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart

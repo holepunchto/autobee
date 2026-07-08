@@ -428,6 +428,11 @@
           "array": true,
           "type": "@autobee/link",
           "version": 1
+        },
+        {
+          "name": "weight",
+          "type": "int",
+          "version": 1
         }
       ]
     },
