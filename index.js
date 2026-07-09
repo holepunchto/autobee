@@ -744,9 +744,9 @@ module.exports = class Autobee extends ReadyResource {
     const node = batch[0]
     node.weight = await this.system.ackedWeight(node.key)
 
-    if (topo.isLinkingAll(node, this.system.heads)) {
-      return { undo: null, view: null, tip: [batch] }
-    }
+    // if (topo.isLinkingAll(node, this.system.heads)) {
+    //   return { undo: null, view: null, tip: [batch] }
+    // }
 
     const t = await topo.sort(this, batch)
 
