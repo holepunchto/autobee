@@ -742,7 +742,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async prepareBatch(batch) {
     const node = batch[0]
-    node.weight = await this.system.weight(node.key)
+    node.weight = await this.system.ackedWeight(node.key)
 
     if (topo.isLinkingAll(node, this.system.heads)) {
       return { undo: null, view: null, tip: [batch] }

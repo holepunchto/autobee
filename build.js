@@ -83,6 +83,11 @@ auto.register({
       required: true
     },
     {
+      name: 'ackedWeight',
+      type: 'uint',
+      required: true
+    },
+    {
       name: 'length',
       type: 'uint',
       required: true

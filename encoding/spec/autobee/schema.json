@@ -477,6 +477,12 @@
           "version": 1
         },
         {
+          "name": "ackedWeight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
           "name": "length",
           "required": true,
           "type": "uint",
