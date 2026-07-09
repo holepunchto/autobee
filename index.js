@@ -734,9 +734,8 @@ module.exports = class Autobee extends ReadyResource {
       return false
     }
 
-    for (let i = 1; i < t.tip.length; i++) {
-      await this._applyBatch(t.tip[i], t.tip[i][0].optimistic)
-    }
+    const rest = t.tip.slice(1)
+    if (rest.length) await this.applyBacklog(rest)
 
     return true
   }
@@ -757,25 +756,31 @@ module.exports = class Autobee extends ReadyResource {
     return t
   }
 
-  async _processBatch(batch) {
-    const t = await this.prepareBatch(batch)
+  async applyBacklog(batches) {
+    const queue = batches.slice()
+    let iters = 0
 
-    if (t.view) {
-      this._workingBee.move(t.view)
+    while (queue.length) {
+      const batch = queue.shift()
+      const t = await this.prepareBatch(batch)
+
+      if (t.view) {
+        this._workingBee.move(t.view)
+        queue.unshift(...t.tip)
+        continue
+      }
+
+      // first writer is always added with full permissions
+      if (this.system.isGenesis()) {
+        await this._host.addWriter(batch[0].key)
+      }
+
+      await this._applyBatch(batch, batch[0].optimistic)
     }
-
-    return this._processApplyBatch(t)
   }
 
-  async _processApplyBatch(t) {
-    // first writer is always added with full permissions
-    if (this.system.isGenesis()) {
-      await this._host.addWriter(t.tip[0][0].key)
-    }
-
-    for (let i = 0; i < t.tip.length; i++) {
-      await this._applyBatch(t.tip[i], t.tip[i][0].optimistic)
-    }
+  async _processBatch(batch) {
+    await this.applyBacklog([batch])
   }
 
   async _applyBatch(batch, optimistic) {
@@ -1047,7 +1052,7 @@ module.exports = class Autobee extends ReadyResource {
     const t = await topo.rollback(this, sys, verified)
     await sys.close()
 
-    await this._processApplyBatch(t)
+    await this.applyBacklog(t.tip)
     return this._update(changes)
   }
 
