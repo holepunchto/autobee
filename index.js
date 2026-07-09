@@ -742,6 +742,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async prepareBatch(batch) {
     const node = batch[0]
+    node.weight = await this.system.weight(node.key)
 
     if (topo.isLinkingAll(node, this.system.heads)) {
       return { undo: null, view: null, tip: [batch] }
@@ -800,7 +801,7 @@ module.exports = class Autobee extends ReadyResource {
       this._host.applying = null
     }
 
-    const changed = await this.system.flush(batch, this._workingBee, batch[0].weight)
+    const changed = await this.system.flush(batch, this._workingBee)
 
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
