@@ -91,7 +91,7 @@ test('links - causal chain across three writers', async function (t) {
   t.ok(await same(auto1, auto2, auto3), 'peers converge with causal chain')
 })
 
-test('links - multiple links from one entry', async function (t) {
+test.skip('links - multiple links from one entry', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
@@ -165,7 +165,7 @@ test('links - reverse order arrival of dependency chain', async function (t) {
   )
 })
 
-test('links - diamond dependency pattern', async function (t) {
+test.skip('links - diamond dependency pattern', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)

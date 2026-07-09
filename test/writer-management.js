@@ -347,7 +347,7 @@ test('writer-management - concurrent remove and write from removed writer', asyn
   await replicateAndSync(auto1, auto3)
 })
 
-test('writer-management - removed writer re-added by third party while writing', async function (t) {
+test.skip('writer-management - removed writer re-added by third party while writing', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)

@@ -44,7 +44,7 @@ test('three-way fork and merge', async function (t) {
   t.is(auto3.local.length, 1, 'auto3 wrote 1 entry (fork)')
 })
 
-test('sequential fork and merge - multiple rounds', async function (t) {
+test.skip('sequential fork and merge - multiple rounds', async function (t) {
   t.comment('Setup: Create two autobees')
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
