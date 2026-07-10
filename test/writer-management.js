@@ -279,7 +279,7 @@ test('writer-management - indexer flag', async function (t) {
 
   t.ok(writerInfo, 'writer info exists')
   // Check if isIndexer flag is present and has expected value
-  t.is(writerInfo.weight, 2, 'weight has been updated')
+  t.is(writerInfo.maxWeight, 2, 'weight has been updated')
 })
 
 test('writer-management - concurrent remove and write from removed writer', async function (t) {
@@ -347,7 +347,10 @@ test('writer-management - concurrent remove and write from removed writer', asyn
   await replicateAndSync(auto1, auto3)
 })
 
-test.skip('writer-management - removed writer re-added by third party while writing', async function (t) {
+// Previously hung (non-productive undo requeue loop after auto2's post-re-add write).
+// Fixed by the addSorted index/undo shared-prefix detection + per-node immutable
+// weight claims (lib/claims.js).
+test('writer-management - removed writer re-added by third party while writing', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
@@ -406,7 +409,7 @@ test('writer-management - oplog flag', async function (t) {
   t.ok(localWriterInfo, 'local writer is stored in system bee after writing')
   t.ok(typeof localWriterInfo.isOplog === 'boolean', 'local writer isOplog is a boolean')
   t.ok(localWriterInfo.isOplog, 'local writer is marked as the current oplog (last writer)')
-  t.is(localWriterInfo.weight, 2, 'local writer is marked as indexer')
+  t.is(localWriterInfo.maxWeight, 2, 'local writer is marked as indexer')
   t.absent(localWriterInfo.isRemoved, 'local writer is not removed')
 })
 

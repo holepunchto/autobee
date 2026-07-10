@@ -91,7 +91,11 @@ test('links - causal chain across three writers', async function (t) {
   t.ok(await same(auto1, auto2, auto3), 'peers converge with causal chain')
 })
 
-test.skip('links - multiple links from one entry', async function (t) {
+// Previously hung (non-productive undo requeue loop), then diverged (concurrent
+// equal-weight entries placed differently per peer due to insert-time register
+// sampling). Both fixed: addSorted index/undo shared-prefix detection ends the loop,
+// per-node immutable weight claims (lib/claims.js) make the placement deterministic.
+test('links - multiple links from one entry', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
@@ -99,6 +103,7 @@ test.skip('links - multiple links from one entry', async function (t) {
   await auto1.append(encode({ addWriter: auto2.local.id }))
   await auto1.append(encode({ addWriter: auto3.local.id }))
   await replicateAndSync(auto1, auto2, auto3)
+  t.ok(await same(auto1, auto2, auto3), 'peers converge with multiple links')
 
   // auto2 and auto3 both write concurrently
   await auto2.append(encode({ msg: 'from-auto2' }))
@@ -165,7 +170,10 @@ test('links - reverse order arrival of dependency chain', async function (t) {
   )
 })
 
-test.skip('links - diamond dependency pattern', async function (t) {
+// Previously hung (non-productive undo requeue loop on the diamond-tip node linking
+// both branches). Fixed by the addSorted index/undo shared-prefix detection + per-node
+// immutable weight claims (lib/claims.js).
+test('links - diamond dependency pattern', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)

@@ -44,7 +44,13 @@ test('three-way fork and merge', async function (t) {
   t.is(auto3.local.length, 1, 'auto3 wrote 1 entry (fork)')
 })
 
-test.skip('sequential fork and merge - multiple rounds', async function (t) {
+// Previously hung with the isLinkingAll fast path disabled: sort() kept deciding a
+// non-productive undo for a node linking a lighter entry, and applyBacklog requeued it
+// forever. Fixed by the addSorted index/undo shared-prefix detection (a reorder that
+// reproduces the same positions is a no-op) plus per-node immutable weight claims
+// (lib/claims.js) removing the stale-weight inputs that caused the repositioning
+// disagreements in the first place.
+test('sequential fork and merge - multiple rounds', async function (t) {
   t.comment('Setup: Create two autobees')
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)

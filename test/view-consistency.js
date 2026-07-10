@@ -154,7 +154,12 @@ test('view - deterministic winner for conflicting key writes', async function (t
   t.alike(node1.value, node2.value, 'both peers see same winner for conflicting key')
 })
 
-test.skip('view - multiple undo-redo cycles produce correct final state', async function (t) {
+// Previously hung (non-productive undo requeue loop), and once the loop was fixed it
+// still diverged: concurrent equal-weight entries were placed using register-sampled
+// weights that differed by peer at insert time and were never revisited. Both fixed:
+// addSorted index/undo shared-prefix detection ends the loop, per-node immutable
+// weight claims (lib/claims.js) make placement a deterministic function of the prefix.
+test('view - multiple undo-redo cycles produce correct final state', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
@@ -296,7 +301,10 @@ test('view - restart converges with peers after undo-redo', async function (t) {
   t.ok(await same(auto1b, auto2), 'peers converge after post-restart write')
 })
 
-test.skip('view - four peers staggered sync all converge', async function (t) {
+// Previously hung (non-productive undo requeue loop under staggered sync). Fixed by
+// the addSorted index/undo shared-prefix detection + per-node immutable weight claims
+// (lib/claims.js).
+test('view - four peers staggered sync all converge', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
