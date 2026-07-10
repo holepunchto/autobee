@@ -40,9 +40,6 @@ point a fresh claim at the confirming grant's flush directly.
   weight-3 grant in a genesis-2 world resolves at 2 forever.
 - No retroactivity: nodes written before backing arrived keep their
   at-the-time resolved weight permanently.
-- Removal/re-add at a LOWER weight collides with the claim-floor freeze: the
-  re-added writer's new (lower) claims would freeze it. Tests only re-add at
-  equal weight; define the intended semantics before this happens in anger.
 - Claim-less (legacy) blocks resolve at the writer's previous resolved
   weight, i.e. 0 for old data - no migration story yet.
 - Offline append while genuinely under-backed: findBacker probes time out
