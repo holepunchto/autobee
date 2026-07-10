@@ -477,7 +477,7 @@
           "version": 1
         },
         {
-          "name": "ackedWeight",
+          "name": "maxWeight",
           "required": true,
           "type": "uint",
           "version": 1
@@ -492,6 +492,11 @@
           "name": "clock",
           "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "referrer",
+          "type": "@autobee/link",
           "version": 1
         }
       ]
@@ -605,6 +610,30 @@
       ]
     },
     {
+      "name": "claim",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "referrer",
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "backer",
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "oplog-message-v3",
       "namespace": "autobee",
       "compact": false,
@@ -642,6 +671,11 @@
         {
           "name": "value",
           "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "claim",
+          "type": "@autobee/claim",
           "version": 1
         }
       ]

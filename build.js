@@ -78,12 +78,14 @@ auto.register({
       required: true
     },
     {
+      // resolved sort weight of the writer's last applied node
       name: 'weight',
       type: 'uint',
       required: true
     },
     {
-      name: 'ackedWeight',
+      // granted capability - written only by grant ops
+      name: 'maxWeight',
       type: 'uint',
       required: true
     },
@@ -96,6 +98,12 @@ auto.register({
       name: 'clock',
       type: 'uint',
       required: true
+    },
+    {
+      // node whose application carried the grant - must be deterministic
+      // (system bees stay byte-identical across peers)
+      name: 'referrer',
+      type: '@autobee/link'
     }
   ]
 })
@@ -193,6 +201,27 @@ auto.register({
   ]
 })
 
+// immutable weight claim: referrer carried the backing grant, backer is a
+// third-party corroborator - both gate like links and floor the ordering
+auto.register({
+  name: 'claim',
+  fields: [
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'referrer',
+      type: '@autobee/link'
+    },
+    {
+      name: 'backer',
+      type: '@autobee/link'
+    }
+  ]
+})
+
 auto.register({
   name: 'oplog-message-v3',
   fields: [
@@ -223,6 +252,10 @@ auto.register({
     {
       name: 'value',
       type: 'buffer'
+    },
+    {
+      name: 'claim',
+      type: '@autobee/claim'
     }
   ]
 })
