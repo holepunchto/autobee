@@ -37,8 +37,12 @@ const { create, replicate, sync, encode } = require('./helpers')
 // this, that surfaces as an opaque top-level crash instead of a normal,
 // attributable test failure.
 let asyncError = null
-process.on('uncaughtException', (err) => { asyncError = err })
-process.on('unhandledRejection', (err) => { asyncError = err })
+process.on('uncaughtException', (err) => {
+  asyncError = err
+})
+process.on('unhandledRejection', (err) => {
+  asyncError = err
+})
 
 function throwIfAsyncError() {
   if (!asyncError) return
@@ -72,7 +76,9 @@ test('fuzz - random writer weights, optimistic self-adds, eventual consistency',
   // full-mesh replicate+sync rounds get slower as the writer pool grows, and
   // this is meant to be scaled way up via env vars - give it room accordingly
   t.timeout(Math.max(30000, STEPS * 500))
-  t.comment(`seed=${SEED} steps=${STEPS} maxWriters=${MAX_WRITERS} syncEvery=${SYNC_EVERY} maxWeight=${MAX_WEIGHT}`)
+  t.comment(
+    `seed=${SEED} steps=${STEPS} maxWriters=${MAX_WRITERS} syncEvery=${SYNC_EVERY} maxWeight=${MAX_WEIGHT}`
+  )
 
   const rng = makeRng(SEED)
 
@@ -263,7 +269,9 @@ async function syncRound(state) {
 
     await Promise.all(
       writable.map((w) =>
-        w.auto.wakeup({ key: entry.auto.local.key, length: entry.auto.local.length }).catch(() => {})
+        w.auto
+          .wakeup({ key: entry.auto.local.key, length: entry.auto.local.length })
+          .catch(() => {})
       )
     )
   }
@@ -330,7 +338,9 @@ function compareReplay(t, a, b) {
     }
   }
 
-  const lines = [`${a.name} and ${b.name} diverge in replay() order at index ${k} (of ${refsA.length}/${refsB.length})`]
+  const lines = [
+    `${a.name} and ${b.name} diverge in replay() order at index ${k} (of ${refsA.length}/${refsB.length})`
+  ]
   lines.push(`  common prefix [0, ${k}) identical in order: yes`)
 
   if (prefixWeightMismatch !== null) {
