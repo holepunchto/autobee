@@ -13,7 +13,7 @@ const { create, replicate, sync, encode } = require('./helpers')
 // interleaving, so removal is left out for now.
 
 // A minimized, always-on regression test for the bug this fuzzer originally
-// found lives in test/writer-weight-race.js - see .repro-scratch/ (untracked)
+// found lives in test/generated.js - see .repro-scratch/ (untracked)
 // for the seed-search + delta-debugging tooling that produced it, if a
 // future failure here needs the same treatment.
 //
@@ -107,7 +107,7 @@ test('fuzz - random writer weights, optimistic self-adds, eventual consistency',
     { name: 'addWriterByPeer', weight: 3, run: addWriterByPeer },
     { name: 'changeWeight', weight: 3, run: changeWeight },
     { name: 'optimisticSelfAdd', weight: 3, run: optimisticSelfAdd },
-    // deliberately hunts for the writer-weight-race.js pattern: two distinct
+    // deliberately hunts for the generated.js pattern: two distinct
     // granters concurrently grant a common target conflicting weights,
     // rather than waiting for addWriterByPeer/changeWeight to land on it by
     // chance (seed search over the plain random mix only found it ~18% of
@@ -211,7 +211,7 @@ async function optimisticSelfAdd(state) {
 
 // Two distinct granters concurrently grant a common target conflicting
 // weights, back to back, before either syncs with the other. This is the
-// exact shape test/writer-weight-race.js isolates: system.js's
+// exact shape test/generated.js isolates: system.js's
 // _updateWriter() re-stamps a writer's weight from each peer's own current
 // system.bee state whenever that writer's length advances, so which grant
 // "wins" depends on the peers' own arrival order and they can permanently

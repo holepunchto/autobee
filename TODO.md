@@ -21,9 +21,9 @@ point a fresh claim at the confirming grant's flush directly.
 
 ## Cleanup before landing the claims work
 
-- test/debug.js, test/fuzz.js and test/writer-weight-race.js are untracked -
-  add them to git, and decide whether test/all.js should include them
-  (fuzz.js uses a RANDOM seed by default - pin a seed or keep it out of CI).
+- test/fuzz.js is untracked - add it to git, and decide whether test/all.js
+  should include it (it uses a RANDOM seed by default - pin a seed or keep
+  it out of CI).
 - Promote the scenario repros in .repro-scratch/ (verify-one-hop,
   verify-selfgrant-capped, verify-causal-ack) into a proper test/claims.js -
   the claim machinery currently has no dedicated test file.
