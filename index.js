@@ -12,6 +12,7 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
+const claims = require('./lib/claims.js')
 const encoding = require('./lib/encoding.js')
 const Reboot = require('./lib/reboot.js')
 const System = require('./lib/system.js')
@@ -61,6 +62,7 @@ module.exports = class Autobee extends ReadyResource {
       getEncryptionProvider: this.getSystemEncryption,
       encrypted: this.encrypted
     })
+    this.system.auto = this
 
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
@@ -742,7 +744,9 @@ module.exports = class Autobee extends ReadyResource {
 
   async prepareBatch(batch) {
     const node = batch[0]
-    node.weight = await this.system.ackedWeight(node.key)
+    // recomputed on every application, converges because prefixes converge
+    node.weight = await claims.resolveWeight(this, node)
+    for (const n of batch) n.weight = node.weight
 
     // if (topo.isLinkingAll(node, this.system.heads)) {
     //   return { undo: null, view: null, tip: [batch] }
@@ -759,7 +763,6 @@ module.exports = class Autobee extends ReadyResource {
 
   async applyBacklog(batches) {
     const queue = batches.slice()
-    let iters = 0
 
     while (queue.length) {
       const batch = queue.shift()
@@ -858,11 +861,43 @@ module.exports = class Autobee extends ReadyResource {
     const t = Date.now()
     const batch = []
 
+    // nothing is stored for claims: the steady-state backer is our own
+    // previous claim, fresh candidates are derived on demand
+    const rec = await this.system.get(this.local.key)
+    let claim = null
+    if (rec && rec.maxWeight > 0) {
+      const prev = await this.writers.localWriter.latestClaim()
+      claim = {
+        weight: rec.maxWeight,
+        referrer: rec.referrer,
+        backer: prev ? prev.backer : null
+      }
+
+      if (rec.maxWeight > rec.weight) {
+        const probe = { key: this.local.key, length: this.writers.localWriter.appendLength }
+
+        // decide from local reads whether hunting is needed at all - an
+        // offline append must not probe foreign cores
+        const have = await claims.availableWeight(this, probe, claim)
+        if (have < rec.maxWeight) {
+          const backer = await claims.findBacker(this, probe, claim)
+          if (backer) claim.backer = backer
+        }
+      }
+    }
+
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
       const buffer = typeof value === 'string' ? b4a.from(value) : value
       const lnk = i === 0 ? links : []
-      const node = this.writers.appendLocal(buffer, t, null, lnk, optimistic)
+      const node = this.writers.appendLocal(
+        buffer,
+        t,
+        null,
+        lnk,
+        optimistic,
+        i === 0 ? claim : null
+      )
       batch.push(node)
     }
 
