@@ -351,6 +351,7 @@ module.exports = class Autobee extends ReadyResource {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
 
     for await (const node of this.system.list()) {
+      if (node.isAnchor) continue
       await this.writers.add(node.key)
     }
     await this._bump()
@@ -618,11 +619,18 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('rotate-local-writer')
   }
 
-  async createAnchor() {
-    const node = this._host.applying[this._host.applying.length - 1]
+  async createAnchor(key, length) {
+    let node = null
+    for (let i = this._host.applying.length - 1; i >= 0; i--) {
+      const n = this._host.applying[i]
+      if (b4a.equals(n.key, key) && n.length === length) {
+        node = n
+        break
+      }
+    }
 
-    const key = node.key
-    const length = node.length
+    if (!node) throw new Error('Anchor node is not in system')
+
     const legacy = node.version <= 2
 
     const info = await this.system.get(key, { unflushed: true })
@@ -821,7 +829,11 @@ module.exports = class Autobee extends ReadyResource {
     await this._storeBoot()
 
     for (const { key, added, isAnchor } of changed) {
-      if (isAnchor) continue // anchors are deterministic and local-only, no gating needed
+      if (isAnchor) {
+        // no Writer/ActiveWriters tracking, but still wake anything linked to it
+        this.writers.triggers.trigger(b4a.toString(key, 'hex'), 1)
+        continue
+      }
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }

@@ -157,7 +157,7 @@ test('basic - anchor', async function (t) {
       const data = decode(node.value)
 
       if (data.anchor) {
-        const anchor = await host.createAnchor(data.addWriter)
+        const anchor = await host.createAnchor(node.key, node.length)
         t.ok(anchor.key)
         t.ok(anchor.length)
       }
