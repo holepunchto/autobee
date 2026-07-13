@@ -661,7 +661,7 @@ module.exports = class Autobee extends ReadyResource {
       await core.append(block, { writable: true, maxLength: 1 })
     }
 
-    await this.system.addWriter(core.key, { weight: 1 })
+    await this.system.addAnchor(core.key)
 
     const anchor = { key: core.key, length: core.length }
 
@@ -740,6 +740,8 @@ module.exports = class Autobee extends ReadyResource {
         return false
       }
     }
+
+    return true
   }
 
   async prepareBatch(batch) {
@@ -818,7 +820,8 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._storeBoot()
 
-    for (const { key, added } of changed) {
+    for (const { key, added, isAnchor } of changed) {
+      if (isAnchor) continue // anchors are deterministic and local-only, no gating needed
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }

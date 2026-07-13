@@ -498,6 +498,12 @@
           "name": "referrer",
           "type": "@autobee/link",
           "version": 1
+        },
+        {
+          "name": "isAnchor",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },

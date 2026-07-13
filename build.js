@@ -104,6 +104,11 @@ auto.register({
       // (system bees stay byte-identical across peers)
       name: 'referrer',
       type: '@autobee/link'
+    },
+    {
+      name: 'isAnchor',
+      type: 'bool',
+      required: true
     }
   ]
 })

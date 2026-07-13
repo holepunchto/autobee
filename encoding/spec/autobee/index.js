@@ -557,7 +557,7 @@ const encoding19 = {
 // @autobee/system-writer-v4
 const encoding20 = {
   preencode(state, m) {
-    state.end++ // max flag is 4 so always one byte
+    state.end++ // max flag is 8 so always one byte
     c.uint.preencode(state, m.weight)
     c.uint.preencode(state, m.maxWeight)
     c.uint.preencode(state, m.length)
@@ -566,7 +566,8 @@ const encoding20 = {
     if (m.referrer) encoding22.preencode(state, m.referrer)
   },
   encode(state, m) {
-    const flags = (m.isRemoved ? 1 : 0) | (m.isOplog ? 2 : 0) | (m.referrer ? 4 : 0)
+    const flags =
+      (m.isRemoved ? 1 : 0) | (m.isOplog ? 2 : 0) | (m.referrer ? 4 : 0) | (m.isAnchor ? 8 : 0)
 
     c.uint.encode(state, flags)
     c.uint.encode(state, m.weight)
@@ -588,7 +589,8 @@ const encoding20 = {
       maxWeight: c.uint.decode(state),
       length: c.uint.decode(state),
       clock: c.uint.decode(state),
-      referrer: (flags & 4) !== 0 ? encoding22.decode(state) : null
+      referrer: (flags & 4) !== 0 ? encoding22.decode(state) : null,
+      isAnchor: (flags & 8) !== 0
     }
   }
 }
