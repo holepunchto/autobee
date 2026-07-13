@@ -142,6 +142,10 @@ module.exports = class Autobee extends ReadyResource {
     return this.writers
   }
 
+  get flushes() {
+    return this.system.flushes
+  }
+
   async _open() {
     await this._preBoot()
 
@@ -714,32 +718,28 @@ module.exports = class Autobee extends ReadyResource {
     const rollbackView = this._workingBee.head()
 
     const t = await this.prepareBatch(batch)
+    if (t.view) this._workingBee.move(t.view)
 
-    if (t.view) {
-      this._workingBee.move(t.view)
-    }
+    for (const b of t.tip) {
+      let failed = true
+      try {
+        if (await this.system.canApply(b[0].key, true)) {
+          await this._applyBatch(b, true)
+          failed = false
+        }
+      } catch {}
 
-    let failed = true
+      // only check if batch was successful
+      if (b !== batch) continue
 
-    try {
-      if (await this.system.canApply(batch[0].key, true)) {
-        await this._applyBatch(batch, true)
-        failed = false
+      const w = failed ? null : await this.system.get(b[0].key)
+      if (!w || w.length < b[0].length) {
+        this._workingBee.move(rollbackView)
+        this.system.bee.move(rollbackSystem)
+        await this.system.reset()
+        return false
       }
-    } catch {}
-
-    const w = failed ? null : await this.system.get(batch[0].key)
-    if (!w || w.length < batch[0].length) {
-      this._workingBee.move(rollbackView)
-      this.system.bee.move(rollbackSystem)
-      await this.system.reset()
-      return false
     }
-
-    const rest = t.tip.slice(1)
-    if (rest.length) await this.applyBacklog(rest)
-
-    return true
   }
 
   async prepareBatch(batch) {
@@ -780,6 +780,11 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       await this._applyBatch(batch, batch[0].optimistic)
+
+      this.writers.triggers.trigger(
+        b4a.toString(batch[0].key, 'hex'),
+        batch[batch.length - 1].length
+      )
     }
   }
 
