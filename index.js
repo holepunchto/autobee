@@ -428,6 +428,9 @@ module.exports = class Autobee extends ReadyResource {
       this.bootFrom = null
     }
 
+    // tracked across drain iteration
+    this.system.shared = null
+
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
@@ -1074,6 +1077,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _applyReboot() {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
 
     const { head, tip, migrate } = this.rebootTo
 
@@ -1082,6 +1086,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this.system.bee.move(head)
     await this.system.reset()
+
+    // todo: binary search to find shared common tree and pass as undo
+    this.system.shared = { flushes: -1, view: EMPTY_HEAD, system: EMPTY_HEAD }
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
@@ -1113,6 +1120,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _reapply({ system, verified }) {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
 
     const sys = this.system.bee.checkout(system)
     const t = await topo.rollback(this, sys, verified)
