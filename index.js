@@ -320,6 +320,9 @@ module.exports = class Autobee extends ReadyResource {
         this._catchupMigratedNodes = result.migration.catchup
       }
 
+      // ff boot invalidated by migration
+      this.bootFrom = null
+
       // clear legacy data
       await this.bootstrap.setUserData('autobase/local', null)
       await this.local.setUserData('autobase/boot', null)
