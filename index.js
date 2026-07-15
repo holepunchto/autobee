@@ -225,6 +225,13 @@ module.exports = class Autobee extends ReadyResource {
     } catch {}
   }
 
+  async changesFrom({ flushes, view }) {
+    const update = await this.system.changesFrom({ flushes, view })
+    if (update === null) return null // up to date
+
+    return UpdateChanges.from(update.shared, update.current)
+  }
+
   replicate(...args) {
     const stream = this.store.replicate(...args)
     this._wakeup.addStream(stream)
