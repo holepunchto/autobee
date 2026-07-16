@@ -738,6 +738,7 @@ module.exports = class Autobee extends ReadyResource {
   async _optimisticBatch(batch) {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
+    const rollbackShared = this.system.shared
 
     const t = await this.prepareBatch(batch)
     if (t.view) this._workingBee.move(t.view)
@@ -759,6 +760,7 @@ module.exports = class Autobee extends ReadyResource {
         this._workingBee.move(rollbackView)
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
+        this.system.shared = rollbackShared
         return false
       }
     }
