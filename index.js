@@ -225,6 +225,13 @@ module.exports = class Autobee extends ReadyResource {
     } catch {}
   }
 
+  async changesFrom({ flushes, view }) {
+    const update = await this.system.changesFrom({ flushes, view })
+    if (update === null) return null // up to date
+
+    return UpdateChanges.from(update.shared, update.current)
+  }
+
   replicate(...args) {
     const stream = this.store.replicate(...args)
     this._wakeup.addStream(stream)
@@ -427,6 +434,9 @@ module.exports = class Autobee extends ReadyResource {
       await this._initFromHead(this.bootFrom)
       this.bootFrom = null
     }
+
+    // tracked across drain iteration
+    this.system.shared = null
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
@@ -728,6 +738,7 @@ module.exports = class Autobee extends ReadyResource {
   async _optimisticBatch(batch) {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
+    const rollbackShared = this.system.shared
 
     const t = await this.prepareBatch(batch)
     if (t.view) this._workingBee.move(t.view)
@@ -749,6 +760,7 @@ module.exports = class Autobee extends ReadyResource {
         this._workingBee.move(rollbackView)
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
+        this.system.shared = rollbackShared
         return false
       }
     }
@@ -1074,6 +1086,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _applyReboot() {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
 
     const { head, tip, migrate } = this.rebootTo
 
@@ -1082,6 +1095,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this.system.bee.move(head)
     await this.system.reset()
+
+    // todo: binary search to find shared common tree and pass as undo
+    this.system.shared = { flushes: -1, view: EMPTY_HEAD, system: EMPTY_HEAD }
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
@@ -1113,6 +1129,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _reapply({ system, verified }) {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
+    if (changes) changes.track()
 
     const sys = this.system.bee.checkout(system)
     const t = await topo.rollback(this, sys, verified)
