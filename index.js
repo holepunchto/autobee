@@ -567,6 +567,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async setLocal(key, { keyPair } = {}) {
     if (!this.opened) await this.ready()
+    if (this.closing) throw new Error('Autobee closed')
 
     const manifest = keyPair
       ? { version: this.store.manifestVersion, signers: [{ publicKey: keyPair.publicKey }] }
@@ -845,6 +846,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async append(values, { optimistic = false } = {}) {
+    if (this.closing) throw new Error('Autobee closed')
+
     if (!Array.isArray(values)) values = [values]
 
     if (!this.opened) await this.ready()
