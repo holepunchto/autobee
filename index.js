@@ -852,6 +852,10 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!this.opened) await this.ready()
 
+    if (!optimistic && this.writers.localWriter.isRemoved) {
+      throw new Error('Not writable')
+    }
+
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
