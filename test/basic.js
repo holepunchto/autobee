@@ -157,7 +157,7 @@ test('basic - anchor', async function (t) {
       const data = decode(node.value)
 
       if (data.anchor) {
-        const anchor = await host.createAnchor(data.addWriter)
+        const anchor = await host.createAnchor(node.key, node.length)
         t.ok(anchor.key)
         t.ok(anchor.length)
       }
@@ -181,7 +181,9 @@ test('basic - isIndexer', async function (t) {
   await auto.append(val)
 
   const info = await auto.system.get(auto.local.key)
-  t.is(info.weight, 2)
+  // granted capability lives in maxWeight - record.weight is the resolved
+  // sort weight of the writer's last applied node (see lib/claims.js)
+  t.is(info.maxWeight, 2)
   t.ok(auto.isIndexer)
 })
 

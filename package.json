@@ -37,7 +37,7 @@
     "safety-catch": "^1.0.3"
   },
   "devDependencies": {
-    "brittle": "^3.19.1",
+    "brittle": "^4.1.0",
     "corestore": "^7.11.0",
     "hypercore-crypto": "^3.6.1",
     "lunte": "^1.6.0",

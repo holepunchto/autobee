@@ -12,6 +12,7 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
+const claims = require('./lib/claims.js')
 const encoding = require('./lib/encoding.js')
 const Reboot = require('./lib/reboot.js')
 const System = require('./lib/system.js')
@@ -61,6 +62,7 @@ module.exports = class Autobee extends ReadyResource {
       getEncryptionProvider: this.getSystemEncryption,
       encrypted: this.encrypted
     })
+    this.system.auto = this
 
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
@@ -138,6 +140,10 @@ module.exports = class Autobee extends ReadyResource {
   // autobase compat
   get activeWriters() {
     return this.writers
+  }
+
+  get flushes() {
+    return this.system.flushes
   }
 
   async _open() {
@@ -348,6 +354,7 @@ module.exports = class Autobee extends ReadyResource {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
 
     for await (const node of this.system.list()) {
+      if (node.isAnchor) continue
       await this.writers.add(node.key)
     }
     await this._bump()
@@ -616,11 +623,18 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('rotate-local-writer')
   }
 
-  async createAnchor() {
-    const node = this._host.applying[this._host.applying.length - 1]
+  async createAnchor(key, length) {
+    let node = null
+    for (let i = this._host.applying.length - 1; i >= 0; i--) {
+      const n = this._host.applying[i]
+      if (b4a.equals(n.key, key) && n.length === length) {
+        node = n
+        break
+      }
+    }
 
-    const key = node.key
-    const length = node.length
+    if (!node) throw new Error('Anchor node is not in system')
+
     const legacy = node.version <= 2
 
     const info = await this.system.get(key, { unflushed: true })
@@ -659,7 +673,7 @@ module.exports = class Autobee extends ReadyResource {
       await core.append(block, { writable: true, maxLength: 1 })
     }
 
-    await this.system.addWriter(core.key, { weight: 1 })
+    await this.system.addAnchor(core.key)
 
     const anchor = { key: core.key, length: core.length }
 
@@ -716,30 +730,27 @@ module.exports = class Autobee extends ReadyResource {
     const rollbackView = this._workingBee.head()
 
     const t = await this.prepareBatch(batch)
+    if (t.view) this._workingBee.move(t.view)
 
-    if (t.view) {
-      this._workingBee.move(t.view)
-    }
+    for (const b of t.tip) {
+      let failed = true
+      try {
+        if (await this.system.canApply(b[0].key, true)) {
+          await this._applyBatch(b, true)
+          failed = false
+        }
+      } catch {}
 
-    let failed = true
+      // only check if batch was successful
+      if (b !== batch) continue
 
-    try {
-      if (await this.system.canApply(batch[0].key, true)) {
-        await this._applyBatch(batch, true)
-        failed = false
+      const w = failed ? null : await this.system.get(b[0].key)
+      if (!w || w.length < b[0].length) {
+        this._workingBee.move(rollbackView)
+        this.system.bee.move(rollbackSystem)
+        await this.system.reset()
+        return false
       }
-    } catch {}
-
-    const w = failed ? null : await this.system.get(batch[0].key)
-    if (!w || w.length < batch[0].length) {
-      this._workingBee.move(rollbackView)
-      this.system.bee.move(rollbackSystem)
-      await this.system.reset()
-      return false
-    }
-
-    for (let i = 1; i < t.tip.length; i++) {
-      await this._applyBatch(t.tip[i], t.tip[i][0].optimistic)
     }
 
     return true
@@ -747,10 +758,13 @@ module.exports = class Autobee extends ReadyResource {
 
   async prepareBatch(batch) {
     const node = batch[0]
+    // recomputed on every application, converges because prefixes converge
+    node.weight = await claims.resolveWeight(this, node)
+    for (const n of batch) n.weight = node.weight
 
-    if (topo.isLinkingAll(node, this.system.heads)) {
-      return { undo: null, view: null, tip: [batch] }
-    }
+    // if (topo.isLinkingAll(node, this.system.heads)) {
+    //   return { undo: null, view: null, tip: [batch] }
+    // }
 
     const t = await topo.sort(this, batch)
 
@@ -761,25 +775,35 @@ module.exports = class Autobee extends ReadyResource {
     return t
   }
 
-  async _processBatch(batch) {
-    const t = await this.prepareBatch(batch)
+  async applyBacklog(batches) {
+    const queue = batches.slice()
 
-    if (t.view) {
-      this._workingBee.move(t.view)
+    while (queue.length) {
+      const batch = queue.shift()
+      const t = await this.prepareBatch(batch)
+
+      if (t.view) {
+        this._workingBee.move(t.view)
+        queue.unshift(...t.tip)
+        continue
+      }
+
+      // first writer is always added with full permissions
+      if (this.system.isGenesis()) {
+        await this._host.addWriter(batch[0].key)
+      }
+
+      await this._applyBatch(batch, batch[0].optimistic)
+
+      this.writers.triggers.trigger(
+        b4a.toString(batch[0].key, 'hex'),
+        batch[batch.length - 1].length
+      )
     }
-
-    return this._processApplyBatch(t)
   }
 
-  async _processApplyBatch(t) {
-    // first writer is always added with full permissions
-    if (this.system.isGenesis()) {
-      await this._host.addWriter(t.tip[0][0].key)
-    }
-
-    for (let i = 0; i < t.tip.length; i++) {
-      await this._applyBatch(t.tip[i], t.tip[i][0].optimistic)
-    }
+  async _processBatch(batch) {
+    await this.applyBacklog([batch])
   }
 
   async _applyBatch(batch, optimistic) {
@@ -808,7 +832,12 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._storeBoot()
 
-    for (const { key, added } of changed) {
+    for (const { key, added, isAnchor } of changed) {
+      if (isAnchor) {
+        // no Writer/ActiveWriters tracking, but still wake anything linked to it
+        this.writers.triggers.trigger(b4a.toString(key, 'hex'), 1)
+        continue
+      }
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }
@@ -862,11 +891,43 @@ module.exports = class Autobee extends ReadyResource {
     const t = Date.now()
     const batch = []
 
+    // nothing is stored for claims: the steady-state backer is our own
+    // previous claim, fresh candidates are derived on demand
+    const rec = await this.system.get(this.local.key)
+    let claim = null
+    if (rec && rec.maxWeight > 0) {
+      const prev = await this.writers.localWriter.latestClaim()
+      claim = {
+        weight: rec.maxWeight,
+        referrer: rec.referrer,
+        backer: prev ? prev.backer : null
+      }
+
+      if (rec.maxWeight > rec.weight) {
+        const probe = { key: this.local.key, length: this.writers.localWriter.appendLength }
+
+        // decide from local reads whether hunting is needed at all - an
+        // offline append must not probe foreign cores
+        const have = await claims.availableWeight(this, probe, claim)
+        if (have < rec.maxWeight) {
+          const backer = await claims.findBacker(this, probe, claim)
+          if (backer) claim.backer = backer
+        }
+      }
+    }
+
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
       const buffer = typeof value === 'string' ? b4a.from(value) : value
       const lnk = i === 0 ? links : []
-      const node = this.writers.appendLocal(buffer, t, null, lnk, optimistic)
+      const node = this.writers.appendLocal(
+        buffer,
+        t,
+        null,
+        lnk,
+        optimistic,
+        i === 0 ? claim : null
+      )
       batch.push(node)
     }
 
@@ -1057,7 +1118,7 @@ module.exports = class Autobee extends ReadyResource {
     const t = await topo.rollback(this, sys, verified)
     await sys.close()
 
-    await this._processApplyBatch(t)
+    await this.applyBacklog(t.tip)
     return this._update(changes)
   }
 
