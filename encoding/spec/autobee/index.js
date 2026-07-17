@@ -562,20 +562,16 @@ const encoding20 = {
     c.uint.preencode(state, m.maxWeight)
     c.uint.preencode(state, m.length)
     c.uint.preencode(state, m.clock)
-
-    if (m.referrer) encoding22.preencode(state, m.referrer)
   },
   encode(state, m) {
     const flags =
-      (m.isRemoved ? 1 : 0) | (m.isOplog ? 2 : 0) | (m.referrer ? 4 : 0) | (m.isAnchor ? 8 : 0)
+      (m.isRemoved ? 1 : 0) | (m.isOplog ? 2 : 0) | (m.isGenesis ? 4 : 0) | (m.isAnchor ? 8 : 0)
 
     c.uint.encode(state, flags)
     c.uint.encode(state, m.weight)
     c.uint.encode(state, m.maxWeight)
     c.uint.encode(state, m.length)
     c.uint.encode(state, m.clock)
-
-    if (m.referrer) encoding22.encode(state, m.referrer)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -589,7 +585,7 @@ const encoding20 = {
       maxWeight: c.uint.decode(state),
       length: c.uint.decode(state),
       clock: c.uint.decode(state),
-      referrer: (flags & 4) !== 0 ? encoding22.decode(state) : null,
+      isGenesis: (flags & 4) !== 0,
       isAnchor: (flags & 8) !== 0
     }
   }
@@ -763,28 +759,19 @@ const encoding25_inline = {
 const encoding26 = {
   preencode(state, m) {
     c.uint.preencode(state, m.weight)
-    state.end++ // max flag is 2 so always one byte
-
-    if (m.referrer) encoding22.preencode(state, m.referrer)
-    if (m.backer) encoding22.preencode(state, m.backer)
+    encoding22.preencode(state, m.backer)
   },
   encode(state, m) {
-    const flags = (m.referrer ? 1 : 0) | (m.backer ? 2 : 0)
-
     c.uint.encode(state, m.weight)
-    c.uint.encode(state, flags)
-
-    if (m.referrer) encoding22.encode(state, m.referrer)
-    if (m.backer) encoding22.encode(state, m.backer)
+    encoding22.encode(state, m.backer)
   },
   decode(state) {
     const r0 = c.uint.decode(state)
-    const flags = c.uint.decode(state)
+    const r1 = encoding22.decode(state)
 
     return {
       weight: r0,
-      referrer: (flags & 1) !== 0 ? encoding22.decode(state) : null,
-      backer: (flags & 2) !== 0 ? encoding22.decode(state) : null
+      backer: r1
     }
   }
 }

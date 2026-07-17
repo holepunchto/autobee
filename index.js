@@ -784,6 +784,10 @@ module.exports = class Autobee extends ReadyResource {
     return true
   }
 
+  _verifyClaim(node, activeRequests) {
+    return claims.verifyClaim(this, node, activeRequests)
+  }
+
   async prepareBatch(batch) {
     const node = batch[0]
     // recomputed on every application, converges because prefixes converge
@@ -919,29 +923,27 @@ module.exports = class Autobee extends ReadyResource {
     const t = Date.now()
     const batch = []
 
-    // nothing is stored for claims: the steady-state backer is our own
-    // previous claim, fresh candidates are derived on demand
+    // claims only ride upgrade windows. claim.weight is the value the backer's
+    // snapshot witnesses - verifiers recompute the same read and verify
     const rec = await this.system.get(this.local.key)
     let claim = null
-    if (rec && rec.maxWeight > 0) {
+    if (rec && rec.maxWeight > claims.currentWeight(rec)) {
+      const probe = { key: this.local.key, length: this.writers.localWriter.appendLength }
+
+      // all probes time out so an offline append never blocks on foreign
+      // cores - worst case we append claim-free and sort at our floor
       const prev = await this.writers.localWriter.latestClaim()
-      claim = {
-        weight: rec.maxWeight,
-        referrer: rec.referrer,
-        backer: prev ? prev.backer : null
+      let backer = prev && (await claims.isLiveBacker(this, prev.backer)) ? prev.backer : null
+      let weight = backer
+        ? await claims.witnessedWeight(this, probe, backer, { timeout: claims.PROBE_TIMEOUT })
+        : 0
+
+      if (weight < rec.maxWeight) {
+        const found = await claims.findBacker(this, probe, rec.maxWeight)
+        if (found && found.weight > weight) ({ backer, weight } = found)
       }
 
-      if (rec.maxWeight > rec.weight) {
-        const probe = { key: this.local.key, length: this.writers.localWriter.appendLength }
-
-        // decide from local reads whether hunting is needed at all - an
-        // offline append must not probe foreign cores
-        const have = await claims.availableWeight(this, probe, claim)
-        if (have < rec.maxWeight) {
-          const backer = await claims.findBacker(this, probe, claim)
-          if (backer) claim.backer = backer
-        }
-      }
+      if (backer && weight > claims.currentWeight(rec)) claim = { weight, backer }
     }
 
     for (let i = 0; i < values.length; i++) {

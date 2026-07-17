@@ -495,8 +495,9 @@
           "version": 1
         },
         {
-          "name": "referrer",
-          "type": "@autobee/link",
+          "name": "isGenesis",
+          "required": false,
+          "type": "bool",
           "version": 1
         },
         {
@@ -619,7 +620,7 @@
       "name": "claim",
       "namespace": "autobee",
       "compact": false,
-      "flagsPosition": 1,
+      "flagsPosition": -1,
       "fields": [
         {
           "name": "weight",
@@ -628,12 +629,8 @@
           "version": 1
         },
         {
-          "name": "referrer",
-          "type": "@autobee/link",
-          "version": 1
-        },
-        {
           "name": "backer",
+          "required": true,
           "type": "@autobee/link",
           "version": 1
         }

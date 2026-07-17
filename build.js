@@ -84,7 +84,7 @@ auto.register({
       required: true
     },
     {
-      // granted capability - written only by grant ops
+      // granted capability - written only by apply ops
       name: 'maxWeight',
       type: 'uint',
       required: true
@@ -100,10 +100,10 @@ auto.register({
       required: true
     },
     {
-      // node whose application carried the grant - must be deterministic
-      // (system bees stay byte-identical across peers)
-      name: 'referrer',
-      type: '@autobee/link'
+      // genesis or anchor
+      name: 'isGenesis',
+      type: 'bool',
+      required: true
     },
     {
       name: 'isAnchor',
@@ -206,8 +206,6 @@ auto.register({
   ]
 })
 
-// immutable weight claim: referrer carried the backing grant, backer is a
-// third-party corroborator - both gate like links and floor the ordering
 auto.register({
   name: 'claim',
   fields: [
@@ -217,12 +215,9 @@ auto.register({
       required: true
     },
     {
-      name: 'referrer',
-      type: '@autobee/link'
-    },
-    {
       name: 'backer',
-      type: '@autobee/link'
+      type: '@autobee/link',
+      required: true
     }
   ]
 })
