@@ -225,8 +225,8 @@ module.exports = class Autobee extends ReadyResource {
     } catch {}
   }
 
-  async changesFrom({ flushes, view }) {
-    const update = await this.system.changesFrom({ flushes, view })
+  async changesFrom({ system }) {
+    const update = await this.system.changesFrom(system)
     if (update === null) return null // up to date
 
     return UpdateChanges.from(update.shared, update.current)
