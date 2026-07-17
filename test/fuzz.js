@@ -3,14 +3,16 @@ const b4a = require('b4a')
 
 const { create, replicate, sync, encode } = require('./helpers')
 
-// Note: there is intentionally no "remove writer" action here. A writer that
-// keeps appending after being concurrently removed forks permanently - the
-// remover's view can never fully index that writer's later entries again
-// (see test/writer-management.js "concurrent remove and write from removed
-// writer", which works around it with manual flush/timeout polling instead
-// of sync()). Plugging that into a generic random fuzz loop would make
-// syncRound() hang forever whenever the fuzzer happens to hit that
-// interleaving, so removal is left out for now.
+// Removal note: a writer that keeps appending after being concurrently
+// removed forks permanently - the remover's view can never fully index that
+// writer's later entries again (see test/writer-management.js "concurrent
+// remove and write from removed writer"). The removeWriterAction below is
+// therefore constrained: only writers with NO unsynced appends are removed,
+// and the fuzzer retires them (never appends from or grants to them again).
+// The removal op itself still races everything else in flight across
+// partitions - which is the point: a backer's removal racing a claim that
+// cites it exercises the isRemoved resolution cap, and claimants re-hunting
+// live backers afterwards exercises claims.isLiveBacker.
 
 // A minimized, always-on regression test for the bug this fuzzer originally
 // found lives in test/generated.js - see .repro-scratch/ (untracked)
@@ -90,8 +92,15 @@ test('fuzz - random writer weights, optimistic self-adds, eventual consistency',
     rng,
     pool: [{ auto: genesis, name: genesis.name }],
     genesisKey: genesis.key,
+    genesisHex: keyHex(genesis),
     granted: new Set([keyHex(genesis)]),
     pendingOptimistic: new Set(),
+    // removed writers: never appended from or granted to again (see the
+    // removal note above). their autos stay in the pool for the oracle.
+    retired: new Set(),
+    // writers with appends not yet through a syncRound - removal targets
+    // must be clean or their unsynced entries can never index (sync hangs)
+    dirty: new Set(),
     // writers can never be downgraded - system.js has no defined behaviour for
     // a writer's ordering weight decreasing after the fact (see the
     // write-up in .repro-scratch/ for why: fixing the update()/addNode
@@ -118,7 +127,15 @@ test('fuzz - random writer weights, optimistic self-adds, eventual consistency',
     // rather than waiting for addWriterByPeer/changeWeight to land on it by
     // chance (seed search over the plain random mix only found it ~18% of
     // the time within 60 steps)
-    { name: 'concurrentConflictingGrant', weight: 2, run: concurrentConflictingGrant }
+    { name: 'concurrentConflictingGrant', weight: 2, run: concurrentConflictingGrant },
+    // exercises the claims-side removal machinery: the isRemoved resolution
+    // cap racing in-flight claims that cite the removed writer as backer,
+    // and isLiveBacker re-hunts on the append side
+    { name: 'removeWriter', weight: 2, run: removeWriterAction },
+    // partial pairwise sync: knowledge propagates unevenly, so full sync
+    // rounds have to merge much staler branches (deeper reorgs, harder
+    // recompute-on-reapply) than the SYNC_EVERY cadence alone produces
+    { name: 'pairSync', weight: 2, run: pairSync }
   ]
 
   for (let i = 0; i < STEPS; i++) {
@@ -157,19 +174,31 @@ async function spawnCandidate(state) {
 }
 
 async function appendNormal(state) {
-  const writable = writableEntries(state.pool)
+  const writable = writableEntries(state)
   if (!writable.length) return false
 
   const from = state.rng.pick(writable)
-  state.seq++
-  await from.auto.append(encode({ msg: `m${state.seq}`, from: from.name }))
-  state.log(`${from.name} appends normal message #${state.seq}`)
+
+  // ~1 in 4 appends is a multi-node batch: claims ride batch heads and the
+  // batch bookkeeping (b.start/b.end) is its own surface
+  const count = state.rng.bool(0.25) ? state.rng.int(2, 4) : 1
+  const values = []
+  for (let n = 0; n < count; n++) {
+    state.seq++
+    values.push(encode({ msg: `m${state.seq}`, from: from.name }))
+  }
+
+  await from.auto.append(count === 1 ? values[0] : values)
+  state.dirty.add(keyHex(from.auto))
+  state.log(`${from.name} appends ${count} message(s) up to #${state.seq}`)
   return true
 }
 
 async function addWriterByPeer(state) {
-  const writable = writableEntries(state.pool)
-  const candidates = state.pool.filter((e) => !e.auto.writable)
+  const writable = writableEntries(state)
+  const candidates = state.pool.filter(
+    (e) => !e.auto.writable && !state.retired.has(keyHex(e.auto))
+  )
   if (!writable.length || !candidates.length) return false
 
   const granter = state.rng.pick(writable)
@@ -180,12 +209,13 @@ async function addWriterByPeer(state) {
   await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
   state.granted.add(hex)
   state.weights.set(hex, weight)
+  state.dirty.add(keyHex(granter.auto))
   state.log(`${granter.name} adds ${target.name} as writer, weight=${weight}`)
   return true
 }
 
 async function changeWeight(state) {
-  const writable = writableEntries(state.pool)
+  const writable = writableEntries(state)
   const target = pickGrantedTarget(state)
   if (!writable.length || !target) return false
 
@@ -195,12 +225,15 @@ async function changeWeight(state) {
 
   await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
   state.weights.set(hex, weight)
+  state.dirty.add(keyHex(granter.auto))
   state.log(`${granter.name} changes ${target.name} weight -> ${weight}`)
   return true
 }
 
 async function optimisticSelfAdd(state) {
-  const pending = state.pool.filter((e) => !e.auto.writable)
+  const pending = state.pool.filter(
+    (e) => !e.auto.writable && !state.retired.has(keyHex(e.auto))
+  )
   if (!pending.length) return false
 
   const self = state.rng.pick(pending)
@@ -211,6 +244,7 @@ async function optimisticSelfAdd(state) {
   state.granted.add(hex)
   state.weights.set(hex, weight)
   state.pendingOptimistic.add(hex)
+  state.dirty.add(hex)
   state.log(`${self.name} optimistically adds itself, weight=${weight}`)
   return true
 }
@@ -224,7 +258,7 @@ async function optimisticSelfAdd(state) {
 // disagree. Left as a fuzz action (rather than only the fixed regression
 // test) so random surrounding traffic can still turn up variants of it.
 async function concurrentConflictingGrant(state) {
-  const writable = writableEntries(state.pool)
+  const writable = writableEntries(state)
   if (writable.length < 2) return false
 
   const granter1 = state.rng.pick(writable)
@@ -232,7 +266,9 @@ async function concurrentConflictingGrant(state) {
   const granter2 = state.rng.pick(rest.length ? rest : writable)
   if (granter2 === granter1) return false
 
-  const target = state.rng.pick(state.pool)
+  const targets = state.pool.filter((e) => !state.retired.has(keyHex(e.auto)))
+  if (!targets.length) return false
+  const target = state.rng.pick(targets)
   const hex = keyHex(target.auto)
   const floor = currentWeight(state, hex)
   const weight1 = randWeightAtLeast(state, floor)
@@ -245,9 +281,81 @@ async function concurrentConflictingGrant(state) {
   // whichever grant "wins" in the replicated system, it'll be at least this -
   // future grants must not undercut whichever of the two takes effect
   state.weights.set(hex, Math.max(weight1, weight2))
+  state.dirty.add(keyHex(granter1.auto))
+  state.dirty.add(keyHex(granter2.auto))
   state.log(
     `${granter1.name} grants ${target.name} weight=${weight1}, concurrently ${granter2.name} grants weight=${weight2}`
   )
+  return true
+}
+
+// Removal, constrained for oracle soundness (see the note at the top): the
+// target must be granted, clean since the last sync, not genesis, not mid
+// optimistic self-add, and at least two usable writers must remain. The
+// removal op itself still merges against everything in flight elsewhere.
+async function removeWriterAction(state) {
+  const writable = writableEntries(state)
+  if (writable.length < 3) return false
+
+  const removable = writable.filter((e) => {
+    const hex = keyHex(e.auto)
+    return (
+      hex !== state.genesisHex &&
+      state.granted.has(hex) &&
+      !state.dirty.has(hex) &&
+      !state.pendingOptimistic.has(hex)
+    )
+  })
+  if (!removable.length) return false
+
+  const target = state.rng.pick(removable)
+  const hex = keyHex(target.auto)
+
+  const removers = writable.filter((e) => e !== target)
+  if (removers.length < 2) return false
+  const remover = state.rng.pick(removers)
+
+  await remover.auto.append(encode({ removeWriter: target.auto.local.id }))
+  state.retired.add(hex)
+  state.granted.delete(hex)
+  state.dirty.add(keyHex(remover.auto))
+  state.log(`${remover.name} removes ${target.name}`)
+  return true
+}
+
+async function pairSync(state) {
+  // below 3 peers the full sync cadence already covers this
+  if (state.pool.length < 3) return false
+
+  const a = state.rng.pick(state.pool)
+  const rest = state.pool.filter((e) => e !== a)
+  const b = state.rng.pick(rest)
+
+  const done = replicate(a.auto, b.auto)
+
+  // same optimistic nudge as the full round, scoped to the pair
+  for (const hex of state.pendingOptimistic) {
+    const entry = state.pool.find((e) => keyHex(e.auto) === hex)
+    if (!entry) continue
+
+    for (const w of [a, b]) {
+      if (!w.auto.writable || state.retired.has(keyHex(w.auto))) continue
+      await w.auto
+        .wakeup({ key: entry.auto.local.key, length: entry.auto.local.length })
+        .catch(() => {})
+    }
+  }
+
+  await withTimeout(
+    sync(a.auto, b.auto),
+    SYNC_TIMEOUT,
+    `pair sync ${a.name}<->${b.name} did not converge within ${SYNC_TIMEOUT}ms`
+  )
+  await done()
+
+  // NOT clearing state.dirty: these writers' appends are still unsynced
+  // relative to everyone outside the pair
+  state.log(`pair sync ${a.name} <-> ${b.name}`)
   return true
 }
 
@@ -262,7 +370,7 @@ async function syncRound(state) {
 
   // nudge writable peers to pull in any outstanding optimistic batches,
   // mirroring the pattern used in test/optimistic-race.js
-  const writable = writableEntries(entries)
+  const writable = writableEntries(state)
   for (const hex of state.pendingOptimistic) {
     const entry = entries.find((e) => keyHex(e.auto) === hex)
     if (!entry) continue
@@ -284,6 +392,7 @@ async function syncRound(state) {
   await done()
 
   state.pendingOptimistic.clear()
+  state.dirty.clear()
 }
 
 // Compares the full topologically-sorted oplog order (auto.replay()) across every peer -
@@ -295,6 +404,8 @@ async function syncRound(state) {
 // when it does, only well after the actual point where the two peers' understanding of
 // the DAG first split).
 async function checkReplayAgreement(t, pool) {
+  checkNoFrozenWriters(t, pool)
+
   const replays = []
   for (const { auto, name } of pool) {
     replays.push({ name, nodes: await auto.replay() })
@@ -303,6 +414,20 @@ async function checkReplayAgreement(t, pool) {
   for (let i = 0; i < replays.length - 1; i++) {
     for (let j = i + 1; j < replays.length; j++) {
       compareReplay(t, replays[i], replays[j])
+    }
+  }
+}
+
+// honest fuzzing must never freeze a writer: a freeze means claim
+// verification rejected an honestly-constructed claim (the appender's and a
+// verifier's reads of the same pinned snapshot disagreed) - and a frozen
+// writer otherwise only surfaces as an opaque sync() timeout
+function checkNoFrozenWriters(t, pool) {
+  for (const { auto, name } of pool) {
+    for (const w of auto.writers) {
+      if (w.isFrozen) {
+        t.fail(`${name} froze writer ${w.id.slice(0, 8)} - honest claims must never freeze`)
+      }
     }
   }
 }
@@ -326,7 +451,21 @@ function compareReplay(t, a, b) {
   while (k < refsA.length && k < refsB.length && refsA[k] === refsB[k]) k++
 
   if (k === refsA.length && k === refsB.length) {
-    t.pass(`${a.name} and ${b.name} agree on replay order (${k} nodes)`)
+    // order agreement alone is not enough: each peer pins its own resolved
+    // weight per node in its system stream, and a same-order-different-weight
+    // split means the system bees are not byte-identical (breaks FF) even
+    // though it may never surface as order divergence within the horizon
+    for (let i = 0; i < k; i++) {
+      if (a.nodes[i].weight !== b.nodes[i].weight) {
+        t.fail(
+          `${a.name} and ${b.name} agree on replay order but disagree on pinned weight at index ${i}: ` +
+            `${nodeRef(a.nodes[i])} ${a.name}.weight=${a.nodes[i].weight} vs ${b.name}.weight=${b.nodes[i].weight}\n` +
+            '  -> same history, same order, different weight: determinism bug in system state computation'
+        )
+        return
+      }
+    }
+    t.pass(`${a.name} and ${b.name} agree on replay order + pinned weights (${k} nodes)`)
     return
   }
 
@@ -369,13 +508,14 @@ function nodeRef(n) {
 
 // ---- helpers ----------------------------------------------------------
 
-function writableEntries(pool) {
-  return pool.filter((e) => e.auto.writable)
+function writableEntries(state) {
+  return state.pool.filter((e) => e.auto.writable && !state.retired.has(keyHex(e.auto)))
 }
 
 function pickGrantedTarget(state) {
-  if (!state.granted.size) return null
-  const hex = state.rng.pick([...state.granted])
+  const eligible = [...state.granted].filter((hex) => !state.retired.has(hex))
+  if (!eligible.length) return null
+  const hex = state.rng.pick(eligible)
   return state.pool.find((e) => keyHex(e.auto) === hex) || null
 }
 
