@@ -231,9 +231,7 @@ async function changeWeight(state) {
 }
 
 async function optimisticSelfAdd(state) {
-  const pending = state.pool.filter(
-    (e) => !e.auto.writable && !state.retired.has(keyHex(e.auto))
-  )
+  const pending = state.pool.filter((e) => !e.auto.writable && !state.retired.has(keyHex(e.auto)))
   if (!pending.length) return false
 
   const self = state.rng.pick(pending)

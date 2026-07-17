@@ -86,3 +86,19 @@ weight, never to zero.
 
 The resolved weight is stamped back into the record, raising the floor and closing the
 gap. From then on appends carry no witness — the floor alone carries the weight.
+
+## Proposed — dropping the backer-standing cap (undecided)
+
+The change: remove `currentWeight(backer)` from the resolution min, so the raise
+becomes `max(prev, min(witness.weight, rec.maxWeight))`.
+
+What it buys: recovery after wipeout. Today a climb wedges at the heaviest live
+backer, so once the last weight-2 writer is gone the system can never mint weight 2
+again. Without the cap any committed flush is valid testimony — a weight-1 survivor
+can restore a weight-2 writer.
+
+What we lose:
+
+- Larger reorgs: today a heavy sort position only activates once a peer at
+  least that heavy has flushed before you, which is the lower bound for the reorg. Without the cap, reorgs can reach as far down as the genesis (eg. if a writer of weight 3 was introduced)
+- Trust propagation: weight was treated as a capability before, now it no longer does, the contract is essentially the only authority
