@@ -12,7 +12,15 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
-const { verifyWitness, resolveWeight, currentWeight, witnessedWeight, isLiveBacker, findBacker, PROBE_TIMEOUT } = require('./lib/witness.js')
+const {
+  verifyWitness,
+  resolveWeight,
+  currentWeight,
+  witnessedWeight,
+  isLiveBacker,
+  findBacker,
+  PROBE_TIMEOUT
+} = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const Reboot = require('./lib/reboot.js')
 const System = require('./lib/system.js')
