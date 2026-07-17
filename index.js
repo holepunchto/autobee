@@ -12,7 +12,7 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
-const claims = require('./lib/claims.js')
+const { verifyWitness, resolveWeight, currentWeight, witnessedWeight, isLiveBacker, findBacker, PROBE_TIMEOUT } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const Reboot = require('./lib/reboot.js')
 const System = require('./lib/system.js')
@@ -784,14 +784,14 @@ module.exports = class Autobee extends ReadyResource {
     return true
   }
 
-  _verifyClaim(node, activeRequests) {
-    return claims.verifyClaim(this, node, activeRequests)
+  _verifyWitness(node, activeRequests) {
+    return verifyWitness(this, node, activeRequests)
   }
 
   async prepareBatch(batch) {
     const node = batch[0]
     // recomputed on every application, converges because prefixes converge
-    node.weight = await claims.resolveWeight(this, node)
+    node.weight = await resolveWeight(this, node)
     for (const n of batch) n.weight = node.weight
 
     // if (topo.isLinkingAll(node, this.system.heads)) {
@@ -923,27 +923,27 @@ module.exports = class Autobee extends ReadyResource {
     const t = Date.now()
     const batch = []
 
-    // claims only ride upgrade windows. claim.weight is the value the backer's
+    // witnesses only ride upgrade windows. witness.weight is the value the backer's
     // snapshot witnesses - verifiers recompute the same read and verify
     const rec = await this.system.get(this.local.key)
-    let claim = null
-    if (rec && rec.maxWeight > claims.currentWeight(rec)) {
+    let witness = null
+    if (rec && rec.maxWeight > currentWeight(rec)) {
       const probe = { key: this.local.key, length: this.writers.localWriter.appendLength }
 
       // all probes time out so an offline append never blocks on foreign
-      // cores - worst case we append claim-free and sort at our floor
-      const prev = await this.writers.localWriter.latestClaim()
-      let backer = prev && (await claims.isLiveBacker(this, prev.backer)) ? prev.backer : null
+      // cores - worst case we append witness-free and sort at our floor
+      const prev = await this.writers.localWriter.latestWitness()
+      let backer = prev && (await isLiveBacker(this, prev.backer)) ? prev.backer : null
       let weight = backer
-        ? await claims.witnessedWeight(this, probe, backer, { timeout: claims.PROBE_TIMEOUT })
+        ? await witnessedWeight(this, probe, backer, { timeout: PROBE_TIMEOUT })
         : 0
 
       if (weight < rec.maxWeight) {
-        const found = await claims.findBacker(this, probe, rec.maxWeight)
+        const found = await findBacker(this, probe, rec.maxWeight)
         if (found && found.weight > weight) ({ backer, weight } = found)
       }
 
-      if (backer && weight > claims.currentWeight(rec)) claim = { weight, backer }
+      if (backer && weight > currentWeight(rec)) witness = { weight, backer }
     }
 
     for (let i = 0; i < values.length; i++) {
@@ -956,7 +956,7 @@ module.exports = class Autobee extends ReadyResource {
         { start: i, end: values.length - 1 - i },
         lnk,
         optimistic,
-        i === 0 ? claim : null
+        i === 0 ? witness : null
       )
       batch.push(node)
     }

@@ -617,7 +617,7 @@
       ]
     },
     {
-      "name": "claim",
+      "name": "witness",
       "namespace": "autobee",
       "compact": false,
       "flagsPosition": -1,
@@ -677,8 +677,8 @@
           "version": 1
         },
         {
-          "name": "claim",
-          "type": "@autobee/claim",
+          "name": "witness",
+          "type": "@autobee/witness",
           "version": 1
         }
       ]

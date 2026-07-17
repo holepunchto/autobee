@@ -207,7 +207,7 @@ auto.register({
 })
 
 auto.register({
-  name: 'claim',
+  name: 'witness',
   fields: [
     {
       name: 'weight',
@@ -254,8 +254,8 @@ auto.register({
       type: 'buffer'
     },
     {
-      name: 'claim',
-      type: '@autobee/claim'
+      name: 'witness',
+      type: '@autobee/witness'
     }
   ]
 })

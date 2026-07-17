@@ -10,9 +10,9 @@ const { create, replicate, sync, encode } = require('./helpers')
 // therefore constrained: only writers with NO unsynced appends are removed,
 // and the fuzzer retires them (never appends from or grants to them again).
 // The removal op itself still races everything else in flight across
-// partitions - which is the point: a backer's removal racing a claim that
-// cites it exercises the isRemoved resolution cap, and claimants re-hunting
-// live backers afterwards exercises claims.isLiveBacker.
+// partitions - which is the point: a backer's removal racing a witness that
+// cites it exercises the isRemoved resolution cap, and writers re-hunting
+// live backers afterwards exercises witnesses.isLiveBacker.
 
 // A minimized, always-on regression test for the bug this fuzzer originally
 // found lives in test/generated.js - see .repro-scratch/ (untracked)
@@ -128,8 +128,8 @@ test('fuzz - random writer weights, optimistic self-adds, eventual consistency',
     // chance (seed search over the plain random mix only found it ~18% of
     // the time within 60 steps)
     { name: 'concurrentConflictingGrant', weight: 2, run: concurrentConflictingGrant },
-    // exercises the claims-side removal machinery: the isRemoved resolution
-    // cap racing in-flight claims that cite the removed writer as backer,
+    // exercises the witnesses-side removal machinery: the isRemoved resolution
+    // cap racing in-flight witnesses that cite the removed writer as backer,
     // and isLiveBacker re-hunts on the append side
     { name: 'removeWriter', weight: 2, run: removeWriterAction },
     // partial pairwise sync: knowledge propagates unevenly, so full sync
@@ -179,7 +179,7 @@ async function appendNormal(state) {
 
   const from = state.rng.pick(writable)
 
-  // ~1 in 4 appends is a multi-node batch: claims ride batch heads and the
+  // ~1 in 4 appends is a multi-node batch: witnesses ride batch heads and the
   // batch bookkeeping (b.start/b.end) is its own surface
   const count = state.rng.bool(0.25) ? state.rng.int(2, 4) : 1
   const values = []
@@ -418,15 +418,15 @@ async function checkReplayAgreement(t, pool) {
   }
 }
 
-// honest fuzzing must never freeze a writer: a freeze means claim
-// verification rejected an honestly-constructed claim (the appender's and a
+// honest fuzzing must never freeze a writer: a freeze means witness
+// verification rejected an honestly-constructed witness (the appender's and a
 // verifier's reads of the same pinned snapshot disagreed) - and a frozen
 // writer otherwise only surfaces as an opaque sync() timeout
 function checkNoFrozenWriters(t, pool) {
   for (const { auto, name } of pool) {
     for (const w of auto.writers) {
       if (w.isFrozen) {
-        t.fail(`${name} froze writer ${w.id.slice(0, 8)} - honest claims must never freeze`)
+        t.fail(`${name} froze writer ${w.id.slice(0, 8)} - honest witnesses must never freeze`)
       }
     }
   }

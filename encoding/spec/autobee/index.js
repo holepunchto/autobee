@@ -755,7 +755,7 @@ const encoding25_inline = {
   }
 }
 
-// @autobee/claim
+// @autobee/witness
 const encoding26 = {
   preencode(state, m) {
     c.uint.preencode(state, m.weight)
@@ -776,7 +776,7 @@ const encoding26 = {
   }
 }
 
-// @autobee/oplog-message-v3.claim
+// @autobee/oplog-message-v3.witness
 const encoding27_6 = c.frame(encoding26)
 
 // @autobee/oplog-message-v3
@@ -789,7 +789,7 @@ const encoding27 = {
     if (m.batch) encoding24.preencode(state, m.batch)
     if (m.views) encoding25_inline.preencode(state, m.views)
     if (m.value) c.buffer.preencode(state, m.value)
-    if (m.claim) encoding27_6.preencode(state, m.claim)
+    if (m.witness) encoding27_6.preencode(state, m.witness)
   },
   encode(state, m) {
     let flags =
@@ -797,7 +797,7 @@ const encoding27 = {
       (m.views ? 2 : 0) |
       (m.optimistic ? 8 : 0) |
       (m.value ? 16 : 0) |
-      (m.claim ? 32 : 0)
+      (m.witness ? 32 : 0)
     if (m.views) {
       flags |= m.views.view ? 4 : 0
     }
@@ -809,7 +809,7 @@ const encoding27 = {
     if (m.batch) encoding24.encode(state, m.batch)
     if (m.views) encoding25_inline.encode(state, m.views)
     if (m.value) c.buffer.encode(state, m.value)
-    if (m.claim) encoding27_6.encode(state, m.claim)
+    if (m.witness) encoding27_6.encode(state, m.witness)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -825,7 +825,7 @@ const encoding27 = {
       views: (flags & 2) !== 0 ? encoding25_inline.decode(state, flags >>> 2) : null,
       optimistic: (flags & 8) !== 0,
       value: (flags & 16) !== 0 ? c.buffer.decode(state) : null,
-      claim: (flags & 32) !== 0 ? encoding27_6.decode(state) : null
+      witness: (flags & 32) !== 0 ? encoding27_6.decode(state) : null
     }
   }
 }
@@ -1009,7 +1009,7 @@ function getEncoding(name) {
       return encoding24
     case '@autobee/views':
       return encoding25
-    case '@autobee/claim':
+    case '@autobee/witness':
       return encoding26
     case '@autobee/oplog-message-v3':
       return encoding27

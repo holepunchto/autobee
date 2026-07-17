@@ -182,7 +182,7 @@ test('basic - isIndexer', async function (t) {
 
   const info = await auto.system.get(auto.local.key)
   // granted capability lives in maxWeight - record.weight is the resolved
-  // sort weight of the writer's last applied node (see lib/claims.js)
+  // sort weight of the writer's last applied node (see lib/witness.js)
   t.is(info.maxWeight, 2)
   t.ok(auto.isIndexer)
 })
