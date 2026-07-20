@@ -928,7 +928,9 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
-    const t = Date.now()
+
+    // never stamp before anything we link
+    const t = Math.max(Date.now(), this.system.timestamp)
     const batch = []
 
     // witnesses only ride upgrade windows. witness.weight is the value the backer's
