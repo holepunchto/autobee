@@ -281,9 +281,6 @@ module.exports = class Autobee extends ReadyResource {
     try {
       await this._bootStateUnsafe()
     } catch (err) {
-      // without this, anything awaiting _bootGuard.ready() (bee.ready()'s
-      // preload, _bootAll(), etc.) would hang forever instead of seeing the
-      // failure
       this._bootGuard.destroy(err)
       throw err
     }
