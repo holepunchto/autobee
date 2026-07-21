@@ -309,7 +309,7 @@ module.exports = class Autobee extends ReadyResource {
     this._registerWakeup()
 
     if (this.wakeupCapability) {
-      if (this.bootstrap !== this.local) {
+      if (this.bootstrap !== this.local && !this.store.storage.readOnly) {
         await this.bootstrap.setGroup(this.wakeupCapability.discoveryKey)
       }
 
