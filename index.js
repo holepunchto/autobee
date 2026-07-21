@@ -278,6 +278,22 @@ module.exports = class Autobee extends ReadyResource {
   async _bootState() {
     if (!this._bootGuard.enter()) return this._bootGuard.ready()
 
+    try {
+      await this._bootStateUnsafe()
+    } catch (err) {
+      // without this, anything awaiting _bootGuard.ready() (bee.ready()'s
+      // preload, _bootAll(), etc.) would hang forever instead of seeing the
+      // failure
+      this._bootGuard.destroy(err)
+      throw err
+    }
+
+    this._bootGuard.exit()
+
+    return this._bootGuard.ready()
+  }
+
+  async _bootStateUnsafe() {
     const result = await boot(this.store, this.key, this.legacyViews, {
       encryptionKey: this.encryptionKey,
       keyPair: this.keyPair
@@ -351,10 +367,6 @@ module.exports = class Autobee extends ReadyResource {
     this.bee.move(view)
 
     await this.writers.updateLocalState()
-
-    this._bootGuard.exit()
-
-    return this._bootGuard.ready()
   }
 
   async _bootAll() {
