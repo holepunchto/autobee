@@ -235,7 +235,6 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const shared = await this.system.commonAncestor(system)
-    if (shared === null) return null // up to date
 
     return UpdateChanges.from(shared, current)
   }
