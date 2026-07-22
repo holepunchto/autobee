@@ -109,6 +109,7 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll = null
 
     this._handlers = handlers
+    this._now = handlers.now || Date.now // overridable for clock-drift tests
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
@@ -828,8 +829,7 @@ module.exports = class Autobee extends ReadyResource {
         continue
       }
 
-      // first writer is always added with full permissions
-      if (this.system.isGenesis()) {
+      if (b4a.equals(batch[0].key, this.key) && batch[0].length === 1) {
         await this._host.addWriter(batch[0].key)
       }
 
@@ -930,7 +930,7 @@ module.exports = class Autobee extends ReadyResource {
     const links = this.system.getLinks(this.local.key)
 
     // never stamp before anything we link
-    const t = Math.max(Date.now(), this.system.timestamp)
+    const t = Math.max(this._now(), this.system.timestamp)
     const batch = []
 
     // witnesses only ride upgrade windows. witness.weight is the value the backer's

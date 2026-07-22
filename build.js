@@ -109,6 +109,11 @@ auto.register({
       name: 'isAnchor',
       type: 'bool',
       required: true
+    },
+    {
+      name: 'timestamp',
+      type: 'uint',
+      required: false
     }
   ]
 })

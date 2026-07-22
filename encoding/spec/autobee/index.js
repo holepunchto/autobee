@@ -557,21 +557,29 @@ const encoding19 = {
 // @autobee/system-writer-v4
 const encoding20 = {
   preencode(state, m) {
-    state.end++ // max flag is 8 so always one byte
+    state.end++ // max flag is 16 so always one byte
     c.uint.preencode(state, m.weight)
     c.uint.preencode(state, m.maxWeight)
     c.uint.preencode(state, m.length)
     c.uint.preencode(state, m.clock)
+
+    if (m.timestamp) c.uint.preencode(state, m.timestamp)
   },
   encode(state, m) {
     const flags =
-      (m.isRemoved ? 1 : 0) | (m.isOplog ? 2 : 0) | (m.isGenesis ? 4 : 0) | (m.isAnchor ? 8 : 0)
+      (m.isRemoved ? 1 : 0) |
+      (m.isOplog ? 2 : 0) |
+      (m.isGenesis ? 4 : 0) |
+      (m.isAnchor ? 8 : 0) |
+      (m.timestamp ? 16 : 0)
 
     c.uint.encode(state, flags)
     c.uint.encode(state, m.weight)
     c.uint.encode(state, m.maxWeight)
     c.uint.encode(state, m.length)
     c.uint.encode(state, m.clock)
+
+    if (m.timestamp) c.uint.encode(state, m.timestamp)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -586,7 +594,8 @@ const encoding20 = {
       length: c.uint.decode(state),
       clock: c.uint.decode(state),
       isGenesis: (flags & 4) !== 0,
-      isAnchor: (flags & 8) !== 0
+      isAnchor: (flags & 8) !== 0,
+      timestamp: (flags & 16) !== 0 ? c.uint.decode(state) : 0
     }
   }
 }

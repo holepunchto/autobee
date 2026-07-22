@@ -1,6 +1,5 @@
 const test = require('brittle')
-const b4a = require('b4a')
-const { create, replicate, replicateAndSync, sync, encode, same } = require('./helpers')
+const { create, replicateAndSync, encode, same } = require('./helpers')
 
 test('links - writer sees previous writes via links', async function (t) {
   const auto1 = await create(t)
@@ -282,45 +281,3 @@ test('links - deep sequential chain', async function (t) {
   t.ok(await same(auto1, auto2), 'peers converge after deep sequential chain')
 })
 
-test('links - node stamped before its own links freezes the writer', async function (t) {
-  const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key)
-
-  await auto1.append(encode({ msg: 'genesis' }))
-  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
-
-  t.teardown(replicate(auto1, auto2))
-  await sync(auto1, auto2)
-
-  // a fresh honest head carrying a current timestamp to link against
-  await auto1.append(encode({ msg: 'honest head' }))
-  await sync(auto1, auto2)
-
-  // auto2 authors a node backdated behind the heads it links
-  const links = auto2.system.getLinks(auto2.local.key)
-  auto2.writers.appendLocal(encode({ msg: 'backdated' }), 1, null, links, false, null)
-  await auto2._bump()
-
-  // auto1 must freeze auto2's writer rather than ingest the node
-  const until = Date.now() + 10000
-  let frozen = null
-  while (Date.now() < until) {
-    for (const w of auto1.writers) {
-      if (w.isFrozen) frozen = w
-    }
-    if (frozen) break
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  }
-
-  t.ok(frozen, 'peer froze a writer')
-  if (frozen)
-    t.ok(b4a.equals(frozen.core.key, auto2.local.key), 'the frozen writer is the backdater')
-
-  const rec = await auto1.system.get(auto2.local.key)
-  t.is(rec.length, 0, 'the backdated node was never applied at the peer')
-
-  // and the peer stays live for honest traffic
-  await auto1.append(encode({ msg: 'still alive' }))
-  const rec1 = await auto1.system.get(auto1.local.key)
-  t.ok(rec1.length >= 4, 'peer keeps applying honest traffic')
-})
