@@ -951,7 +951,7 @@ module.exports = class Autobee extends ReadyResource {
       const node = this.writers.appendLocal(
         buffer,
         t,
-        null,
+        { start: i, end: values.length - 1 - i },
         lnk,
         optimistic,
         i === 0 ? claim : null
