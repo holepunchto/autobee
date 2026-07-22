@@ -225,7 +225,7 @@ module.exports = class Autobee extends ReadyResource {
     } catch {}
   }
 
-  async changesFrom({ system }) {
+  async changesFrom({ system } = {}) {
     const info = await this.system.getInfo()
 
     const current = {
@@ -234,7 +234,7 @@ module.exports = class Autobee extends ReadyResource {
       view: info ? info.view : EMPTY_HEAD
     }
 
-    const shared = await this.system.commonAncestor(system)
+    const shared = await this.system.commonAncestor(system || EMPTY_HEAD)
 
     return UpdateChanges.from(shared, current)
   }
