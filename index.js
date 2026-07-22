@@ -33,9 +33,13 @@ const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
 const MIN_FF_GAP = 32
 
+let DBG_NEXT_AUTO_ID = 1
+
 module.exports = class Autobee extends ReadyResource {
   constructor(store, key = null, handlers = {}) {
     super()
+
+    this._dbgId = DBG_NEXT_AUTO_ID++
 
     if (isObject(key)) {
       handlers = key

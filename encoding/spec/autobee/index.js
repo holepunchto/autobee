@@ -563,7 +563,7 @@ const encoding20 = {
     c.uint.preencode(state, m.length)
     c.uint.preencode(state, m.clock)
 
-    if (m.timestamp) c.uint.preencode(state, m.timestamp)
+    if (m.timestamp) c.int.preencode(state, m.timestamp)
   },
   encode(state, m) {
     const flags =
@@ -579,7 +579,7 @@ const encoding20 = {
     c.uint.encode(state, m.length)
     c.uint.encode(state, m.clock)
 
-    if (m.timestamp) c.uint.encode(state, m.timestamp)
+    if (m.timestamp) c.int.encode(state, m.timestamp)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -595,7 +595,7 @@ const encoding20 = {
       clock: c.uint.decode(state),
       isGenesis: (flags & 4) !== 0,
       isAnchor: (flags & 8) !== 0,
-      timestamp: (flags & 16) !== 0 ? c.uint.decode(state) : 0
+      timestamp: (flags & 16) !== 0 ? c.int.decode(state) : 0
     }
   }
 }

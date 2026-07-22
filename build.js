@@ -112,7 +112,7 @@ auto.register({
     },
     {
       name: 'timestamp',
-      type: 'uint',
+      type: 'int',
       required: false
     }
   ]

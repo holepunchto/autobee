@@ -509,7 +509,7 @@
         {
           "name": "timestamp",
           "required": false,
-          "type": "uint",
+          "type": "int",
           "version": 1
         }
       ]
