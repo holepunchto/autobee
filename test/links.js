@@ -280,4 +280,3 @@ test('links - deep sequential chain', async function (t) {
 
   t.ok(await same(auto1, auto2), 'peers converge after deep sequential chain')
 })
-
