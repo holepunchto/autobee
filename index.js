@@ -225,11 +225,18 @@ module.exports = class Autobee extends ReadyResource {
     } catch {}
   }
 
-  async changesFrom({ flushes, view }) {
-    const update = await this.system.changesFrom({ flushes, view })
-    if (update === null) return null // up to date
+  async changesFrom({ system }) {
+    const info = await this.system.getInfo()
 
-    return UpdateChanges.from(update.shared, update.current)
+    const current = {
+      flushes: info ? info.flushes : 0,
+      system: this.system.bee.head(),
+      view: info ? info.view : EMPTY_HEAD
+    }
+
+    const shared = await this.system.commonAncestor(system)
+
+    return UpdateChanges.from(shared, current)
   }
 
   replicate(...args) {
