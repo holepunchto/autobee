@@ -12,7 +12,7 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
-const claims = require('./lib/claims.js')
+const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const Reboot = require('./lib/reboot.js')
 const System = require('./lib/system.js')
@@ -25,9 +25,13 @@ const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
 const MIN_FF_GAP = 32
 
+let DBG_NEXT_AUTO_ID = 1
+
 module.exports = class Autobee extends ReadyResource {
   constructor(store, key = null, handlers = {}) {
     super()
+
+    this._dbgId = DBG_NEXT_AUTO_ID++
 
     if (isObject(key)) {
       handlers = key
@@ -101,6 +105,7 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll = null
 
     this._handlers = handlers
+    this._now = handlers.now || Date.now // overridable for clock-drift tests
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
@@ -755,6 +760,7 @@ module.exports = class Autobee extends ReadyResource {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
     const rollbackShared = this.system.shared
+    const rollbackAttestations = this.writers.attestations.length
 
     const t = await this.prepareBatch(batch)
     if (t.view) this._workingBee.move(t.view)
@@ -777,6 +783,8 @@ module.exports = class Autobee extends ReadyResource {
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
         this.system.shared = rollbackShared
+        // don't attest grants that were just undone
+        this.writers.attestations.length = rollbackAttestations
         return false
       }
     }
@@ -787,7 +795,7 @@ module.exports = class Autobee extends ReadyResource {
   async prepareBatch(batch) {
     const node = batch[0]
     // recomputed on every application, converges because prefixes converge
-    node.weight = await claims.resolveWeight(this, node)
+    node.weight = await resolveWeight(this, node)
     for (const n of batch) n.weight = node.weight
 
     // if (topo.isLinkingAll(node, this.system.heads)) {
@@ -816,8 +824,7 @@ module.exports = class Autobee extends ReadyResource {
         continue
       }
 
-      // first writer is always added with full permissions
-      if (this.system.isGenesis()) {
+      if (b4a.equals(batch[0].key, this.key) && batch[0].length === 1) {
         await this._host.addWriter(batch[0].key)
       }
 
@@ -851,12 +858,14 @@ module.exports = class Autobee extends ReadyResource {
       this._host.applying = null
     }
 
-    const changed = await this.system.flush(batch, this._workingBee)
+    const { changed, witnessed } = await this.system.flush(batch, this._workingBee)
 
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
       this._localViewLength = this._workingBee.context.local.length - this._localViewStart
     }
+
+    this.writers.attest(witnessed)
 
     await this._storeBoot()
 
@@ -916,31 +925,29 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
-    const t = Date.now()
+
+    // never stamp before anything we link
+    const t = Math.max(this._now(), this.system.timestamp)
     const batch = []
 
-    // nothing is stored for claims: the steady-state backer is our own
-    // previous claim, fresh candidates are derived on demand
+    // witnesses only ride upgrade windows. witness.weight is the value the backer's
+    // snapshot witnesses - verifiers recompute the same read and verify
     const rec = await this.system.get(this.local.key)
-    let claim = null
-    if (rec && rec.maxWeight > 0) {
-      const prev = await this.writers.localWriter.latestClaim()
-      claim = {
-        weight: rec.maxWeight,
-        referrer: rec.referrer,
-        backer: prev ? prev.backer : null
-      }
+    let witness = null
+    if (rec && rec.maxWeight > currentWeight(rec)) {
+      const sorted = this.writers.witnesses.sort(
+        (a, b) => b.attestation.weight - a.attestation.weight
+      )
 
-      if (rec.maxWeight > rec.weight) {
-        const probe = { key: this.local.key, length: this.writers.localWriter.appendLength }
+      for (const { key, length, attestation, manifest } of sorted) {
+        if (attestation.weight > rec.maxWeight) continue
 
-        // decide from local reads whether hunting is needed at all - an
-        // offline append must not probe foreign cores
-        const have = await claims.availableWeight(this, probe, claim)
-        if (have < rec.maxWeight) {
-          const backer = await claims.findBacker(this, probe, claim)
-          if (backer) claim.backer = backer
-        }
+        const backer = await this.system.get(key)
+        if (!backer || backer.isRemoved || backer.length < length) continue
+
+        const { weight, signature } = attestation
+        witness = { weight, backer: { key, length, signature, manifest } }
+        break
       }
     }
 
@@ -954,7 +961,7 @@ module.exports = class Autobee extends ReadyResource {
         { start: i, end: values.length - 1 - i },
         lnk,
         optimistic,
-        i === 0 ? claim : null
+        i === 0 ? witness : null
       )
       batch.push(node)
     }

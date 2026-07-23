@@ -349,7 +349,7 @@ test('writer-management - concurrent remove and write from removed writer', asyn
 
 // Previously hung (non-productive undo requeue loop after auto2's post-re-add write).
 // Fixed by the addSorted index/undo shared-prefix detection + per-node immutable
-// weight claims (lib/claims.js).
+// weight witnesses (lib/witness.js).
 test('writer-management - removed writer re-added by third party while writing', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
