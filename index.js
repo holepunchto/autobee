@@ -935,7 +935,9 @@ module.exports = class Autobee extends ReadyResource {
     const rec = await this.system.get(this.local.key)
     let witness = null
     if (rec && rec.maxWeight > currentWeight(rec)) {
-      const sorted = this.writers.witnesses.sort((a, b) => b.attestation.weight - a.attestation.weight)
+      const sorted = this.writers.witnesses.sort(
+        (a, b) => b.attestation.weight - a.attestation.weight
+      )
 
       for (const { key, length, attestation, manifest } of sorted) {
         if (attestation.weight > rec.maxWeight) continue
