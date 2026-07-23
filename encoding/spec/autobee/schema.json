@@ -623,6 +623,38 @@
       ]
     },
     {
+      "name": "signed-backer",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "signature",
+          "required": true,
+          "type": "fixed64",
+          "version": 1
+        },
+        {
+          "name": "manifest",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "witness",
       "namespace": "autobee",
       "compact": false,
@@ -637,7 +669,33 @@
         {
           "name": "backer",
           "required": true,
-          "type": "@autobee/link",
+          "type": "@autobee/signed-backer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "attestation",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "signature",
+          "required": true,
+          "type": "fixed64",
           "version": 1
         }
       ]
@@ -685,6 +743,12 @@
         {
           "name": "witness",
           "type": "@autobee/witness",
+          "version": 1
+        },
+        {
+          "name": "attestations",
+          "array": true,
+          "type": "@autobee/attestation",
           "version": 1
         }
       ]

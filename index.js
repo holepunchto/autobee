@@ -12,15 +12,7 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
-const {
-  verifyWitness,
-  resolveWeight,
-  currentWeight,
-  witnessedWeight,
-  isLiveBacker,
-  findBacker,
-  PROBE_TIMEOUT
-} = require('./lib/witness.js')
+const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const Reboot = require('./lib/reboot.js')
 const System = require('./lib/system.js')
@@ -247,7 +239,7 @@ module.exports = class Autobee extends ReadyResource {
       view: info ? info.view : EMPTY_HEAD
     }
 
-    const shared = await this.system.commonAncestor(system)
+    const shared = await this.system.commonAncestor(system || EMPTY_HEAD)
 
     return UpdateChanges.from(shared, current)
   }
@@ -768,6 +760,7 @@ module.exports = class Autobee extends ReadyResource {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
     const rollbackShared = this.system.shared
+    const rollbackAttestations = this.writers.attestations.length
 
     const t = await this.prepareBatch(batch)
     if (t.view) this._workingBee.move(t.view)
@@ -790,15 +783,13 @@ module.exports = class Autobee extends ReadyResource {
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
         this.system.shared = rollbackShared
+        // don't attest grants that were just undone
+        this.writers.attestations.length = rollbackAttestations
         return false
       }
     }
 
     return true
-  }
-
-  _verifyWitness(node, activeRequests) {
-    return verifyWitness(this, node, activeRequests)
   }
 
   async prepareBatch(batch) {
@@ -867,12 +858,14 @@ module.exports = class Autobee extends ReadyResource {
       this._host.applying = null
     }
 
-    const changed = await this.system.flush(batch, this._workingBee)
+    const { changed, witnessed } = await this.system.flush(batch, this._workingBee)
 
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
       this._localViewLength = this._workingBee.context.local.length - this._localViewStart
     }
+
+    this.writers.attest(witnessed)
 
     await this._storeBoot()
 
@@ -942,22 +935,18 @@ module.exports = class Autobee extends ReadyResource {
     const rec = await this.system.get(this.local.key)
     let witness = null
     if (rec && rec.maxWeight > currentWeight(rec)) {
-      const probe = { key: this.local.key, length: this.writers.localWriter.appendLength }
+      const sorted = this.writers.witnesses.sort((a, b) => b.attestation.weight - a.attestation.weight)
 
-      // all probes time out so an offline append never blocks on foreign
-      // cores - worst case we append witness-free and sort at our floor
-      const prev = await this.writers.localWriter.latestWitness()
-      let backer = prev && (await isLiveBacker(this, prev.backer)) ? prev.backer : null
-      let weight = backer
-        ? await witnessedWeight(this, probe, backer, { timeout: PROBE_TIMEOUT })
-        : 0
+      for (const { key, length, attestation, manifest } of sorted) {
+        if (attestation.weight > rec.maxWeight) continue
 
-      if (weight < rec.maxWeight) {
-        const found = await findBacker(this, probe, rec.maxWeight)
-        if (found && found.weight > weight) ({ backer, weight } = found)
+        const backer = await this.system.get(key)
+        if (!backer || backer.isRemoved || backer.length < length) continue
+
+        const { weight, signature } = attestation
+        witness = { weight, backer: { key, length, signature, manifest } }
+        break
       }
-
-      if (backer && weight > currentWeight(rec)) witness = { weight, backer }
     }
 
     for (let i = 0; i < values.length; i++) {

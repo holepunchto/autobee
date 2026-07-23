@@ -212,6 +212,32 @@ auto.register({
 })
 
 auto.register({
+  name: 'signed-backer',
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'length',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'signature',
+      type: 'fixed64',
+      required: true
+    },
+    {
+      name: 'manifest',
+      type: 'buffer',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'witness',
   fields: [
     {
@@ -221,7 +247,28 @@ auto.register({
     },
     {
       name: 'backer',
-      type: '@autobee/link',
+      type: '@autobee/signed-backer',
+      required: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'attestation',
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'signature',
+      type: 'fixed64',
       required: true
     }
   ]
@@ -261,6 +308,11 @@ auto.register({
     {
       name: 'witness',
       type: '@autobee/witness'
+    },
+    {
+      name: 'attestations',
+      type: '@autobee/attestation',
+      array: true
     }
   ]
 })
