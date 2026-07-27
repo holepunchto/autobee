@@ -84,7 +84,7 @@ auto.register({
       required: true
     },
     {
-      // granted capability - written only by grant ops
+      // granted capability - written only by apply ops
       name: 'maxWeight',
       type: 'uint',
       required: true
@@ -100,15 +100,20 @@ auto.register({
       required: true
     },
     {
-      // node whose application carried the grant - must be deterministic
-      // (system bees stay byte-identical across peers)
-      name: 'referrer',
-      type: '@autobee/link'
+      // genesis or anchor
+      name: 'isGenesis',
+      type: 'bool',
+      required: true
     },
     {
       name: 'isAnchor',
       type: 'bool',
       required: true
+    },
+    {
+      name: 'timestamp',
+      type: 'int',
+      required: false
     }
   ]
 })
@@ -206,10 +211,34 @@ auto.register({
   ]
 })
 
-// immutable weight claim: referrer carried the backing grant, backer is a
-// third-party corroborator - both gate like links and floor the ordering
 auto.register({
-  name: 'claim',
+  name: 'signed-backer',
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'length',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'signature',
+      type: 'fixed64',
+      required: true
+    },
+    {
+      name: 'manifest',
+      type: 'buffer',
+      required: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'witness',
   fields: [
     {
       name: 'weight',
@@ -217,12 +246,30 @@ auto.register({
       required: true
     },
     {
-      name: 'referrer',
-      type: '@autobee/link'
+      name: 'backer',
+      type: '@autobee/signed-backer',
+      required: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'attestation',
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
     },
     {
-      name: 'backer',
-      type: '@autobee/link'
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'signature',
+      type: 'fixed64',
+      required: true
     }
   ]
 })
@@ -259,8 +306,13 @@ auto.register({
       type: 'buffer'
     },
     {
-      name: 'claim',
-      type: '@autobee/claim'
+      name: 'witness',
+      type: '@autobee/witness'
+    },
+    {
+      name: 'attestations',
+      type: '@autobee/attestation',
+      array: true
     }
   ]
 })

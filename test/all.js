@@ -18,6 +18,7 @@ async function runTests() {
   await import('./view-consistency.js')
   await import('./view-range.js')
   await import('./wakeup.js')
+  await import('./witness.js')
   await import('./writer-management.js')
 
   test.resume()
