@@ -9,6 +9,7 @@ async function runTests() {
 
   await import('./basic.js')
   await import('./batch.js')
+  await import('./close.js')
   await import('./concurrent-writes.js')
   await import('./encryption.js')
   await import('./links.js')

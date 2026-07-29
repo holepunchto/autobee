@@ -210,7 +210,11 @@ module.exports = class Autobee extends ReadyResource {
   async _close() {
     this._interrupting = true
     if (this._notifyHandler) this._notifyHandler.destroy()
-    if (this._draining) await this._draining
+    if (this._draining) {
+      // drain may be waiting on replicated blocks
+      this._clearRequests()
+      await this._draining
+    }
 
     if (this._handlers.close) await this._handlers.close(this.view)
 
@@ -224,6 +228,15 @@ module.exports = class Autobee extends ReadyResource {
     try {
       await this._bootingAll
     } catch {}
+  }
+
+  _clearRequests() {
+    const closingError = new Error('Autobee is closing')
+    for (const session of this.store.sessions) {
+      if (session.opened && !session.closing) {
+        session.clearRequests(session.activeRequests, closingError)
+      }
+    }
   }
 
   async changesFrom({ system } = {}) {
