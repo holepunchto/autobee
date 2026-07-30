@@ -45,7 +45,7 @@ module.exports = class Autobee extends ReadyResource {
       // defer one tick to ensure consistent state, then return state prom
       preload: async () => {
         await 1
-        if (!this._bootGuard.opened) await this._bootGuard.ready()
+        await this._bootReady()
       },
       getEncryptionProvider: this.getViewEncryption
     })
@@ -316,6 +316,20 @@ module.exports = class Autobee extends ReadyResource {
     return this._bootGuard.ready()
   }
 
+  // wait for boot to finish. a failed boot rejects the guard - swallow it here
+  // so the error surfaces only through ready() (via _open awaiting _bootingState)
+  // instead of leaking as an uncaught rejection from these internal awaiters.
+  // returns false when boot failed so the caller can bail out quietly.
+  async _bootReady() {
+    if (this._bootGuard.opened) return true
+    try {
+      await this._bootGuard.ready()
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async _bootStateUnsafe() {
     const result = await boot(this.store, this.key, this.legacyViews, {
       encryptionKey: this.encryptionKey,
@@ -329,8 +343,11 @@ module.exports = class Autobee extends ReadyResource {
     this.encryptionKey = result.encryptionKey
     this.previousDrain = result.previousDrain
 
-    if (this.encrypted) {
-      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
+    if (this.encrypted && this.encryptionKey === null) {
+      // a caller error (opened without a key), not an autobee bug - throw a
+      // plain Error so it stays catchable and surfaces through ready() instead
+      // of an ERR_ASSERTION that safety-catch re-throws as an uncaught crash
+      throw new Error('Encryption key is expected')
     }
 
     this.local = result.local
@@ -393,7 +410,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootAll() {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
 
     for await (const node of this.system.list()) {
       if (node.isAnchor) continue
@@ -407,7 +424,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bump() {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
 
     await this._flushWakeup()
 
@@ -920,7 +937,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async wakeup({ key, length }) {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
     await this.writers.wakeup(key, length)
     await this._bump()
   }
