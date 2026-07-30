@@ -216,6 +216,11 @@ module.exports = class Autobee extends ReadyResource {
       await this._draining
     }
 
+    // let in-flight writer adds finish
+    try {
+      await this._bootingAll
+    } catch {}
+
     if (this._handlers.close) await this._handlers.close(this.view)
 
     await this.local.close()
@@ -224,10 +229,6 @@ module.exports = class Autobee extends ReadyResource {
     await this._workingBee.close()
     await this.bee.close()
     await this.store.close()
-
-    try {
-      await this._bootingAll
-    } catch {}
   }
 
   _clearRequests() {
@@ -1005,6 +1006,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async rebootFromHeads(hints, { force = false } = {}) {
     if (!this._handlers.onwakeup) return false
+    if (this._interrupting) return false
     if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
       return false
     }
