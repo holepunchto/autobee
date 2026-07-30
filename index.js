@@ -290,6 +290,10 @@ module.exports = class Autobee extends ReadyResource {
     if (this._handlers.keyPair) {
       this.keyPair = await this._handlers.keyPair
     }
+
+    if (this.bootFrom) {
+      this.bootFrom = (await this.bootFrom) || null
+    }
   }
 
   getMostRecentHead() {
