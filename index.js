@@ -1128,8 +1128,7 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    // todo: binary search to find shared common tree and pass as undo
-    this.system.shared = { flushes: -1, view: EMPTY_HEAD, system: EMPTY_HEAD }
+    this.system.shared = this.rebootTo.shared || { flushes: -1, view: EMPTY_HEAD, system: EMPTY_HEAD }
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
