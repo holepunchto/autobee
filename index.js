@@ -223,6 +223,10 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this._handlers.close) await this._handlers.close(this.view)
 
+    // close writer sessions explicitly - writer churn can leave an open writer
+    // session referenced by our active map but dropped from corestore's session
+    // tracker, so store.close (which only sweeps the tracker) does not reach it
+    if (this.writers) await this.writers.close()
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
@@ -1151,8 +1155,8 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    // todo: binary search to find shared common tree and pass as undo
-    this.system.shared = { flushes: -1, view: EMPTY_HEAD, system: EMPTY_HEAD }
+    // shared floor computed during the reboot preload (Reboot._commonAncestor)
+    this.system.shared = this.rebootTo.shared || { flushes: -1, view: EMPTY_HEAD, system: EMPTY_HEAD }
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
