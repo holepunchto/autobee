@@ -502,7 +502,7 @@ module.exports = class Autobee extends ReadyResource {
     if (this._interrupting) return
 
     if (this._needsUpdate) {
-      await this._update(changes, false)
+      await this._update(changes)
     }
   }
 
@@ -602,14 +602,14 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _update(changes, fastForward) {
+  async _update(changes) {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
 
     if (!changes) return
 
     changes.finalise()
-    await this._handlers.update(this.view, changes, { fastForward })
+    await this._handlers.update(this.view, changes)
   }
 
   async setLocal(key, { keyPair } = {}) {
@@ -1128,7 +1128,11 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    this.system.shared = this.rebootTo.shared || { flushes: -1, view: EMPTY_HEAD, system: EMPTY_HEAD }
+    this.system.shared = this.rebootTo.shared || {
+      flushes: -1,
+      view: EMPTY_HEAD,
+      system: EMPTY_HEAD
+    }
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
@@ -1143,7 +1147,7 @@ module.exports = class Autobee extends ReadyResource {
     this.rebootTo = null
     await this.writers.refresh()
 
-    await this._update(changes, true)
+    await this._update(changes)
 
     this.emit('move-to', to, from)
     this.reboot.resolve({ to, from })
@@ -1167,7 +1171,7 @@ module.exports = class Autobee extends ReadyResource {
     await sys.close()
 
     await this.applyBacklog(t.tip)
-    return this._update(changes, false)
+    return this._update(changes)
   }
 
   replay() {
