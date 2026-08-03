@@ -339,8 +339,8 @@ module.exports = class Autobee extends ReadyResource {
     this.encryptionKey = result.encryptionKey
     this.previousDrain = result.previousDrain
 
-    if (this.encrypted) {
-      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
+    if (this.encrypted && this.encryptionKey === null) {
+      throw new Error('Encryption key is expected')
     }
 
     this.local = result.local
