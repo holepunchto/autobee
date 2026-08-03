@@ -223,6 +223,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this._handlers.close) await this._handlers.close(this.view)
 
+    if (this.writers) await this.writers.close()
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
