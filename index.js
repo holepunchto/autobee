@@ -45,7 +45,7 @@ module.exports = class Autobee extends ReadyResource {
       // defer one tick to ensure consistent state, then return state prom
       preload: async () => {
         await 1
-        if (!this._bootGuard.opened) await this._bootGuard.ready()
+        await this._bootReady()
       },
       getEncryptionProvider: this.getViewEncryption
     })
@@ -316,6 +316,16 @@ module.exports = class Autobee extends ReadyResource {
     return this._bootGuard.ready()
   }
 
+  async _bootReady() {
+    if (this._bootGuard.opened) return true
+    try {
+      await this._bootGuard.ready()
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async _bootStateUnsafe() {
     const result = await boot(this.store, this.key, this.legacyViews, {
       encryptionKey: this.encryptionKey,
@@ -393,7 +403,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootAll() {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
 
     for await (const node of this.system.list()) {
       if (node.isAnchor) continue
@@ -407,7 +417,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bump() {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
 
     await this._flushWakeup()
 
@@ -920,7 +930,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async wakeup({ key, length }) {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
     await this.writers.wakeup(key, length)
     await this._bump()
   }
