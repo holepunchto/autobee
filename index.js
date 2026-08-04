@@ -339,12 +339,12 @@ module.exports = class Autobee extends ReadyResource {
     this.id = result.bootstrap.core.id
     this.encryptionKey = result.encryptionKey
     this.previousDrain = result.previousDrain
+    this.local = result.local
 
     if (this.encrypted && this.encryptionKey === null) {
       throw new Error('Encryption key is expected')
     }
 
-    this.local = result.local
     this.local.setEncryption(this._getEncryptionProvider())
     this.local.setActive(true)
 
