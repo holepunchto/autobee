@@ -105,6 +105,7 @@ module.exports = class Autobee extends ReadyResource {
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
+    this._ackRequired = false
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
     this._notifyHandler = null
@@ -484,6 +485,8 @@ module.exports = class Autobee extends ReadyResource {
     // tracked across drain iteration
     this.system.shared = null
 
+    this._ackRequired = false
+
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
@@ -503,7 +506,12 @@ module.exports = class Autobee extends ReadyResource {
             break // revaluate conditions...
           }
 
-          if (!(await this._bumpPendingWriters())) break
+          if (await this._bumpPendingWriters()) {
+            this._needsUpdate = true
+            continue
+          }
+
+          if (!this._appendAck()) break
           this._needsUpdate = true
         }
 
@@ -742,6 +750,22 @@ module.exports = class Autobee extends ReadyResource {
     for (const batch of this._catchupMigratedNodes) {
       await this._processBatch(batch)
     }
+  }
+
+  // append a null value node to ack writer
+  _appendAck() {
+    if (!this._ackRequired) return false
+    if (!this.writers.writable) return false
+    if (this.writers.attestations.length === 0) return false
+
+    if (this.writers.localWriter.pending !== null) return false
+
+    const links = this.system.getLinks(this.local.key)
+    const t = Math.max(this._now(), this.system.timestamp)
+
+    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null)
+    this._ackRequired = false
+    return true
   }
 
   async _bumpPendingWriters() {
