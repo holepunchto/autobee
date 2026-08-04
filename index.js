@@ -45,7 +45,7 @@ module.exports = class Autobee extends ReadyResource {
       // defer one tick to ensure consistent state, then return state prom
       preload: async () => {
         await 1
-        if (!this._bootGuard.opened) await this._bootGuard.ready()
+        await this._bootReady()
       },
       getEncryptionProvider: this.getViewEncryption
     })
@@ -216,18 +216,20 @@ module.exports = class Autobee extends ReadyResource {
       await this._draining
     }
 
+    // let in-flight writer adds finish
+    try {
+      await this._bootingAll
+    } catch {}
+
     if (this._handlers.close) await this._handlers.close(this.view)
 
+    if (this.writers) await this.writers.close()
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
     await this._workingBee.close()
     await this.bee.close()
     await this.store.close()
-
-    try {
-      await this._bootingAll
-    } catch {}
   }
 
   _clearRequests() {
@@ -315,6 +317,16 @@ module.exports = class Autobee extends ReadyResource {
     return this._bootGuard.ready()
   }
 
+  async _bootReady() {
+    if (this._bootGuard.opened) return true
+    try {
+      await this._bootGuard.ready()
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async _bootStateUnsafe() {
     const result = await boot(this.store, this.key, this.legacyViews, {
       encryptionKey: this.encryptionKey,
@@ -328,8 +340,8 @@ module.exports = class Autobee extends ReadyResource {
     this.encryptionKey = result.encryptionKey
     this.previousDrain = result.previousDrain
 
-    if (this.encrypted) {
-      asserts.assert(this.encryptionKey !== null, 'Encryption key is expected')
+    if (this.encrypted && this.encryptionKey === null) {
+      throw new Error('Encryption key is expected')
     }
 
     this.local = result.local
@@ -392,7 +404,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootAll() {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
 
     for await (const node of this.system.list()) {
       if (node.isAnchor) continue
@@ -406,7 +418,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bump() {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
 
     await this._flushWakeup()
 
@@ -919,7 +931,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async wakeup({ key, length }) {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!(await this._bootReady())) return
     await this.writers.wakeup(key, length)
     await this._bump()
   }
@@ -1005,6 +1017,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async rebootFromHeads(hints, { force = false } = {}) {
     if (!this._handlers.onwakeup) return false
+    if (this._interrupting) return false
     if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
       return false
     }

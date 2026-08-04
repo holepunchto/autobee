@@ -8,6 +8,7 @@ async function runTests() {
   test.pause()
 
   await import('./basic.js')
+  await import('./catchable-boot.js')
   await import('./batch.js')
   await import('./close.js')
   await import('./concurrent-writes.js')
