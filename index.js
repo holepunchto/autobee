@@ -106,6 +106,7 @@ module.exports = class Autobee extends ReadyResource {
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
     this._ackRequired = false
+    this._ackedHeads = new Map()
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
     this._notifyHandler = null
@@ -756,12 +757,29 @@ module.exports = class Autobee extends ReadyResource {
   _appendAck() {
     if (!this._ackRequired) return false
     if (!this.writers.writable) return false
-    if (this.writers.attestations.length === 0) return false
 
     if (this.writers.localWriter.pending !== null) return false
 
     const links = this.system.getLinks(this.local.key)
     const t = Math.max(this._now(), this.system.timestamp)
+
+    let unlinked = false
+    for (const { key, length } of links) {
+      const hex = b4a.toString(key, 'hex')
+      const acked = this._ackedHeads.get(hex) || 0
+      if (length > acked) {
+        unlinked = true
+        break
+      }
+    }
+    if (!unlinked) {
+      this._ackRequired = false
+      return false
+    }
+
+    for (const { key, length } of links) {
+      this._ackedHeads.set(b4a.toString(key, 'hex'), length)
+    }
 
     this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null)
     this._ackRequired = false
