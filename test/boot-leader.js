@@ -3,7 +3,7 @@ const b4a = require('b4a')
 
 const { create, replicate, same, encode, decode } = require('./helpers')
 
-test('bootFrom admin - onview fast-forwards to first accepted admin head', async function (t) {
+test('bootFrom leader - onview fast-forwards to first accepted leader head', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 1000; i++) {
@@ -14,9 +14,9 @@ test('bootFrom admin - onview fast-forwards to first accepted admin head', async
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      admin: {
+      leader: {
         key: auto1.local.key,
-        onview: async (view, onadmin) => {
+        onview: async (view, onleader) => {
           const entry = await view.get(b4a.from('latest'))
           if (!entry) return false
           sawView = true
@@ -47,7 +47,7 @@ test('bootFrom admin - onview fast-forwards to first accepted admin head', async
   t.ok(await same(auto1, auto3), 'views converged')
 })
 
-test('bootFrom admin - onview can discover more admins via onadmin', async function (t) {
+test('bootFrom leader - onview can discover more leaders via onleader', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
@@ -60,13 +60,13 @@ test('bootFrom admin - onview can discover more admins via onadmin', async funct
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      admin: {
+      leader: {
         key: auto1.local.key,
-        onview: async (view, onadmin) => {
+        onview: async (view, onleader) => {
           const entry = await view.get(b4a.from('latest'))
           if (!entry) return false
-          await onadmin(extra)
-          discovered = auto3.admins.cores.has(b4a.toString(extra, 'hex'))
+          await onleader(extra)
+          discovered = auto3.leaders.cores.has(b4a.toString(extra, 'hex'))
           return decode(entry.value).value === 'a99'
         }
       }
@@ -85,18 +85,18 @@ test('bootFrom admin - onview can discover more admins via onadmin', async funct
 
   await t.execution(moved, 'joiner fast-forwarded')
 
-  t.ok(discovered, 'onadmin added the discovered key to the admin set')
-  t.ok(auto3.admins.cores.has(b4a.toString(auto1.local.key, 'hex')), 'seed admin tracked')
-  t.ok(auto3.admins.cores.has(b4a.toString(extra, 'hex')), 'discovered admin tracked')
+  t.ok(discovered, 'onleader added the discovered key to the leader set')
+  t.ok(auto3.leaders.cores.has(b4a.toString(auto1.local.key, 'hex')), 'seed leader tracked')
+  t.ok(auto3.leaders.cores.has(b4a.toString(extra, 'hex')), 'discovered leader tracked')
 })
 
-test('bootFrom admin - close settles while boot is parked', async function (t) {
+test('bootFrom leader - close settles while boot is parked', async function (t) {
   const auto1 = await create(t)
   await auto1.append(encode({ value: 'a' }))
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      admin: {
+      leader: {
         key: auto1.local.key,
         onview: () => false
       }
@@ -119,7 +119,7 @@ test('bootFrom admin - close settles while boot is parked', async function (t) {
   await teardown()
 })
 
-test('bootFrom admin - onview defaults to accepting the first head', async function (t) {
+test('bootFrom leader - onview defaults to accepting the first head', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 200; i++) {
@@ -128,7 +128,7 @@ test('bootFrom admin - onview defaults to accepting the first head', async funct
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      admin: { key: auto1.local.key }
+      leader: { key: auto1.local.key }
     }
   })
 
@@ -173,7 +173,7 @@ test('bootFrom head - fast-forwards straight onto a known head', async function 
   t.ok(await same(auto1, auto3), 'views converged')
 })
 
-test('bootFrom - head is favoured when both head and admin are set', async function (t) {
+test('bootFrom - head is favoured when both head and leader are set', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 200; i++) {
@@ -187,7 +187,7 @@ test('bootFrom - head is favoured when both head and admin are set', async funct
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
       head,
-      admin: {
+      leader: {
         key: auto1.local.key,
         onview: () => {
           onviewCalled = true
@@ -209,6 +209,6 @@ test('bootFrom - head is favoured when both head and admin are set', async funct
 
   await t.execution(moved, 'joiner fast-forwarded')
 
-  t.absent(onviewCalled, 'admin onview was not consulted when head is set')
+  t.absent(onviewCalled, 'leader onview was not consulted when head is set')
   t.ok(await same(auto1, auto3), 'views converged')
 })
