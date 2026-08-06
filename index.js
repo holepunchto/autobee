@@ -65,7 +65,7 @@ module.exports = class Autobee extends ReadyResource {
     })
     this.system.auto = this
 
-    this.admins = new AdminSet(this.store)
+    this.admins = new AdminSet(this)
 
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
