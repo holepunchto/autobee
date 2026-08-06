@@ -14,12 +14,14 @@ test('bootFrom admin - onview fast-forwards to first accepted admin head', async
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      admin: auto1.local.key,
-      onview: async (view, onadmin) => {
-        const entry = await view.get(b4a.from('latest'))
-        if (!entry) return false
-        sawView = true
-        return decode(entry.value).value === 'a999'
+      admin: {
+        key: auto1.local.key,
+        onview: async (view, onadmin) => {
+          const entry = await view.get(b4a.from('latest'))
+          if (!entry) return false
+          sawView = true
+          return decode(entry.value).value === 'a999'
+        }
       }
     }
   })
@@ -58,13 +60,15 @@ test('bootFrom admin - onview can discover more admins via onadmin', async funct
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      admin: auto1.local.key,
-      onview: async (view, onadmin) => {
-        const entry = await view.get(b4a.from('latest'))
-        if (!entry) return false
-        await onadmin(extra)
-        discovered = auto3.admins.cores.has(b4a.toString(extra, 'hex'))
-        return decode(entry.value).value === 'a99'
+      admin: {
+        key: auto1.local.key,
+        onview: async (view, onadmin) => {
+          const entry = await view.get(b4a.from('latest'))
+          if (!entry) return false
+          await onadmin(extra)
+          discovered = auto3.admins.cores.has(b4a.toString(extra, 'hex'))
+          return decode(entry.value).value === 'a99'
+        }
       }
     }
   })
@@ -92,8 +96,10 @@ test('bootFrom admin - close settles while boot is parked', async function (t) {
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      admin: auto1.local.key,
-      onview: () => false
+      admin: {
+        key: auto1.local.key,
+        onview: () => false
+      }
     }
   })
 
@@ -111,4 +117,98 @@ test('bootFrom admin - close settles while boot is parked', async function (t) {
   t.comment('close took ' + (Date.now() - started) + 'ms')
 
   await teardown()
+})
+
+test('bootFrom admin - onview defaults to accepting the first head', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 200; i++) {
+    await auto1.append(encode({ value: 'a' + i }))
+  }
+
+  const auto3 = await create(t, auto1.key, {
+    bootFrom: {
+      admin: { key: auto1.local.key }
+    }
+  })
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('did not move')), 10_000)
+    auto3.once('move-to', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  t.teardown(replicate(auto1, auto3))
+
+  await t.execution(moved, 'joiner fast-forwarded with default onview')
+
+  t.ok(await same(auto1, auto3), 'views converged')
+})
+
+test('bootFrom head - fast-forwards straight onto a known head', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 200; i++) {
+    await auto1.append(encode({ value: 'a' + i }))
+  }
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+
+  const auto3 = await create(t, auto1.key, { bootFrom: { head } })
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('did not move')), 10_000)
+    auto3.once('move-to', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  t.teardown(replicate(auto1, auto3))
+
+  await t.execution(moved, 'joiner fast-forwarded from head')
+
+  t.ok(await same(auto1, auto3), 'views converged')
+})
+
+test('bootFrom - head is favoured when both head and admin are set', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 200; i++) {
+    await auto1.append(encode({ value: 'a' + i }))
+  }
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+
+  let onviewCalled = false
+
+  const auto3 = await create(t, auto1.key, {
+    bootFrom: {
+      head,
+      admin: {
+        key: auto1.local.key,
+        onview: () => {
+          onviewCalled = true
+          return true
+        }
+      }
+    }
+  })
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('did not move')), 10_000)
+    auto3.once('move-to', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  t.teardown(replicate(auto1, auto3))
+
+  await t.execution(moved, 'joiner fast-forwarded')
+
+  t.absent(onviewCalled, 'admin onview was not consulted when head is set')
+  t.ok(await same(auto1, auto3), 'views converged')
 })

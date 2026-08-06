@@ -65,7 +65,7 @@ module.exports = class Autobee extends ReadyResource {
     })
     this.system.auto = this
 
-    this.admins = new AdminSet(this)
+    this.admins = new AdminSet(this, this._onBootCandidate.bind(this))
 
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
@@ -86,6 +86,7 @@ module.exports = class Autobee extends ReadyResource {
     this.rebooting = null
     this.rebootTo = null
     this._bootWait = null
+    this._bootCandidate = null
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -651,6 +652,31 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  // reads views from the latest oplog message
+  async _getLatestOplogViews(core) {
+    if (this.encrypted && core.encryption === null) {
+      core.setEncryption(this._getEncryptionProvider())
+    }
+
+    const length = core.length
+    if (length === 0) return null
+
+    const buf = await core.get(length - 1)
+    if (buf === null) return null
+
+    let op = encoding.decodeOplog(buf)
+    if (op.version < 3) op = await this._inflateLegacyOplog(buf, core, length - 1)
+
+    if (!op.views || !op.views.view) return null
+
+    const v = op.views.view
+    return {
+      head: { key: core.key, length },
+      view: { key: v.key, length: v.start + v.length },
+      flushes: op.views.flushes
+    }
+  }
+
   async _update(changes) {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
@@ -1116,7 +1142,19 @@ module.exports = class Autobee extends ReadyResource {
     return this._rebootFromHead(head, null, { force: true, wait: false })
   }
 
-  // applies its own reboot to avoid deadlocking on the drain loop it blocks.
+  _onBootCandidate(candidate) {
+    if (this._interrupting) return
+
+    if (this.bootFrom) {
+      this._bootCandidate = candidate
+      if (this._bootWait) this._bootWait.resolve()
+      return
+    }
+
+    this._rebootFromHead(candidate.head, null).catch(safetyCatch)
+  }
+
+  // applies its own reboot to avoid deadlocking on the drain loop it blocks
   async _bootFromAdmin({ key, onview = () => true }) {
     const onadmin = (k) => this.admins.add(k)
     await this.admins.add(key)
@@ -1124,15 +1162,18 @@ module.exports = class Autobee extends ReadyResource {
     while (!this._interrupting) {
       this._bootWait = rrp()
 
-      const head = await this._pickAdminCandidate(onview, onadmin)
-      if (this._interrupting) return
+      const candidate = this._bootCandidate
+      if (candidate) {
+        const head = await this._evaluateCandidate(candidate, onview, onadmin)
+        if (this._interrupting) return
 
-      if (head) {
-        await this._rebootFromHead(head, null, { force: true, wait: false })
-        if (this.rebootTo !== null) {
-          await this._applyReboot()
-          this._bootWait = null
-          return
+        if (head) {
+          await this._rebootFromHead(head, null, { force: true, wait: false })
+          if (this.rebootTo !== null) {
+            await this._applyReboot()
+            this._bootWait = null
+            return
+          }
         }
       }
 
@@ -1142,39 +1183,17 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _pickAdminCandidate(onview, onadmin) {
-    const cands = []
-    for (const core of this.admins.cores.values()) {
-      let res
-      try {
-        res = await this._getOplog(core.key, -1)
-      } catch {
-        if (this._interrupting) return null
-        continue
-      }
-      if (this._interrupting) return null
-      if (res && res.op.views) cands.push(res)
+  async _evaluateCandidate(candidate, onview, onadmin) {
+    const view = this.bee.checkout(candidate.view)
+
+    let accepted = false
+    try {
+      accepted = await onview(view, onadmin)
+    } finally {
+      view.close()
     }
 
-    cands.sort((a, b) => b.op.views.flushes - a.op.views.flushes)
-
-    for (const res of cands) {
-      const head = { key: res.key, length: res.length }
-      const v = res.op.views.view
-      const view = this.bee.checkout({ key: v.key, length: v.start + v.length })
-
-      let accepted = false
-      try {
-        accepted = await onview(view, onadmin)
-      } finally {
-        view.close()
-      }
-
-      if (this._interrupting) return null
-      if (accepted) return head
-    }
-
-    return null
+    return accepted ? candidate.head : null
   }
 
   // head is a system head; reboots onto it, migrating in place if it's a legacy version
