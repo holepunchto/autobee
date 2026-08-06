@@ -523,12 +523,13 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    this._draining = null
     if (this._interrupting) return
 
     if (this._needsUpdate) {
       await this._update(changes)
     }
+
+    this._draining = null
   }
 
   _onGroupUpdate({ key, length }) {
