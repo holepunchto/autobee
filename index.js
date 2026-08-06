@@ -85,6 +85,7 @@ module.exports = class Autobee extends ReadyResource {
     this.reboot = null
     this.rebooting = null
     this.rebootTo = null
+    this._bootWait = null
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -96,6 +97,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._appending = []
     this._draining = null
+    this._updating = null
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -214,6 +216,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    if (this._bootWait) this._bootWait.resolve()
     if (this._notifyHandler) this._notifyHandler.destroy()
     if (this._draining) {
       // drain may be waiting on replicated blocks
@@ -490,13 +493,15 @@ module.exports = class Autobee extends ReadyResource {
   async _drain() {
     if (this._updating) await this._updating
 
-    if (this.bootFrom) {
-      await this._initFromHead(this.bootFrom)
-      this.bootFrom = null
-    }
-
     // tracked across drain iteration
     this.system.shared = null
+
+    if (this.bootFrom) {
+      const { head = null, admin = null } = this.bootFrom
+      if (head) await this._bootFromHead(head)
+      else if (admin) await this._bootFromAdmin(admin)
+      this.bootFrom = null
+    }
 
     this._ackRequired = false
 
@@ -1101,14 +1106,75 @@ module.exports = class Autobee extends ReadyResource {
     return null
   }
 
-  // same as moveTo except we don't return the final promise
-  _initFromHead(head, tip) {
+  // bootFrom.head: fast-forward straight onto a known { key, length }
+  _bootFromHead(head) {
     if (!head.length) {
       // legacy fastForward boot
-      return this._runReboot(new Reboot(this, head, tip))
+      return this._runReboot(new Reboot(this, head, null))
     }
 
     return this._rebootFromHead(head, null, { force: true, wait: false })
+  }
+
+  // applies its own reboot to avoid deadlocking on the drain loop it blocks.
+  async _bootFromAdmin({ key, onview = () => true }) {
+    const onadmin = (k) => this.admins.add(k)
+    await this.admins.add(key)
+
+    while (!this._interrupting) {
+      this._bootWait = rrp()
+
+      const head = await this._pickAdminCandidate(onview, onadmin)
+      if (this._interrupting) return
+
+      if (head) {
+        await this._rebootFromHead(head, null, { force: true, wait: false })
+        if (this.rebootTo !== null) {
+          await this._applyReboot()
+          this._bootWait = null
+          return
+        }
+      }
+
+      if (this._interrupting) return
+      await this._bootWait.promise
+      this._bootWait = null
+    }
+  }
+
+  async _pickAdminCandidate(onview, onadmin) {
+    const cands = []
+    for (const core of this.admins.cores.values()) {
+      let res
+      try {
+        res = await this._getOplog(core.key, -1)
+      } catch {
+        if (this._interrupting) return null
+        continue
+      }
+      if (this._interrupting) return null
+      if (res && res.op.views) cands.push(res)
+    }
+
+    cands.sort((a, b) => b.op.views.flushes - a.op.views.flushes)
+
+    for (const res of cands) {
+      const head = { key: res.key, length: res.length }
+      const v = res.op.views.view
+      const view = this.bee.checkout({ key: v.key, length: v.start + v.length })
+
+      let accepted = false
+      try {
+        accepted = await onview(view, onadmin)
+      } finally {
+        view.close()
+      }
+
+      if (this._interrupting) return null
+      if (accepted) return head
+    }
+
+    return null
   }
 
   // head is a system head; reboots onto it, migrating in place if it's a legacy version
