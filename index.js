@@ -478,6 +478,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
+    if (this._updating) await this._updating
+
     if (this.bootFrom) {
       await this._initFromHead(this.bootFrom)
       this.bootFrom = null
@@ -527,7 +529,15 @@ module.exports = class Autobee extends ReadyResource {
     if (this._interrupting) return
 
     if (this._needsUpdate) {
-      await this._update(changes)
+      const updating = rrp()
+      this._updating = updating.promise
+
+      try {
+        await this._update(changes)
+      } finally {
+        this._updating = null
+        updating.resolve()
+      }
     }
   }
 
