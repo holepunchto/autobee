@@ -20,6 +20,7 @@ const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const UpdateChanges = require('./lib/updates.js')
+const AdminSet = require('./lib/admins.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
@@ -63,6 +64,8 @@ module.exports = class Autobee extends ReadyResource {
       encrypted: this.encrypted
     })
     this.system.auto = this
+
+    this.admins = new AdminSet(this.store)
 
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
@@ -226,6 +229,7 @@ module.exports = class Autobee extends ReadyResource {
     if (this._handlers.close) await this._handlers.close(this.view)
 
     if (this.writers) await this.writers.close()
+    await this.admins.close()
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
