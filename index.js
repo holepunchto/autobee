@@ -584,7 +584,6 @@ module.exports = class Autobee extends ReadyResource {
     const hints = this._wakeup.flush()
 
     this.previousDrain = Date.now()
-    this.rebootFromHeads(hints).catch(noop)
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
@@ -1075,60 +1074,6 @@ module.exports = class Autobee extends ReadyResource {
     this._localSystemLength = 0
     this._localViewStart = this._workingBee.context.local.length
     this._localViewLength = 0
-  }
-
-  async rebootFromHeads(hints, { force = false } = {}) {
-    if (!this._handlers.onwakeup) return false
-    if (this._interrupting) return false
-    if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
-      return false
-    }
-
-    const promises = []
-    const heads = []
-    for (const [hex, length] of hints) {
-      if (length === 0) continue
-      const key = b4a.from(hex, 'hex')
-      heads.push({ key, length })
-      promises.push(this._getOplog(key, length))
-    }
-
-    const ops = await Promise.all(promises)
-    if (this.rebooting || this.rebootTo) return false
-
-    let best = null
-    let bestFlushes = -1
-
-    for (let i = 0; i < ops.length; i++) {
-      const res = ops[i]
-      if (res === null) continue
-
-      if (res.op.views && res.op.views.flushes > bestFlushes) {
-        bestFlushes = res.op.views.flushes
-        best = res
-      }
-    }
-
-    if (best && force) {
-      return this._rebootFromHead(best, null, { force: true })
-    }
-
-    if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
-
-    const head = { key: best.key, length: best.length }
-
-    const v = best.op.views.view
-    const view = this.bee.checkout({ key: v.key, length: v.start + v.length })
-
-    let trusted = null
-    try {
-      trusted = await this._handlers.onwakeup(head, view, this)
-      if (!trusted || this.rebooting || this.rebootTo) return false
-    } finally {
-      view.close()
-    }
-
-    return this._rebootFromHead(best, trusted)
   }
 
   async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
