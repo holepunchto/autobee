@@ -1155,7 +1155,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // applies its own reboot to avoid deadlocking on the drain loop it blocks
-  async _bootFromLeader({ key, onview = () => true }) {
+  async _bootFromLeader({ key, bootCondition = () => true }) {
     const onleader = (k) => this.leaders.add(k)
     await this.leaders.add(key)
 
@@ -1164,7 +1164,7 @@ module.exports = class Autobee extends ReadyResource {
 
       const candidate = this._bootCandidate
       if (candidate) {
-        const head = await this._evaluateCandidate(candidate, onview, onleader)
+        const head = await this._evaluateCandidate(candidate, bootCondition, onleader)
         if (this._interrupting) return
 
         if (head) {
@@ -1183,12 +1183,12 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _evaluateCandidate(candidate, onview, onleader) {
+  async _evaluateCandidate(candidate, bootCondition, onleader) {
     const view = this.bee.checkout(candidate.view)
 
     let accepted = false
     try {
-      accepted = await onview(view, onleader)
+      accepted = await bootCondition(view, onleader)
     } finally {
       view.close()
     }

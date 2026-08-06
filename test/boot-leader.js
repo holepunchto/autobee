@@ -3,7 +3,7 @@ const b4a = require('b4a')
 
 const { create, replicate, same, encode, decode } = require('./helpers')
 
-test('bootFrom leader - onview fast-forwards to first accepted leader head', async function (t) {
+test('bootFrom leader - bootCondition fast-forwards to first accepted leader head', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 1000; i++) {
@@ -16,7 +16,7 @@ test('bootFrom leader - onview fast-forwards to first accepted leader head', asy
     bootFrom: {
       leader: {
         key: auto1.local.key,
-        onview: async (view, onleader) => {
+        bootCondition: async (view, onleader) => {
           const entry = await view.get(b4a.from('latest'))
           if (!entry) return false
           sawView = true
@@ -38,7 +38,7 @@ test('bootFrom leader - onview fast-forwards to first accepted leader head', asy
 
   await t.execution(moved, 'joiner fast-forwarded')
 
-  t.ok(sawView, 'onview was consulted with a candidate view')
+  t.ok(sawView, 'bootCondition was consulted with a candidate view')
   t.alike(auto1.view.head(), auto3.view.head(), 'joiner landed on the tip')
 
   const node = await auto3.view.get(b4a.from('latest'))
@@ -47,7 +47,7 @@ test('bootFrom leader - onview fast-forwards to first accepted leader head', asy
   t.ok(await same(auto1, auto3), 'views converged')
 })
 
-test('bootFrom leader - onview can discover more leaders via onleader', async function (t) {
+test('bootFrom leader - bootCondition can discover more leaders via onleader', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
@@ -62,7 +62,7 @@ test('bootFrom leader - onview can discover more leaders via onleader', async fu
     bootFrom: {
       leader: {
         key: auto1.local.key,
-        onview: async (view, onleader) => {
+        bootCondition: async (view, onleader) => {
           const entry = await view.get(b4a.from('latest'))
           if (!entry) return false
           await onleader(extra)
@@ -98,7 +98,7 @@ test('bootFrom leader - close settles while boot is parked', async function (t) 
     bootFrom: {
       leader: {
         key: auto1.local.key,
-        onview: () => false
+        bootCondition: () => false
       }
     }
   })
@@ -119,7 +119,7 @@ test('bootFrom leader - close settles while boot is parked', async function (t) 
   await teardown()
 })
 
-test('bootFrom leader - onview defaults to accepting the first head', async function (t) {
+test('bootFrom leader - bootCondition defaults to accepting the first head', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 200; i++) {
@@ -142,7 +142,7 @@ test('bootFrom leader - onview defaults to accepting the first head', async func
 
   t.teardown(replicate(auto1, auto3))
 
-  await t.execution(moved, 'joiner fast-forwarded with default onview')
+  await t.execution(moved, 'joiner fast-forwarded with default bootCondition')
 
   t.ok(await same(auto1, auto3), 'views converged')
 })
@@ -182,15 +182,15 @@ test('bootFrom - head is favoured when both head and leader are set', async func
 
   const head = { key: auto1.local.key, length: auto1.local.length }
 
-  let onviewCalled = false
+  let bootConditionCalled = false
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
       head,
       leader: {
         key: auto1.local.key,
-        onview: () => {
-          onviewCalled = true
+        bootCondition: () => {
+          bootConditionCalled = true
           return true
         }
       }
@@ -209,6 +209,6 @@ test('bootFrom - head is favoured when both head and leader are set', async func
 
   await t.execution(moved, 'joiner fast-forwarded')
 
-  t.absent(onviewCalled, 'leader onview was not consulted when head is set')
+  t.absent(bootConditionCalled, 'leader bootCondition was not consulted when head is set')
   t.ok(await same(auto1, auto3), 'views converged')
 })
