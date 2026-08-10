@@ -1155,16 +1155,12 @@ module.exports = class Autobee extends ReadyResource {
     this._rebootFromHead(candidate.head, null).catch(safetyCatch)
   }
 
-  rebootFromTrusted(trusted) {
-    if (!trusted) return
+  _onTrustedHead(trusted) {
+    const head = this.trusted.read(trusted)
+    if (head === null) return
+    if (head.flushes - this.system.flushes < MIN_FF_GAP) return
 
-    for (const t of trusted) {
-      if (!this.trusted.has(t.key)) continue
-      if (t.flushes - this.system.flushes < MIN_FF_GAP) continue
-
-      this._rebootFromHead({ key: t.key, length: t.length }, null).catch(safetyCatch)
-      return
-    }
+    this._rebootFromHead(head, null).catch(safetyCatch)
   }
 
   // applies its own reboot to avoid deadlocking on the drain loop it blocks
