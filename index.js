@@ -964,6 +964,7 @@ module.exports = class Autobee extends ReadyResource {
     const userBatch = []
     for (const node of batch) {
       this.system.addNode(node)
+      this.trusted.active(node)
 
       // compat: autobase nodes may be null (legacy null decodes to 0-length buffer)
       if (node.value && node.value.length) userBatch.push(node)

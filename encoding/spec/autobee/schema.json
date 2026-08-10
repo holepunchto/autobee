@@ -750,6 +750,12 @@
           "array": true,
           "type": "@autobee/attestation",
           "version": 1
+        },
+        {
+          "name": "trusted",
+          "array": true,
+          "type": "@autobee/trusted-head",
+          "version": 1
         }
       ]
     },
@@ -804,6 +810,36 @@
           "version": 1
         }
       ]
+    },
+    {
+      "name": "trusted-head",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "flushes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    }
+  ],
+  "namespaces": [
+    {
+      "name": "autobee",
+      "external": "../../legacy.js"
+    },
+    {
+      "name": "autobase-compat",
+      "external": "../../legacy.js"
     }
   ]
 }
