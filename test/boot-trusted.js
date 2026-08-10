@@ -3,7 +3,7 @@ const b4a = require('b4a')
 
 const { create, replicate, same, encode, decode } = require('./helpers')
 
-test('bootFrom leader - bootCondition fast-forwards to first accepted leader head', async function (t) {
+test('bootFrom trusted - bootCondition fast-forwards to first accepted trusted head', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 1000; i++) {
@@ -14,9 +14,9 @@ test('bootFrom leader - bootCondition fast-forwards to first accepted leader hea
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      leader: {
+      trusted: {
         key: auto1.local.key,
-        bootCondition: async (view, onleader) => {
+        bootCondition: async (view, ontrusted) => {
           const entry = await view.get(b4a.from('latest'))
           if (!entry) return false
           sawView = true
@@ -47,7 +47,7 @@ test('bootFrom leader - bootCondition fast-forwards to first accepted leader hea
   t.ok(await same(auto1, auto3), 'views converged')
 })
 
-test('bootFrom leader - bootCondition can discover more leaders via onleader', async function (t) {
+test('bootFrom trusted - bootCondition can discover more trusted keys via ontrusted', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
@@ -60,13 +60,13 @@ test('bootFrom leader - bootCondition can discover more leaders via onleader', a
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      leader: {
+      trusted: {
         key: auto1.local.key,
-        bootCondition: async (view, onleader) => {
+        bootCondition: async (view, ontrusted) => {
           const entry = await view.get(b4a.from('latest'))
           if (!entry) return false
-          await onleader(extra)
-          discovered = auto3.leaders.cores.has(b4a.toString(extra, 'hex'))
+          await ontrusted(extra)
+          discovered = auto3.trusted.cores.has(b4a.toString(extra, 'hex'))
           return decode(entry.value).value === 'a99'
         }
       }
@@ -85,18 +85,18 @@ test('bootFrom leader - bootCondition can discover more leaders via onleader', a
 
   await t.execution(moved, 'joiner fast-forwarded')
 
-  t.ok(discovered, 'onleader added the discovered key to the leader set')
-  t.ok(auto3.leaders.cores.has(b4a.toString(auto1.local.key, 'hex')), 'seed leader tracked')
-  t.ok(auto3.leaders.cores.has(b4a.toString(extra, 'hex')), 'discovered leader tracked')
+  t.ok(discovered, 'ontrusted added the discovered key to the trusted set')
+  t.ok(auto3.trusted.cores.has(b4a.toString(auto1.local.key, 'hex')), 'seed trusted key tracked')
+  t.ok(auto3.trusted.cores.has(b4a.toString(extra, 'hex')), 'discovered trusted key tracked')
 })
 
-test('bootFrom leader - close settles while boot is parked', async function (t) {
+test('bootFrom trusted - close settles while boot is parked', async function (t) {
   const auto1 = await create(t)
   await auto1.append(encode({ value: 'a' }))
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      leader: {
+      trusted: {
         key: auto1.local.key,
         bootCondition: () => false
       }
@@ -119,7 +119,7 @@ test('bootFrom leader - close settles while boot is parked', async function (t) 
   await teardown()
 })
 
-test('bootFrom leader - bootCondition defaults to accepting the first head', async function (t) {
+test('bootFrom trusted - bootCondition defaults to accepting the first head', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 200; i++) {
@@ -128,7 +128,7 @@ test('bootFrom leader - bootCondition defaults to accepting the first head', asy
 
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
-      leader: { key: auto1.local.key }
+      trusted: { key: auto1.local.key }
     }
   })
 
@@ -173,7 +173,7 @@ test('bootFrom head - fast-forwards straight onto a known head', async function 
   t.ok(await same(auto1, auto3), 'views converged')
 })
 
-test('bootFrom - head is favoured when both head and leader are set', async function (t) {
+test('bootFrom - head is favoured when both head and trusted are set', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 200; i++) {
@@ -187,7 +187,7 @@ test('bootFrom - head is favoured when both head and leader are set', async func
   const auto3 = await create(t, auto1.key, {
     bootFrom: {
       head,
-      leader: {
+      trusted: {
         key: auto1.local.key,
         bootCondition: () => {
           bootConditionCalled = true
@@ -209,6 +209,6 @@ test('bootFrom - head is favoured when both head and leader are set', async func
 
   await t.execution(moved, 'joiner fast-forwarded')
 
-  t.absent(bootConditionCalled, 'leader bootCondition was not consulted when head is set')
+  t.absent(bootConditionCalled, 'trusted bootCondition was not consulted when head is set')
   t.ok(await same(auto1, auto3), 'views converged')
 })

@@ -20,7 +20,7 @@ const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const UpdateChanges = require('./lib/updates.js')
-const LeaderSet = require('./lib/leaders.js')
+const TrustedSet = require('./lib/trusted.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
@@ -65,7 +65,7 @@ module.exports = class Autobee extends ReadyResource {
     })
     this.system.auto = this
 
-    this.leaders = new LeaderSet(this, this._onBootCandidate.bind(this))
+    this.trusted = new TrustedSet(this, this._onBootCandidate.bind(this))
 
     this.bee = bee.snapshot()
     this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
@@ -233,7 +233,7 @@ module.exports = class Autobee extends ReadyResource {
     if (this._handlers.close) await this._handlers.close(this.view)
 
     if (this.writers) await this.writers.close()
-    await this.leaders.close()
+    await this.trusted.close()
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
@@ -498,9 +498,9 @@ module.exports = class Autobee extends ReadyResource {
     this.system.shared = null
 
     if (this.bootFrom) {
-      const { head = null, leader = null } = this.bootFrom
+      const { head = null, trusted = null } = this.bootFrom
       if (head) await this._bootFromHead(head)
-      else if (leader) await this._bootFromLeader(leader)
+      else if (trusted) await this._bootFromTrusted(trusted)
       this.bootFrom = null
     }
 
@@ -1155,16 +1155,16 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // applies its own reboot to avoid deadlocking on the drain loop it blocks
-  async _bootFromLeader({ key, bootCondition = () => true }) {
-    const onleader = (k) => this.leaders.add(k)
-    await this.leaders.add(key)
+  async _bootFromTrusted({ key, bootCondition = () => true }) {
+    const ontrusted = (k) => this.trusted.add(k)
+    await this.trusted.add(key)
 
     while (!this._interrupting) {
       this._bootWait = rrp()
 
       const candidate = this._bootCandidate
       if (candidate) {
-        const head = await this._evaluateCandidate(candidate, bootCondition, onleader)
+        const head = await this._evaluateCandidate(candidate, bootCondition, ontrusted)
         if (this._interrupting) return
 
         if (head) {
@@ -1183,12 +1183,12 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _evaluateCandidate(candidate, bootCondition, onleader) {
+  async _evaluateCandidate(candidate, bootCondition, ontrusted) {
     const view = this.bee.checkout(candidate.view)
 
     let accepted = false
     try {
-      accepted = await bootCondition(view, onleader)
+      accepted = await bootCondition(view, ontrusted)
     } finally {
       view.close()
     }
