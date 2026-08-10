@@ -313,6 +313,11 @@ auto.register({
       name: 'attestations',
       type: '@autobee/attestation',
       array: true
+    },
+    {
+      name: 'trusted',
+      type: 'fixed32',
+      array: true
     }
   ]
 })
