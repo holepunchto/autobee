@@ -1027,19 +1027,23 @@ const encoding31 = {
 const encoding32 = {
   preencode(state, m) {
     c.fixed32.preencode(state, m.key)
+    c.uint.preencode(state, m.length)
     c.uint.preencode(state, m.flushes)
   },
   encode(state, m) {
     c.fixed32.encode(state, m.key)
+    c.uint.encode(state, m.length)
     c.uint.encode(state, m.flushes)
   },
   decode(state) {
     const r0 = c.fixed32.decode(state)
     const r1 = c.uint.decode(state)
+    const r2 = c.uint.decode(state)
 
     return {
       key: r0,
-      flushes: r1
+      length: r1,
+      flushes: r2
     }
   }
 }

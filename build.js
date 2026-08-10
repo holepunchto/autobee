@@ -283,6 +283,11 @@ auto.register({
       required: true
     },
     {
+      name: 'length',
+      type: 'uint',
+      required: true
+    },
+    {
       name: 'flushes',
       type: 'uint',
       required: true
