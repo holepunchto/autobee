@@ -232,3 +232,51 @@ test('basic - append during bump', async function (t) {
 
   t.ok(auto.writable)
 })
+
+test('removing writer #0 keeps the bootstrap session (and wakeup) alive', async function (t) {
+  const a = await create(t)
+  const b = await create(t, a.key)
+
+  t.teardown(replicate(a, b))
+
+  await a.append(encode({ addWriter: b.local.id }))
+  await settle(
+    t,
+    async () => {
+      await b.update()
+      return b.writable
+    },
+    'member admitted'
+  )
+
+  t.ok(b.bootstrap.peers.length > 0, 'bootstrap has a wakeup peer before removal')
+
+  // writer #0 - the creator, whose core is every member's bootstrap - departs
+  await a.append(encode({ removeWriter: a.local.id }))
+  await settle(
+    t,
+    async () => {
+      await b.update()
+      const info = await b.system.get(a.local.key)
+      return !!(info && info.isRemoved)
+    },
+    'member applied the removal'
+  )
+
+  t.is(b.bootstrap.closed, false, 'base still runs on its bootstrap session')
+  // the coupler lives on that session: it must keep its replication peer
+  await settle(
+    t,
+    () => b.bootstrap.peers.length > 0,
+    'bootstrap keeps its wakeup peer after removal'
+  )
+})
+
+async function settle(t, fn, message, { timeout = 20000, interval = 50 } = {}) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    if (await fn()) return t.pass(message)
+    await new Promise((resolve) => setTimeout(resolve, interval))
+  }
+  t.fail(message)
+}

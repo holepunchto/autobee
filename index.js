@@ -229,6 +229,7 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
+    if (this.bootstrap && !this.bootstrap.closed) await this.bootstrap.close()
     await this._workingBee.close()
     await this.bee.close()
     await this.store.close()
