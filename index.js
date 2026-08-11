@@ -253,7 +253,12 @@ module.exports = class Autobee extends ReadyResource {
       view: info ? info.view : EMPTY_HEAD
     }
 
-    const shared = await this.system.commonAncestor(system || EMPTY_HEAD)
+    // no common ancestor (null) -> flushes -1 never matches, forcing a full diff
+    const shared = (await this.system.commonAncestor(system || EMPTY_HEAD)) || {
+      flushes: -1,
+      system: EMPTY_HEAD,
+      view: EMPTY_HEAD
+    }
 
     return UpdateChanges.from(shared, current)
   }
