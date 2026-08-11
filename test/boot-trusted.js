@@ -1,7 +1,26 @@
 const test = require('brittle')
 const b4a = require('b4a')
 
-const { create, replicate, same, encode, decode } = require('./helpers')
+const { create, replicate, sync, same, apply, encode, decode } = require('./helpers')
+
+function mirror (a, b) {
+  const s1 = a.store.replicate(true)
+  const s2 = b.store.replicate(false)
+
+  s1.pipe(s2).pipe(s1)
+
+  s1.on('error', () => {})
+  s2.on('error', () => {})
+
+  return async () => {
+    s1.destroy()
+    s2.destroy()
+    await Promise.all([
+      new Promise((resolve) => s1.once('close', resolve)),
+      new Promise((resolve) => s2.once('close', resolve))
+    ])
+  }
+}
 
 test('bootFrom trusted - bootCondition fast-forwards to first accepted trusted head', async function (t) {
   const auto1 = await create(t)
@@ -211,4 +230,61 @@ test('bootFrom - head is favoured when both head and trusted are set', async fun
 
   t.absent(bootConditionCalled, 'trusted bootCondition was not consulted when head is set')
   t.ok(await same(auto1, auto3), 'views converged')
+})
+
+test('trusted - fast-forward to a trusted peer head advertised by another writer', async function (t) {
+  const a = await create(t)
+  const b = await create(t, a.key)
+
+  await a.trusted.add(a.local.key)
+  await b.trusted.add(a.local.key)
+
+  const unreplicate = replicate(a, b)
+
+  await a.append(encode({ addWriter: b.local.id }))
+  for (let i = 0; i < 100; i++) {
+    await a.append(encode({ value: 'a' + i }))
+  }
+
+  await sync(a, b)
+
+  for (let i = 0; i < 5; i++) {
+    await b.append(encode({ value: 'b' + i }))
+  }
+
+  await sync(a, b)
+  await unreplicate()
+
+  t.ok(a.system.flushes >= 32, 'a is far enough ahead to fast-forward')
+
+  let slow = true
+  const c = await create(t, a.key, {
+    async apply (nodes, view, host) {
+      for (const node of nodes) {
+        if (slow) await new Promise((resolve) => setTimeout(resolve, 1000))
+        await apply([node], view, host)
+      }
+    }
+  })
+  await c.trusted.add(a.local.key)
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('did not move')), 30_000)
+    c.once('move-to', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  t.teardown(mirror(a, c))
+
+  await t.execution(moved, 'c fast-forwarded from a trusted head advertised by b')
+
+  slow = false
+  let converged = false
+  for (let i = 0; i < 100 && !converged; i++) {
+    converged = await same(a, c)
+    if (!converged) await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  t.ok(converged, 'c converged with a')
 })
