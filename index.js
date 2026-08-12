@@ -731,7 +731,6 @@ module.exports = class Autobee extends ReadyResource {
     const padding = this.encryptionKey ? AutobeeEncryption.PADDING : 0
     const links = [{ key, length }]
 
-    // TODO This path doesnt seem covered by tests
     const block = Autobee.encodeValue(null, {
       legacy,
       timestamp: 0,
