@@ -3,7 +3,20 @@ const b4a = require('b4a')
 
 const { create, replicate, sync, same, apply, encode, decode } = require('./helpers')
 
-function mirror (a, b) {
+async function trustApply(nodes, view, host) {
+  for (const node of nodes) {
+    const data = decode(node.value)
+    if (data.addWriter) host.addWriter(data.addWriter, { weight: data.weight })
+
+    const w = view.write()
+    if (data.trust) w.tryPut(b4a.from('@trusted/' + data.trust), b4a.from('1'))
+    w.tryPut(b4a.from('@head/' + b4a.toString(node.key, 'hex')), b4a.from('' + node.length))
+    w.tryPut(b4a.from('latest'), node.value)
+    await w.flush()
+  }
+}
+
+function mirror(a, b) {
   const s1 = a.store.replicate(true)
   const s2 = b.store.replicate(false)
 
@@ -259,7 +272,7 @@ test('trusted - fast-forward to a trusted peer head advertised by another writer
 
   let slow = true
   const c = await create(t, a.key, {
-    async apply (nodes, view, host) {
+    async apply(nodes, view, host) {
       for (const node of nodes) {
         if (slow) await new Promise((resolve) => setTimeout(resolve, 1000))
         await apply([node], view, host)
@@ -287,4 +300,89 @@ test('trusted - fast-forward to a trusted peer head advertised by another writer
     if (!converged) await new Promise((resolve) => setTimeout(resolve, 100))
   }
   t.ok(converged, 'c converged with a')
+})
+
+test('trusted - resolve an untrusted advertised head via its view, then grow trust', async function (t) {
+  const bhex = (k) => b4a.toString(k, 'hex')
+
+  const a = await create(t, { apply: trustApply })
+  const b = await create(t, a.key, { apply: trustApply })
+
+  // a trusts b (so a advertises b's head); b applies a but does NOT trust a,
+  // so b's oplog advertises nothing - c can only reach a via b's view.
+  await a.trusted.add(b.local.key)
+
+  const unreplicate = replicate(a, b)
+
+  await a.append(encode({ addWriter: b.local.id }))
+  await a.append(encode({ trust: bhex(b.local.key) }))
+  await sync(a, b)
+
+  for (let i = 0; i < 100; i++) {
+    await a.append(encode({ value: 'a' + i }))
+  }
+  await sync(a, b)
+
+  for (let i = 0; i < 5; i++) {
+    await b.append(encode({ value: 'b' + i }))
+  }
+  await sync(a, b)
+
+  // final append so a flushes its tip (b's head) into its oplog trusted field
+  await a.append(encode({ value: 'final' }))
+  await sync(a, b)
+  await unreplicate()
+
+  let slow = true
+  let cRef = null
+  const c = await create(t, a.key, {
+    async apply(nodes, view, host) {
+      for (const node of nodes) {
+        if (slow) await new Promise((resolve) => setTimeout(resolve, 1000))
+        await trustApply([node], view, host)
+      }
+    },
+    async ontrusted(peer, view, auto) {
+      const stream = view.createReadStream({ gte: b4a.from('@head/'), lt: b4a.from('@head0') })
+      for await (const { key, value } of stream) {
+        const hex = b4a.toString(key).slice('@head/'.length)
+        const peerKey = b4a.from(hex, 'hex')
+        if (auto.trusted.has(peerKey)) return { key: peerKey, length: Number(b4a.toString(value)) }
+      }
+      return null
+    },
+    async update(view) {
+      const stream = view.createReadStream({
+        gte: b4a.from('@trusted/'),
+        lt: b4a.from('@trusted0')
+      })
+      for await (const { key } of stream) {
+        const hex = b4a.toString(key).slice('@trusted/'.length)
+        await cRef.trusted.add(b4a.from(hex, 'hex'))
+      }
+    }
+  })
+  cRef = c
+  await c.trusted.add(a.local.key)
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('did not move')), 30_000)
+    c.once('move-to', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  t.teardown(mirror(a, c))
+
+  await t.execution(moved, 'c resolved a via untrusted b view and fast-forwarded onto a')
+
+  slow = false
+  let converged = false
+  for (let i = 0; i < 100 && !converged; i++) {
+    converged = await same(a, c)
+    if (!converged) await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  t.ok(converged, 'c converged with a')
+  t.ok(c.trusted.has(b.local.key), 'c grew trust to b from the view diff')
 })

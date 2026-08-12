@@ -1157,10 +1157,35 @@ module.exports = class Autobee extends ReadyResource {
 
   _onTrustedHead(trusted) {
     const head = this.trusted.read(trusted)
-    if (head === null) return
-    if (head.flushes - this.system.flushes < MIN_FF_GAP) return
+    if (head !== null) {
+      if (head.flushes - this.system.flushes < MIN_FF_GAP) return
+      this._rebootFromHead(head, null).catch(safetyCatch)
+      return
+    }
 
-    this._rebootFromHead(head, null).catch(safetyCatch)
+    if (this._handlers.ontrusted) this._resolveTrusted(trusted).catch(safetyCatch)
+  }
+
+  async _resolveTrusted(trusted) {
+    if (this.rebooting || this.rebootTo || this._interrupting) return
+    if (trusted.flushes - this.system.flushes < MIN_FF_GAP) return
+
+    const peer = await this._getOplog(trusted.key, trusted.length)
+    if (!peer || !peer.op.views || !peer.op.views.view) return
+
+    const v = peer.op.views.view
+    const view = this.bee.checkout({ key: v.key, length: v.start + v.length })
+
+    let resolved = null
+    try {
+      resolved = await this._handlers.ontrusted(peer, view, this)
+    } finally {
+      await view.close()
+    }
+
+    if (!resolved || this.rebooting || this.rebootTo) return
+
+    await this._rebootFromHead(peer, resolved)
   }
 
   // applies its own reboot to avoid deadlocking on the drain loop it blocks
