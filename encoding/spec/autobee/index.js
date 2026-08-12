@@ -236,17 +236,17 @@ const encoding9 = {
   preencode(state, m) {
     encoding1.preencode(state, m.heads)
     c.uint.preencode(state, m.batch)
-    c.buffer.preencode(state, m.value)
+    c.optionalBuffer.preencode(state, m.value)
   },
   encode(state, m) {
     encoding1.encode(state, m.heads)
     c.uint.encode(state, m.batch)
-    c.buffer.encode(state, m.value)
+    c.optionalBuffer.encode(state, m.value)
   },
   decode(state) {
     const r0 = encoding1.decode(state)
     const r1 = c.uint.decode(state)
-    const r2 = c.buffer.decode(state)
+    const r2 = c.optionalBuffer.decode(state)
 
     return {
       heads: r0,

@@ -14,6 +14,7 @@ const {
   encryptionKey
 } = require('./helpers')
 const Autobee = require('../index.js')
+const { getEncoding } = require('../encoding/spec/autobee')
 
 test('basic', async function (t) {
   const auto = await create(t)
@@ -125,6 +126,45 @@ test('basic - encode/decode value', async function (t) {
   const buf = Autobee.encodeValue(b4a.from('hello'))
   const value = await Autobee.decodeValue(buf)
   t.alike(value, b4a.from('hello'))
+})
+
+test('legacy - encoding a null value does not throw (createAnchor path)', async function (t) {
+  // this mirrors the exact call Autobee#createAnchor makes for a node whose
+  // writer is still on the legacy oplog format (index.js: `node.version <= 2`)
+  let block = null
+  t.execution(() => {
+    block = Autobee.encodeValue(null, {
+      legacy: true,
+      timestamp: 0,
+      links: [],
+      heads: [],
+      padding: 0
+    })
+  }, 'encodeValue(null, { legacy: true }) should not throw')
+
+  t.not(block, null, 'block was returned')
+
+  let value
+  await t.execution(async () => {
+    value = await Autobee.decodeValue(block)
+  }, 'can decode encode null value')
+  t.is(value, null, 'a legacy null value round-trips as null, not an empty buffer')
+})
+
+test('legacy - decoding a pre-existing zero-length value yields null, not an empty buffer', function (t) {
+  const Node = getEncoding('@autobase-compat/node')
+
+  // hand-rolled bytes matching what compact-encoding@2's `c.buffer` produced
+  // on disk for { heads: [], batch: 1, value: null }
+  const bytes = Uint8Array.from([
+    0x00, // heads: empty array
+    0x01, // batch: 1
+    0x00 // value: zero-length prefix (this is what v2 wrote for `null`)
+  ])
+
+  const decoded = Node.decode({ start: 0, end: bytes.length, buffer: bytes })
+
+  t.is(decoded.value, null, 'zero-length legacy value decodes to null')
 })
 
 test('basic - optimistic', async function (t) {
