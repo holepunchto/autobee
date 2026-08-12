@@ -805,5 +805,15 @@
         }
       ]
     }
+  ],
+  "namespaces": [
+    {
+      "name": "autobee",
+      "external": "../../legacy.js"
+    },
+    {
+      "name": "autobase-compat",
+      "external": "../../legacy.js"
+    }
   ]
 }
