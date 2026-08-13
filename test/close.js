@@ -60,21 +60,26 @@ test('_getOplog closes its core when reading the oplog throws', async function (
   t.ok(opened[0].closed, 'oplog core was closed')
 })
 
-test('legacy oplogs with no digest or checkpoint do not reboot', async function (t) {
+test('legacy oplogs with no digest or checkpoint inflate without views', async function (t) {
   const auto = await create(t)
 
   // a legacy writer that was never an indexer appends neither a digest nor a
-  // checkpoint, so there is no system info to reboot from
+  // checkpoint, so there is no system info to reboot from - the node itself is
+  // still readable
+  const value = encode({ value: 'a' })
   const buf = c.encode(Oplog, {
     version: 2,
-    node: { heads: [], batch: 1, value: encode({ value: 'a' }) },
+    node: { heads: [], batch: 1, value },
     checkpoint: null,
     digest: null,
     optimistic: true,
     trace: null
   })
 
-  t.is(await auto._inflateLegacyOplog(buf, null, 0), null)
+  const op = await auto._inflateLegacyOplog(buf, null, 0)
+
+  t.is(op.views, null, 'nothing to reboot from')
+  t.alike(op.value, value, 'value is still readable')
 })
 
 function trackOpenCores(auto, onopen) {
