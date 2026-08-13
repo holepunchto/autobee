@@ -97,8 +97,9 @@ const encoding4 = {
 // @autobase-compat/boot-record
 const encoding5 = {
   preencode(state, m) {
-    c.uint.preencode(state, m.version)
-    switch (m.version) {
+    const v = m.version ?? 3
+    c.uint.preencode(state, v)
+    switch (v) {
       case 0:
         encoding3.preencode(state, m)
         break
@@ -112,8 +113,9 @@ const encoding5 = {
     }
   },
   encode(state, m) {
-    c.uint.encode(state, m.version)
-    switch (m.version) {
+    const v = m.version ?? 3
+    c.uint.encode(state, v)
+    switch (v) {
       case 0:
         encoding3.encode(state, m)
         break
@@ -236,17 +238,17 @@ const encoding9 = {
   preencode(state, m) {
     encoding1.preencode(state, m.heads)
     c.uint.preencode(state, m.batch)
-    c.buffer.preencode(state, m.value)
+    c.optionalBuffer.preencode(state, m.value)
   },
   encode(state, m) {
     encoding1.encode(state, m.heads)
     c.uint.encode(state, m.batch)
-    c.buffer.encode(state, m.value)
+    c.optionalBuffer.encode(state, m.value)
   },
   decode(state) {
     const r0 = encoding1.decode(state)
     const r1 = c.uint.decode(state)
-    const r2 = c.buffer.decode(state)
+    const r2 = c.optionalBuffer.decode(state)
 
     return {
       heads: r0,
@@ -496,8 +498,9 @@ const encoding18 = {
 // @autobee/system-info
 const encoding19 = {
   preencode(state, m) {
-    c.uint.preencode(state, m.version)
-    switch (m.version) {
+    const v = m.version ?? 3
+    c.uint.preencode(state, v)
+    switch (v) {
       case 0:
       case 1:
         encoding15.preencode(state, m)
@@ -513,8 +516,9 @@ const encoding19 = {
     }
   },
   encode(state, m) {
-    c.uint.encode(state, m.version)
-    switch (m.version) {
+    const v = m.version ?? 3
+    c.uint.encode(state, v)
+    switch (v) {
       case 0:
       case 1:
         encoding15.encode(state, m)
@@ -603,8 +607,9 @@ const encoding20 = {
 // @autobee/system-writer
 const encoding21 = {
   preencode(state, m) {
-    c.uint.preencode(state, m.version)
-    switch (m.version) {
+    const v = m.version ?? 4
+    c.uint.preencode(state, v)
+    switch (v) {
       case 0:
       case 1:
       case 2:
@@ -619,8 +624,9 @@ const encoding21 = {
     }
   },
   encode(state, m) {
-    c.uint.encode(state, m.version)
-    switch (m.version) {
+    const v = m.version ?? 4
+    c.uint.encode(state, v)
+    switch (v) {
       case 0:
       case 1:
       case 2:
@@ -905,8 +911,9 @@ const encoding29 = {
 // @autobee/oplog
 const encoding30 = {
   preencode(state, m) {
-    c.uint.preencode(state, m.version)
-    switch (m.version) {
+    const v = m.version ?? 3
+    c.uint.preencode(state, v)
+    switch (v) {
       case 0:
         encoding12.preencode(state, m)
         break
@@ -924,8 +931,9 @@ const encoding30 = {
     }
   },
   encode(state, m) {
-    c.uint.encode(state, m.version)
-    switch (m.version) {
+    const v = m.version ?? 3
+    c.uint.encode(state, v)
+    switch (v) {
       case 0:
         encoding12.encode(state, m)
         break

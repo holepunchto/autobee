@@ -169,7 +169,7 @@ module.exports = function buildAutobaseSchema(schema, DIR) {
       },
       {
         name: 'value',
-        type: 'buffer',
+        type: 'optionalBuffer',
         required: true
       }
     ]
