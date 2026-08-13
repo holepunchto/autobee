@@ -589,7 +589,7 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _getOplog(key, length) {
+  async _getOplog(key, length, opts = null) {
     const core = this.openCore(key)
 
     try {
@@ -598,14 +598,15 @@ module.exports = class Autobee extends ReadyResource {
       const target = length >= 0 ? length : core.length
       if (target === 0) return null
 
-      const buf = await core.get(target - 1)
+      const buf = await core.get(target - 1, opts)
       if (buf === null) return null
 
       let op = encoding.decodeOplog(buf)
 
+      // legacy nodes always inflate, but only indexers carry views - callers
+      // that need system info must check op.views
       if (op.version < 3) {
-        op = await this._inflateLegacyOplog(buf, core, target - 1)
-        if (op === null) return null
+        op = await this._inflateLegacyOplog(buf, core, target - 1, opts)
       }
 
       return {
@@ -618,38 +619,44 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _inflateLegacyOplog(buf, core, seq) {
+  async _inflateLegacyOplog(buf, core, seq, opts = null) {
     const m = encoding.decodeRawOplog(buf)
 
-    // legacy writers that were never indexers carry neither, so there is no
-    // system info to reboot from
-    if (m.digest === null || m.checkpoint === null) return null
-
-    const fetches = []
-
-    fetches.push(m.digest.pointer ? core.get(seq - m.digest.pointer) : buf)
-    fetches.push(m.checkpoint.pointer ? core.get(seq - m.checkpoint.system.checkpointer) : buf)
-
-    const [digestNode, checkpointNode] = await Promise.all(fetches)
-
-    const { digest } = encoding.decodeRawOplog(digestNode)
-    const { checkpoint } = encoding.decodeRawOplog(checkpointNode)
-
-    return {
+    const op = {
       version: m.version,
       timestamp: 0,
       links: m.node.heads,
       batch: { start: 0, end: m.node.batch - 1 },
-      views: {
-        system: {
-          key: digest.key,
-          length: checkpoint.system.checkpoint.length
-        },
-        flushes: seq
-      },
+      views: null,
       optimistic: !!m.optimistic,
       value: m.node.value
     }
+
+    if (m.digest === null || m.checkpoint === null) return op
+
+    const fetches = []
+
+    fetches.push(m.digest.pointer ? core.get(seq - m.digest.pointer, opts) : buf)
+    fetches.push(
+      m.checkpoint.pointer ? core.get(seq - m.checkpoint.system.checkpointer, opts) : buf
+    )
+
+    const [digestNode, checkpointNode] = await Promise.all(fetches)
+    // a wait: false get we could not satisfy locally
+    if (digestNode === null || checkpointNode === null) return op
+
+    const { digest } = encoding.decodeRawOplog(digestNode)
+    const { checkpoint } = encoding.decodeRawOplog(checkpointNode)
+
+    op.views = {
+      system: {
+        key: digest.key,
+        length: checkpoint.system.checkpoint.length
+      },
+      flushes: seq
+    }
+
+    return op
   }
 
   async _update(changes) {
@@ -1143,7 +1150,8 @@ module.exports = class Autobee extends ReadyResource {
     const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
     if (!verified) return null
 
-    if (!verified.op.views) return null
+    // legacy nodes from non-indexers have no system info to reboot from
+    if (!oplog.op.views || !verified.op.views) return null
 
     if (!force && verified.op.views.flushes - this.system.flushes < MIN_FF_GAP) {
       return null
