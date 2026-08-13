@@ -504,7 +504,6 @@ module.exports = class Autobee extends ReadyResource {
       this.bootFrom = null
     }
 
-    this._ackRequired = false
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
