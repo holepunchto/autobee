@@ -1240,6 +1240,8 @@ module.exports = class Autobee extends ReadyResource {
     this.rebootTo = null
     await this.writers.refresh()
 
+    await this._storeBoot()
+
     await this._update(changes)
 
     this.emit('move-to', to, from)
