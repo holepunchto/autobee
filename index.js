@@ -417,6 +417,10 @@ module.exports = class Autobee extends ReadyResource {
     this.bee.move(view)
 
     await this.writers.updateLocalState()
+
+    if (this._handlers.onboot) {
+      await this._handlers.onboot(this.view, this).catch(safetyCatch)
+    }
   }
 
   async _bootAll() {
