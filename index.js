@@ -591,31 +591,40 @@ module.exports = class Autobee extends ReadyResource {
 
   async _getOplog(key, length) {
     const core = this.openCore(key)
-    await core.ready()
 
-    const target = length >= 0 ? length : core.length
-    if (target === 0) return null
+    try {
+      await core.ready()
 
-    const buf = await core.get(target - 1)
-    let op = encoding.decodeOplog(buf)
+      const target = length >= 0 ? length : core.length
+      if (target === 0) return null
 
-    if (op.version < 3) {
-      op = await this._inflateLegacyOplog(buf, core, target - 1)
-    }
+      const buf = await core.get(target - 1)
+      if (buf === null) return null
 
-    await core.close()
+      let op = encoding.decodeOplog(buf)
 
-    if (buf === null) return null
+      if (op.version < 3) {
+        op = await this._inflateLegacyOplog(buf, core, target - 1)
+        if (op === null) return null
+      }
 
-    return {
-      key,
-      length: target,
-      op
+      return {
+        key,
+        length: target,
+        op
+      }
+    } finally {
+      await core.close()
     }
   }
 
   async _inflateLegacyOplog(buf, core, seq) {
     const m = encoding.decodeRawOplog(buf)
+
+    // legacy writers that were never indexers carry neither, so there is no
+    // system info to reboot from
+    if (m.digest === null || m.checkpoint === null) return null
+
     const fetches = []
 
     fetches.push(m.digest.pointer ? core.get(seq - m.digest.pointer) : buf)
@@ -1129,14 +1138,15 @@ module.exports = class Autobee extends ReadyResource {
 
   async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
     const oplog = await this._getOplog(head.key, head.length)
-    if (!oplog) return false
+    if (!oplog) return null
 
     const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
+    if (!verified) return null
 
     if (!verified.op.views) return null
 
     if (!force && verified.op.views.flushes - this.system.flushes < MIN_FF_GAP) {
-      return false
+      return null
     }
 
     const moved = await this._moveTo(batchToHead(verified.op.views.system), {

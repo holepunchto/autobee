@@ -1,5 +1,8 @@
 const test = require('brittle')
+const c = require('compact-encoding')
+const crypto = require('hypercore-crypto')
 const { create, encode } = require('./helpers')
+const { Oplog } = require('../lib/encoding.js')
 
 test('close settles while a drain waits on unavailable blocks', async function (t) {
   const auto1 = await create(t)
@@ -30,3 +33,60 @@ test('close settles while a drain waits on unavailable blocks', async function (
   t.is(result, 'closed')
   t.comment('close took ' + (Date.now() - started) + 'ms')
 })
+
+// _getOplog is called fire-and-forget from the wakeup path, so a core it leaves
+// open outlives the store that tracks it and trips corestore's close
+test('_getOplog closes its core when the head is empty', async function (t) {
+  const auto = await create(t)
+  const opened = trackOpenCores(auto)
+
+  t.is(await auto._getOplog(crypto.keyPair().publicKey, 0), null)
+
+  t.is(opened.length, 1)
+  t.ok(opened[0].closed, 'oplog core was closed')
+})
+
+test('_getOplog closes its core when reading the oplog throws', async function (t) {
+  const auto = await create(t)
+  await auto.append(encode({ value: 'a' }))
+
+  const opened = trackOpenCores(auto, (core) => {
+    core.get = () => Promise.reject(new Error('boom'))
+  })
+
+  await t.exception(auto._getOplog(auto.local.key, 1), /boom/)
+
+  t.is(opened.length, 1)
+  t.ok(opened[0].closed, 'oplog core was closed')
+})
+
+test('legacy oplogs with no digest or checkpoint do not reboot', async function (t) {
+  const auto = await create(t)
+
+  // a legacy writer that was never an indexer appends neither a digest nor a
+  // checkpoint, so there is no system info to reboot from
+  const buf = c.encode(Oplog, {
+    version: 2,
+    node: { heads: [], batch: 1, value: encode({ value: 'a' }) },
+    checkpoint: null,
+    digest: null,
+    optimistic: true,
+    trace: null
+  })
+
+  t.is(await auto._inflateLegacyOplog(buf, null, 0), null)
+})
+
+function trackOpenCores(auto, onopen) {
+  const opened = []
+  const openCore = auto.openCore.bind(auto)
+
+  auto.openCore = function (key) {
+    const core = openCore(key)
+    opened.push(core)
+    if (onopen) onopen(core)
+    return core
+  }
+
+  return opened
+}
