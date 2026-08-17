@@ -88,6 +88,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._localSystemStart = 0
     this._localSystemLength = 0
+    this._localFlushes = 0
     this._localViewStart = 0
     this._localViewLength = 0
 
@@ -163,6 +164,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._localSystemStart = this.system.bee.context.local.length
     this._localViewStart = this._workingBee.context.local.length
+    this._localFlushes = this.system.flushes
 
     this.bumpSoon()
   }
@@ -967,6 +969,7 @@ module.exports = class Autobee extends ReadyResource {
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
       this._localViewLength = this._workingBee.context.local.length - this._localViewStart
+      this._localFlushes = this.system.flushes
     }
 
     this.writers.attest(witnessed)
@@ -1081,7 +1084,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _flushLocal() {
     await this.writers.flushLocal({
-      flushes: this.system.flushes,
+      flushes: this._localFlushes,
       system: {
         key: this.system.bee.context.local.key,
         start: this._localSystemStart,
@@ -1096,6 +1099,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._localSystemStart = this.system.bee.context.local.length
     this._localSystemLength = 0
+    this._localFlushes = this.system.flushes
     this._localViewStart = this._workingBee.context.local.length
     this._localViewLength = 0
   }
@@ -1168,13 +1172,15 @@ module.exports = class Autobee extends ReadyResource {
       return null
     }
 
-    const moved = await this._moveTo(batchToHead(verified.op.views.system), {
+    const tip = {
       system: batchToHead(oplog.op.views.system),
       verified: {
         op: trusted || head,
         flushes: verified.op.views.flushes
       }
-    })
+    }
+
+    const moved = await this._moveTo(batchToHead(verified.op.views.system), tip)
 
     if (moved && wait) return this.reboot.promise
 
