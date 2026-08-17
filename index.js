@@ -382,13 +382,18 @@ module.exports = class Autobee extends ReadyResource {
 
     // Use the view position from the system info (authoritative, post-processing)
     // rather than from the oplog (stale, captured at append time before _bump)
-    let view = this.system.view || EMPTY_HEAD
+    let view = this.system.view
+    if (!view) {
+      const migrated = await this.local.getUserData('autobee/migrated-view')
+      view = migrated ? encoding.decodeBootRecord(migrated) : EMPTY_HEAD
+    }
 
     // @todo migration
     if (result.migration) {
       if (this.handlers.migrate) {
         view = (await this.handlers.migrate(result.migration.views)) || EMPTY_HEAD
         this._catchupMigratedNodes = result.migration.catchup
+        await this._storeMigratedView(view)
       }
 
       // ff boot invalidated by migration
@@ -991,9 +996,15 @@ module.exports = class Autobee extends ReadyResource {
     const boot = this.system.bootRecord()
     if (boot) {
       proms.push(this.local.setUserData('autobee/head', encoding.encodeBootRecord(boot)))
+      if (this.system.view) proms.push(this._storeMigratedView(EMPTY_HEAD))
     }
 
     return Promise.all(proms)
+  }
+
+  _storeMigratedView(view) {
+    const value = view.key ? encoding.encodeBootRecord(view) : null
+    return this.local.setUserData('autobee/migrated-view', value)
   }
 
   static decodeValue(buf, opts) {
@@ -1230,6 +1241,7 @@ module.exports = class Autobee extends ReadyResource {
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
       const view = (await this.handlers.migrate(migrate)) || EMPTY_HEAD
+      await this._storeMigratedView(view)
       this.bee.move(view)
       this._workingBee.move(view)
     } else {
@@ -1239,6 +1251,8 @@ module.exports = class Autobee extends ReadyResource {
 
     this.rebootTo = null
     await this.writers.refresh()
+
+    await this._storeBoot()
 
     await this._update(changes)
 
