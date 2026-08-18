@@ -609,7 +609,7 @@ module.exports = class Autobee extends ReadyResource {
       if (target === 0) return null
 
       // conservative: only proceed when a connected peer can serve the head whole
-      if (opts && opts.conservative && !hasWholePeer(core, target)) return null
+      if (opts && opts.conservative && core.remoteContiguousLength < target) return null
 
       const buf = await core.get(target - 1, opts)
       if (buf === null) return null
@@ -1298,13 +1298,6 @@ module.exports = class Autobee extends ReadyResource {
 
 function isObject(o) {
   return typeof o === 'object' && o && !b4a.isBuffer(o)
-}
-
-function hasWholePeer(core, length) {
-  for (const peer of core.peers) {
-    if (peer.remoteContiguousLength >= length) return true
-  }
-  return false
 }
 
 function noop() {}
