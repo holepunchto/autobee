@@ -15,6 +15,7 @@ async function runTests() {
   await import('./encryption.js')
   await import('./links.js')
   await import('./optimistic-race.js')
+  await import('./own-tail.js')
   await import('./perf.js')
   await import('./updates.js')
   await import('./view-consistency.js')
