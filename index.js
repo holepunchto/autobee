@@ -1277,7 +1277,8 @@ module.exports = class Autobee extends ReadyResource {
     const t = await topo.rollback(this, sys, verified)
     await sys.close()
 
-    await this.applyBacklog(t.tip)
+    if (t !== null) await this.applyBacklog(t.tip)
+
     return this._update(changes)
   }
 
