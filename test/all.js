@@ -13,6 +13,7 @@ async function runTests() {
   await import('./close.js')
   await import('./concurrent-writes.js')
   await import('./encryption.js')
+  await import('./fast-forward.js')
   await import('./links.js')
   await import('./optimistic-race.js')
   await import('./perf.js')
