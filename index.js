@@ -79,6 +79,10 @@ module.exports = class Autobee extends ReadyResource {
     // system head to boot from: migrates or fast-forwards depending on its version
     this.bootFrom = handlers.bootFrom || null
 
+    // conservative (default on): only fast-forward onto a head someone can serve whole
+    const fastForward = handlers.fastForward || {}
+    this._conservativeFF = fastForward.conservative !== false
+
     this.reboot = null
     this.rebooting = null
     this.rebootTo = null
@@ -1155,6 +1159,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
+    if (!force && this._conservativeFF && !(await this._isHeadContiguous(head))) return null
+
     const oplog = await this._getOplog(head.key, head.length)
     if (!oplog) return null
 
@@ -1179,6 +1185,19 @@ module.exports = class Autobee extends ReadyResource {
     if (moved && wait) return this.reboot.promise
 
     return null
+  }
+
+  async _isHeadContiguous(head) {
+    const core = this.openCore(head.key)
+    try {
+      await core.ready()
+      for (const peer of core.peers) {
+        if (peer.remoteContiguousLength >= head.length) return true
+      }
+      return false
+    } finally {
+      await core.close()
+    }
   }
 
   // same as moveTo except we don't return the final promise
