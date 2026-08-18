@@ -21,6 +21,8 @@ const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const UpdateChanges = require('./lib/updates.js')
 
+const { DEFAULT_OP_TIMEOUT } = Reboot
+
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
 const MIN_FF_GAP = 32
@@ -1158,12 +1160,23 @@ module.exports = class Autobee extends ReadyResource {
     return this._rebootFromHead(best, trusted)
   }
 
-  async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
-    const oplog = await this._getOplog(head.key, head.length)
-    if (!oplog) return null
+  async _rebootFromHead(head, trusted, { force = false, wait = true, timeout = 0 } = {}) {
+    const opts = timeout ? { timeout } : null
 
-    const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
-    if (!verified) return null
+    let oplog = null
+    let verified = null
+
+    try {
+      oplog = await this._getOplog(head.key, head.length, opts)
+      if (!oplog) return null
+
+      verified = trusted ? await this._getOplog(trusted.key, trusted.length, opts) : oplog
+      if (!verified) return null
+    } catch (err) {
+      // an unreachable head must not park or kill the boot - fall back to linear sync
+      if (err.code !== 'REQUEST_TIMEOUT') throw err
+      return null
+    }
 
     // legacy nodes from non-indexers have no system info to reboot from
     if (!oplog.op.views || !verified.op.views) return null
@@ -1194,7 +1207,11 @@ module.exports = class Autobee extends ReadyResource {
       return this._runReboot(new Reboot(this, head, tip))
     }
 
-    return this._rebootFromHead(head, null, { force: true, wait: false })
+    return this._rebootFromHead(head, null, {
+      force: true,
+      wait: false,
+      timeout: DEFAULT_OP_TIMEOUT
+    })
   }
 
   // head is a system head; reboots onto it, migrating in place if it's a legacy version
