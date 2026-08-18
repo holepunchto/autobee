@@ -1,7 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
-const { join } = require('path')
 
 const { create, replicate, same, encode } = require('./helpers')
 
@@ -40,7 +39,7 @@ test('conservative ff skips a sparse head nobody can serve', async function (t) 
   }
 
   // a mirror holding only the head block never advertises the head whole
-  const mirror = new Corestore(join(dir, 'mirror'), { manifestVersion: 2 })
+  const mirror = new Corestore(dir + '/mirror', { manifestVersion: 2 })
   t.teardown(() => mirror.close())
 
   const copy = mirror.get({ key: auto1.local.key })
