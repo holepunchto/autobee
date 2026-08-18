@@ -608,6 +608,9 @@ module.exports = class Autobee extends ReadyResource {
       const target = length >= 0 ? length : core.length
       if (target === 0) return null
 
+      // conservative: only proceed when a connected peer can serve the head whole
+      if (opts && opts.conservative && !hasWholePeer(core, target)) return null
+
       const buf = await core.get(target - 1, opts)
       if (buf === null) return null
 
@@ -1160,9 +1163,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
-    if (!force && this._conservativeFF && !(await this._isHeadContiguous(head))) return null
+    const conservative = !force && this._conservativeFF
 
-    const oplog = await this._getOplog(head.key, head.length)
+    const oplog = await this._getOplog(head.key, head.length, { conservative })
     if (!oplog) return null
 
     const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
@@ -1186,19 +1189,6 @@ module.exports = class Autobee extends ReadyResource {
     if (moved && wait) return this.reboot.promise
 
     return null
-  }
-
-  async _isHeadContiguous(head) {
-    const core = this.openCore(head.key)
-    try {
-      await core.ready()
-      for (const peer of core.peers) {
-        if (peer.remoteContiguousLength >= head.length) return true
-      }
-      return false
-    } finally {
-      await core.close()
-    }
   }
 
   // same as moveTo except we don't return the final promise
@@ -1308,6 +1298,13 @@ module.exports = class Autobee extends ReadyResource {
 
 function isObject(o) {
   return typeof o === 'object' && o && !b4a.isBuffer(o)
+}
+
+function hasWholePeer(core, length) {
+  for (const peer of core.peers) {
+    if (peer.remoteContiguousLength >= length) return true
+  }
+  return false
 }
 
 function noop() {}
