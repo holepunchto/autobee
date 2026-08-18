@@ -76,11 +76,12 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
+    const fastForward = handlers.fastForward || {}
+
     // system head to boot from: migrates or fast-forwards depending on its version
-    this.bootFrom = handlers.bootFrom || null
+    this.bootFrom = fastForward.boot || null
 
     // conservative (default on): only fast-forward onto a head someone can serve whole
-    const fastForward = handlers.fastForward || {}
     this._conservativeFF = fastForward.conservative !== false
 
     this.reboot = null
