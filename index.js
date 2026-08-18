@@ -94,6 +94,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._appending = []
     this._draining = null
+    this._oplogSessions = new Set()
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -214,8 +215,11 @@ module.exports = class Autobee extends ReadyResource {
   async _close() {
     this._interrupting = true
     if (this._notifyHandler) this._notifyHandler.destroy()
+
+    // close the fetch sessions so anything waiting on replicated blocks bails
+    for (const core of [...this._oplogSessions]) core.close().catch(safetyCatch)
+
     if (this._draining) {
-      // drain may be waiting on replicated blocks
       this._clearRequests()
       await this._draining
     }
@@ -281,7 +285,18 @@ module.exports = class Autobee extends ReadyResource {
 
   openCore(key) {
     const encryption = this.encryptionKey ? new WriterEncryption(this) : null
-    return this.store.get({ key, encryption })
+    const core = this.store.get({ key, encryption })
+
+    // a session born during teardown is dead on arrival, so its requests bail
+    if (this._interrupting) {
+      core.close().catch(safetyCatch)
+      return core
+    }
+
+    this._oplogSessions.add(core)
+    core.once('close', () => this._oplogSessions.delete(core))
+
+    return core
   }
 
   _getEncryptionProvider(view) {
