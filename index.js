@@ -14,7 +14,7 @@ const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
-const Reboot = require('./lib/reboot.js')
+const FastForward = require('./lib/fast-forward.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
@@ -85,9 +85,9 @@ module.exports = class Autobee extends ReadyResource {
     // conservative (default on): only fast-forward onto a head someone can serve whole
     this._conservativeFF = fastForward.conservative !== false
 
-    this.reboot = null
-    this.rebooting = null
-    this.rebootTo = null
+    this.ff = null
+    this.fastForwarding = null
+    this.fastForwardTo = null
 
     this._workingBee = bee
     this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
@@ -250,6 +250,8 @@ module.exports = class Autobee extends ReadyResource {
         session.clearRequests(session.activeRequests, closingError)
       }
     }
+
+    if (this.fastForwarding) this.fastForwarding.clearRequests(closingError)
   }
 
   async changesFrom({ system } = {}) {
@@ -441,8 +443,6 @@ module.exports = class Autobee extends ReadyResource {
   async _bump() {
     if (!(await this._bootReady())) return
 
-    await this._flushWakeup()
-
     this.bumping++
 
     if (!this._draining) {
@@ -525,8 +525,11 @@ module.exports = class Autobee extends ReadyResource {
 
       try {
         while (!this._interrupting) {
-          if (this.rebootTo !== null) {
-            await this._applyReboot()
+          await this._flushWakeup()
+          if (this._interrupting) break
+
+          if (this.fastForwardTo !== null) {
+            await this._applyFastForward()
             break // revaluate conditions...
           }
 
@@ -593,15 +596,28 @@ module.exports = class Autobee extends ReadyResource {
 
   async _flushWakeup() {
     const hints = this._wakeup.flush()
+    if (!hints.size) return
 
     this.previousDrain = Date.now()
-    this.rebootFromHeads(hints).catch(noop)
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
       if (this.writers.has(hex)) continue
       await this.writers.wakeup(key, length)
     }
+
+    // a scheduled fast-forward is applied by the drain before we look again
+    if (this.fastForwardTo !== null) return
+    if (this._interrupting || this.closing) return
+
+    try {
+      await this.fastForwardFromHeads(hints, { wait: false, timeout: FastForward.DEFAULT_TIMEOUT })
+    } catch (err) {
+      safetyCatch(err)
+      return false
+    }
+
+    return true
   }
 
   async _getOplog(key, length, opts = null) {
@@ -734,7 +750,7 @@ module.exports = class Autobee extends ReadyResource {
     await this.bootstrap.setUserData('autobee/local', this.local.key)
     await oldLocal.close()
 
-    // done, soft reboot
+    // done, soft restart
     this.emit('rotate-local-writer')
   }
 
@@ -1119,10 +1135,10 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  async rebootFromHeads(hints, { force = false } = {}) {
+  async fastForwardFromHeads(hints, { wait = true, timeout = 0 } = {}) {
     if (!this._handlers.onwakeup) return false
     if (this._interrupting) return false
-    if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
+    if (!hints.size || this.fastForwarding || this.fastForwardTo || this.bootFrom) {
       return false
     }
 
@@ -1132,11 +1148,11 @@ module.exports = class Autobee extends ReadyResource {
       if (length === 0) continue
       const key = b4a.from(hex, 'hex')
       heads.push({ key, length })
-      promises.push(this._getOplog(key, length))
+      promises.push(this._getOplog(key, length, timeout ? { timeout } : null))
     }
 
     const ops = await Promise.all(promises)
-    if (this.rebooting || this.rebootTo) return false
+    if (this.fastForwarding || this.fastForwardTo) return false
 
     let best = null
     let bestFlushes = -1
@@ -1151,10 +1167,6 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (best && force) {
-      return this._rebootFromHead(best, null, { force: true })
-    }
-
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
     const head = { key: best.key, length: best.length }
@@ -1165,24 +1177,30 @@ module.exports = class Autobee extends ReadyResource {
     let trusted = null
     try {
       trusted = await this._handlers.onwakeup(head, view, this)
-      if (!trusted || this.rebooting || this.rebootTo) return false
+      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
     } finally {
       view.close()
     }
 
-    return this._rebootFromHead(best, trusted)
+    return this._fastForwardFromHead(best, trusted, { wait, timeout })
   }
 
-  async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
+  async _fastForwardFromHead(head, trusted, { force = false, wait = true, timeout = 0 } = {}) {
     const conservative = !force && this._conservativeFF
+    const timeoutOpts = timeout ? { timeout } : null
 
-    const oplog = await this._getOplog(head.key, head.length, { conservative })
+    const oplog = await this._getOplog(head.key, head.length, {
+      conservative,
+      ...timeoutOpts
+    })
     if (!oplog) return null
 
-    const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
+    const verified = trusted
+      ? await this._getOplog(trusted.key, trusted.length, timeoutOpts)
+      : oplog
     if (!verified) return null
 
-    // legacy nodes from non-indexers have no system info to reboot from
+    // legacy nodes from non-indexers have no system info to fast-forward from
     if (!oplog.op.views || !verified.op.views) return null
 
     if (!force && verified.op.views.flushes - this.system.flushes < MIN_FF_GAP) {
@@ -1199,7 +1217,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const moved = await this._moveTo(batchToHead(verified.op.views.system), tip)
 
-    if (moved && wait) return this.reboot.promise
+    if (moved && wait) return this.ff.promise
 
     return null
   }
@@ -1208,46 +1226,46 @@ module.exports = class Autobee extends ReadyResource {
   _initFromHead(head, tip) {
     if (!head.length) {
       // legacy fastForward boot
-      return this._runReboot(new Reboot(this, head, tip))
+      return this._runFastForward(new FastForward(this, head, tip))
     }
 
-    return this._rebootFromHead(head, null, { force: true, wait: false })
+    return this._fastForwardFromHead(head, null, { force: true, wait: false })
   }
 
-  // head is a system head; reboots onto it, migrating in place if it's a legacy version
+  // head is a system head; fast-forwards onto it, migrating in place if it's a legacy version
   async _moveTo(systemHead, tip) {
-    if (this.rebootTo !== null || this.rebooting !== null) return false
+    if (this.fastForwardTo !== null || this.fastForwarding !== null) return false
 
-    if (await this._runReboot(new Reboot(this, systemHead, tip))) {
+    if (await this._runFastForward(new FastForward(this, systemHead, tip))) {
       return true
     }
 
     return false
   }
 
-  async _runReboot(reboot) {
-    this.rebooting = reboot
+  async _runFastForward(ff) {
+    this.fastForwarding = ff
 
-    const result = await reboot.run()
-    await reboot.close()
+    const result = await ff.run()
+    await ff.close()
 
-    if (this.rebooting === reboot) this.rebooting = null
+    if (this.fastForwarding === ff) this.fastForwarding = null
 
     if (!result) return false
 
-    this.rebootTo = result
-    this.reboot = rrp()
+    this.fastForwardTo = result
+    this.ff = rrp()
 
     this.bumpSoon()
 
     return true
   }
 
-  async _applyReboot() {
+  async _applyFastForward() {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
-    const { head, tip, migrate } = this.rebootTo
+    const { head, tip, migrate } = this.fastForwardTo
 
     const from = this.system.bee.head()
     const to = head
@@ -1255,7 +1273,7 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    this.system.shared = this.rebootTo.shared || {
+    this.system.shared = this.fastForwardTo.shared || {
       flushes: -1,
       view: EMPTY_HEAD,
       system: EMPTY_HEAD
@@ -1272,7 +1290,7 @@ module.exports = class Autobee extends ReadyResource {
       this._workingBee.move(this.system.view)
     }
 
-    this.rebootTo = null
+    this.fastForwardTo = null
     await this.writers.refresh()
 
     await this._storeBoot()
@@ -1281,7 +1299,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
-    this.reboot.resolve({ to, from })
+    this.ff.resolve({ to, from })
 
     // tip is null during boot
     if (!tip) return

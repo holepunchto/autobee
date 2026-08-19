@@ -63,18 +63,18 @@ test('conservative ff skips a sparse head nobody can serve', async function (t) 
   s4.destroy()
   await oplog.close()
 
-  const reboots = []
+  const ffs = []
   const moveTo = auto2._moveTo.bind(auto2)
   auto2._moveTo = (head, tip) => {
-    reboots.push(head)
+    ffs.push(head)
     return moveTo(head, tip)
   }
 
   const hints = new Map([[b4a.toString(auto1.local.key, 'hex'), auto1.local.length]])
-  const moved = await auto2.rebootFromHeads(hints)
+  const moved = await auto2.fastForwardFromHeads(hints)
 
   t.absent(moved, 'the fast-forward was skipped')
-  t.is(reboots.length, 0, 'no ff was attempted')
+  t.is(ffs.length, 0, 'no ff was attempted')
 })
 
 test('conservative: false attempts the sparse head', async function (t) {
@@ -96,17 +96,17 @@ test('conservative: false attempts the sparse head', async function (t) {
   await unreplicate()
   await oplog.close()
 
-  const reboots = []
+  const ffs = []
   const moveTo = auto2._moveTo.bind(auto2)
   auto2._moveTo = (head, tip) => {
-    reboots.push(head)
+    ffs.push(head)
     return moveTo(head, tip)
   }
 
   const hints = new Map([[b4a.toString(auto1.local.key, 'hex'), auto1.local.length]])
-  await auto2.rebootFromHeads(hints)
+  await auto2.fastForwardFromHeads(hints)
 
-  t.ok(reboots.length > 0, 'the ff was attempted instead of skipped')
+  t.ok(ffs.length > 0, 'the ff was attempted instead of skipped')
 })
 
 test('conservative ff proceeds once a connected peer advertises the head whole', async function (t) {
