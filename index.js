@@ -178,6 +178,11 @@ module.exports = class Autobee extends ReadyResource {
     this.bumpSoon()
   }
 
+  _requestWakeup() {
+    const session = this._wakeup._session
+    if (session) session.broadcastLookup()
+  }
+
   _registerWakeup() {
     if (!this.wakeupCapability) return
     this._wakeup.recouple()
@@ -1274,6 +1279,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this.fastForwardTo = null
     await this.writers.refresh()
+
+    // we moved, so ask our peers to tell us their heads again
+    this._requestWakeup()
 
     await this._storeBoot()
 

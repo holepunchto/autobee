@@ -113,7 +113,7 @@ test('conservative ff proceeds once a connected peer advertises the head whole',
   await new Promise((resolve) => auto2.once('move-to', resolve))
   t.pass('the fast-forward went through under the conservative default')
 
-  // the ff lands behind the advertised tip, so let the catch-up settle
+  // move-to fires before the tip is reapplied, so let the catch-up settle
   await sync(auto1, auto2)
 })
 
@@ -288,4 +288,35 @@ test('boot from a head above the last flush', async function (t) {
 
   await sync(auto1, auto2)
   t.ok(await same(auto1, auto2), 'converged on the full tip')
+})
+
+test('a fast-forward asks peers to re-announce', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
+
+  let requests = 0
+  const session = auto2._wakeup._session
+  const broadcastLookup = session.broadcastLookup.bind(session)
+  session.broadcastLookup = (req) => {
+    requests++
+    return broadcastLookup(req)
+  }
+
+  let requestsAtMove = -1
+  auto2.once('move-to', () => {
+    requestsAtMove = requests
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+
+  t.is(requestsAtMove, 1, 'the fast-forward requested a wakeup')
+
+  await sync(auto1, auto2)
 })
