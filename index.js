@@ -1139,6 +1139,18 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
+  async moveTo(head) {
+    if (!this.opened) await this.ready()
+    if (this.closing) throw new Error('Autobee closed')
+
+    const ff = await FastForward.fromHead(this, head, null, { force: true })
+    if (ff === null) return null
+
+    if (!(await this._runFastForward(ff))) return null
+
+    return this.ff.promise
+  }
+
   async _initFromHead(head, tip) {
     // legacy fastForward boot has an unknown length, so it resolves its own head
     const ff = head.length
