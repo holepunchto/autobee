@@ -194,3 +194,70 @@ test('ff onto a trusted head keeps the untrusted tip pending', async function (t
   const entry = await auto3.view.get(b4a.from('latest'))
   t.alike(decode(entry.value), { hello: 'tip' + (TIP - 1) }, 'the tip landed after the ff')
 })
+
+test('boot from a trusted peer', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const conditions = []
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    fastForward: {
+      boot: {
+        trusted: true,
+        bootCondition: async (view) => {
+          const entry = await view.get(b4a.from('latest'))
+          conditions.push(!!entry)
+          return !!entry
+        }
+      }
+    }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('booted onto a trusted head')
+
+  t.ok(conditions.length > 0, 'bootCondition was consulted with the candidate view')
+
+  await replicateAndSync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'converged')
+})
+
+test('boot from trusted parks while the condition rejects', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'b' + i }))
+
+  let accept = false
+  let moved = false
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    fastForward: { boot: { trusted: true, bootCondition: () => accept } }
+  })
+
+  auto2.once('move-to', () => {
+    moved = true
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  t.absent(moved, 'parked while the condition rejects')
+
+  accept = true
+  await auto1.append(encode({ value: 'unblock' }))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('booted once the condition accepted')
+
+  await sync(auto1, auto2)
+})

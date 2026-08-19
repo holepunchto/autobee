@@ -102,6 +102,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._appending = []
     this._draining = null
+    this._bootWait = null
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -221,6 +222,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    if (this._bootWait !== null) this._bootWait.resolve()
     if (this._notifyHandler) this._notifyHandler.destroy()
     if (this._draining) {
       // drain may be waiting on replicated blocks
@@ -314,7 +316,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this.bootFrom) {
-      this.bootFrom = (await this.bootFrom) || null
+      this.bootFrom = getBootOption(await this.bootFrom)
     }
   }
 
@@ -445,6 +447,8 @@ module.exports = class Autobee extends ReadyResource {
   async _bump() {
     if (!(await this._bootReady())) return
 
+    if (this._bootWait !== null) this._bootWait.resolve()
+
     this.bumping++
 
     if (!this._draining) {
@@ -504,8 +508,12 @@ module.exports = class Autobee extends ReadyResource {
     this.stats.drains++
 
     if (this.bootFrom) {
-      await this._initFromHead(this.bootFrom)
+      const { system = null, trusted = false, bootCondition = null } = this.bootFrom
+
       this.bootFrom = null
+
+      if (system) await this._initFromHead(system)
+      else if (trusted) await this._bootFromTrusted(bootCondition)
     }
 
     // tracked across drain iteration
@@ -1177,6 +1185,34 @@ module.exports = class Autobee extends ReadyResource {
     return this.ff.promise
   }
 
+  async _bootFromTrusted(bootCondition) {
+    while (!this._interrupting) {
+      this._bootWait = rrp()
+
+      // peek, so the hints are still there for the drain once we have booted
+      const heads = await this._readTrustedHeads(this._wakeup.hints, FastForward.DEFAULT_TIMEOUT)
+
+      const ff = heads.length
+        ? await FastForward.fromHeads(this, heads, {
+            force: true,
+            timeout: FastForward.DEFAULT_TIMEOUT,
+            condition: bootCondition
+          })
+        : null
+
+      if (ff !== null && (await this._runFastForward(ff))) {
+        this._bootWait = null
+        return
+      }
+
+      if (this._interrupting) break
+
+      await this._bootWait.promise
+    }
+
+    this._bootWait = null
+  }
+
   async _initFromHead(head, tip) {
     // legacy fastForward boot has an unknown length, so it resolves its own head
     const ff = head.length
@@ -1281,6 +1317,12 @@ module.exports = class Autobee extends ReadyResource {
 
 function isObject(o) {
   return typeof o === 'object' && o && !b4a.isBuffer(o)
+}
+
+function getBootOption(boot) {
+  // old style, supported for now but will go away
+  if (boot && boot.key) return { system: boot, trusted: false, bootCondition: null }
+  return boot || null
 }
 
 function noop() {}
