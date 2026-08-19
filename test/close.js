@@ -64,7 +64,7 @@ test('legacy oplogs with no digest or checkpoint inflate without views', async f
   const auto = await create(t)
 
   // a legacy writer that was never an indexer appends neither a digest nor a
-  // checkpoint, so there is no system info to reboot from - the node itself is
+  // checkpoint, so there is no system info to fast-forward from - the node itself is
   // still readable
   const value = encode({ value: 'a' })
   const buf = c.encode(Oplog, {
@@ -78,7 +78,7 @@ test('legacy oplogs with no digest or checkpoint inflate without views', async f
 
   const op = await auto._inflateLegacyOplog(buf, null, 0)
 
-  t.is(op.views, null, 'nothing to reboot from')
+  t.is(op.views, null, 'nothing to fast-forward from')
   t.alike(op.value, value, 'value is still readable')
 })
 
