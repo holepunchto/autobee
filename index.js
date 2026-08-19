@@ -57,6 +57,7 @@ module.exports = class Autobee extends ReadyResource {
     this.id = null
     this.bootstrap = null
     this.handlers = handlers
+    this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
 
     this.system = new System(this.store.namespace('system'), this.name, {
       getEncryptionProvider: this.getSystemEncryption,
@@ -498,6 +499,8 @@ module.exports = class Autobee extends ReadyResource {
   async _drain() {
     if (this._updating) await this._updating
 
+    this.stats.drains++
+
     if (this.bootFrom) {
       await this._initFromHead(this.bootFrom)
       this.bootFrom = null
@@ -919,6 +922,7 @@ module.exports = class Autobee extends ReadyResource {
     const t = await topo.sort(this, batch)
 
     if (t.undo) {
+      this.stats.undos++
       t.view = await this.system.undo(t.undo)
     }
 
@@ -967,6 +971,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
+      this.stats.applies++
       this._host.applying = batch
       await this._handlers.apply(userBatch, this._workingView, this._host)
       this._host.applying = null
@@ -1034,6 +1039,8 @@ module.exports = class Autobee extends ReadyResource {
 
   async append(values, { optimistic = false } = {}) {
     if (this.closing) throw new Error('Autobee closed')
+
+    this.stats.appends++
 
     if (!Array.isArray(values)) values = [values]
 
@@ -1272,6 +1279,7 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._update(changes)
 
+    this.stats.fastForwards++
     this.emit('move-to', to, from)
     this.reboot.resolve({ to, from })
 
