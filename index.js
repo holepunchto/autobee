@@ -79,7 +79,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const fastForward = handlers.fastForward || {}
 
-    // system head to boot from: migrates or fast-forwards depending on its version
+    // oplog head to boot from: migrates or fast-forwards depending on its version
     this.bootFrom = fastForward.boot || null
 
     // conservative (default on): only fast-forward onto a head someone can serve whole
@@ -508,11 +508,11 @@ module.exports = class Autobee extends ReadyResource {
     this.stats.drains++
 
     if (this.bootFrom) {
-      const { system = null, trusted = false, bootCondition = null } = this.bootFrom
+      const { head = null, trusted = false, bootCondition = null } = this.bootFrom
 
       this.bootFrom = null
 
-      if (system) await this._initFromHead(system)
+      if (head) await this._initFromHead(head)
       else if (trusted) await this._bootFromTrusted(bootCondition)
     }
 
@@ -1213,12 +1213,8 @@ module.exports = class Autobee extends ReadyResource {
     this._bootWait = null
   }
 
-  async _initFromHead(head, tip) {
-    // legacy fastForward boot has an unknown length, so it resolves its own head
-    const ff = head.length
-      ? await FastForward.fromHead(this, head, null, { force: true })
-      : new FastForward(this, head, tip)
-
+  async _initFromHead(head) {
+    const ff = await FastForward.fromHead(this, head, null, { force: true })
     if (ff === null) return false
 
     return this._runFastForward(ff)
@@ -1321,7 +1317,7 @@ function isObject(o) {
 
 function getBootOption(boot) {
   // old style, supported for now but will go away
-  if (boot && boot.key) return { system: boot, trusted: false, bootCondition: null }
+  if (boot && boot.key) return { head: boot, trusted: false, bootCondition: null }
   return boot || null
 }
 

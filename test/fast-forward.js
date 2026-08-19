@@ -3,6 +3,7 @@ const b4a = require('b4a')
 const Corestore = require('corestore')
 
 const FastForward = require('../lib/fast-forward.js')
+const encoding = require('../lib/encoding.js')
 
 const { create, replicate, replicateAndSync, same, sync, encode, decode } = require('./helpers')
 
@@ -260,4 +261,31 @@ test('boot from trusted parks while the condition rejects', async function (t) {
   t.pass('booted once the condition accepted')
 
   await sync(auto1, auto2)
+})
+
+test('boot from a head above the last flush', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  // a batch: only its last node carries views, so mid-batch is not a flush head
+  await auto1.append([encode({ value: 'x' }), encode({ value: 'y' }), encode({ value: 'z' })])
+
+  const mid = { key: auto1.local.key, length: auto1.local.length - 1 }
+
+  const block = await auto1.local.get(mid.length - 1)
+  const op = encoding.decodeOplog(block)
+  t.absent(op.views, 'the head we boot from is not a flush head')
+
+  const auto2 = await create(t, auto1.key, { fastForward: { boot: { head: mid } } })
+  t.teardown(replicate(auto1, auto2))
+
+  const moved = await Promise.race([
+    new Promise((resolve) => auto2.once('move-to', () => resolve(true))),
+    new Promise((resolve) => setTimeout(() => resolve(false), 3000))
+  ])
+
+  t.ok(moved, 'walked back to the nearest flush head and booted')
+
+  await sync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'converged on the full tip')
 })
