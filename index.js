@@ -441,8 +441,6 @@ module.exports = class Autobee extends ReadyResource {
   async _bump() {
     if (!(await this._bootReady())) return
 
-    await this._flushWakeup()
-
     this.bumping++
 
     if (!this._draining) {
@@ -525,6 +523,9 @@ module.exports = class Autobee extends ReadyResource {
 
       try {
         while (!this._interrupting) {
+          await this._flushWakeup()
+          if (this._interrupting) break
+
           if (this.rebootTo !== null) {
             await this._applyReboot()
             break // revaluate conditions...
@@ -593,15 +594,28 @@ module.exports = class Autobee extends ReadyResource {
 
   async _flushWakeup() {
     const hints = this._wakeup.flush()
+    if (!hints.size) return
 
     this.previousDrain = Date.now()
-    this.rebootFromHeads(hints).catch(noop)
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
       if (this.writers.has(hex)) continue
       await this.writers.wakeup(key, length)
     }
+
+    // a scheduled reboot is applied by the drain before we look again
+    if (this.rebootTo !== null) return
+    if (this._interrupting || this.closing) return
+
+    try {
+      await this.rebootFromHeads(hints, { wait: false, timeout: Reboot.DEFAULT_TIMEOUT })
+    } catch (err) {
+      safetyCatch(err)
+      return false
+    }
+
+    return true
   }
 
   async _getOplog(key, length, opts = null) {
@@ -1119,7 +1133,7 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  async rebootFromHeads(hints, { force = false } = {}) {
+  async rebootFromHeads(hints, { wait = true, timeout = 0 } = {}) {
     if (!this._handlers.onwakeup) return false
     if (this._interrupting) return false
     if (!hints.size || this.rebooting || this.rebootTo || this.bootFrom) {
@@ -1132,7 +1146,7 @@ module.exports = class Autobee extends ReadyResource {
       if (length === 0) continue
       const key = b4a.from(hex, 'hex')
       heads.push({ key, length })
-      promises.push(this._getOplog(key, length))
+      promises.push(this._getOplog(key, length, timeout ? { timeout } : null))
     }
 
     const ops = await Promise.all(promises)
@@ -1151,10 +1165,6 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (best && force) {
-      return this._rebootFromHead(best, null, { force: true })
-    }
-
     if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
 
     const head = { key: best.key, length: best.length }
@@ -1170,16 +1180,22 @@ module.exports = class Autobee extends ReadyResource {
       view.close()
     }
 
-    return this._rebootFromHead(best, trusted)
+    return this._rebootFromHead(best, trusted, { wait, timeout })
   }
 
-  async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
+  async _rebootFromHead(head, trusted, { force = false, wait = true, timeout = 0 } = {}) {
     const conservative = !force && this._conservativeFF
+    const timeoutOpts = timeout ? { timeout } : null
 
-    const oplog = await this._getOplog(head.key, head.length, { conservative })
+    const oplog = await this._getOplog(head.key, head.length, {
+      conservative,
+      ...timeoutOpts
+    })
     if (!oplog) return null
 
-    const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
+    const verified = trusted
+      ? await this._getOplog(trusted.key, trusted.length, timeoutOpts)
+      : oplog
     if (!verified) return null
 
     // legacy nodes from non-indexers have no system info to reboot from
