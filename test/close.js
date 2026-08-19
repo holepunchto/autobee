@@ -15,7 +15,7 @@ test('close settles while a drain waits on unavailable blocks', async function (
   // first drain fast-forwards towards the head and fetches blocks that can
   // never arrive
   const to = auto1.system.bee.head()
-  const auto2 = await create(t, auto1.key, { bootFrom: to })
+  const auto2 = await create(t, auto1.key, { fastForward: { boot: to } })
 
   auto2.update().catch(() => {})
   await new Promise((resolve) => setTimeout(resolve, 200))

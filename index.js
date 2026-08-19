@@ -76,8 +76,13 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
+    const fastForward = handlers.fastForward || {}
+
     // system head to boot from: migrates or fast-forwards depending on its version
-    this.bootFrom = handlers.bootFrom || null
+    this.bootFrom = fastForward.boot || null
+
+    // conservative (default on): only fast-forward onto a head someone can serve whole
+    this._conservativeFF = fastForward.conservative !== false
 
     this.reboot = null
     this.rebooting = null
@@ -604,6 +609,9 @@ module.exports = class Autobee extends ReadyResource {
 
       const target = length >= 0 ? length : core.length
       if (target === 0) return null
+
+      // conservative: only proceed when a connected peer can serve the head whole
+      if (opts && opts.conservative && core.remoteContiguousLength < target) return null
 
       const buf = await core.get(target - 1, opts)
       if (buf === null) return null
@@ -1159,7 +1167,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _rebootFromHead(head, trusted, { force = false, wait = true } = {}) {
-    const oplog = await this._getOplog(head.key, head.length)
+    const conservative = !force && this._conservativeFF
+
+    const oplog = await this._getOplog(head.key, head.length, { conservative })
     if (!oplog) return null
 
     const verified = trusted ? await this._getOplog(trusted.key, trusted.length) : oplog
