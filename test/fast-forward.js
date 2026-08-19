@@ -4,7 +4,7 @@ const Corestore = require('corestore')
 
 const FastForward = require('../lib/fast-forward.js')
 
-const { create, replicate, replicateAndSync, same, encode, decode } = require('./helpers')
+const { create, replicate, replicateAndSync, same, sync, encode, decode } = require('./helpers')
 
 // predates the moveTo removal
 test.skip('fast-forward - simple', async function (t) {
@@ -98,7 +98,9 @@ test('conservative: false attempts the sparse head', async function (t) {
 })
 
 test('conservative ff proceeds once a connected peer advertises the head whole', async function (t) {
-  const auto1 = await create(t)
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
 
   for (let i = 0; i < 1000; i++) {
     await auto1.append(encode({ value: 'a' + i }))
@@ -109,20 +111,26 @@ test('conservative ff proceeds once a connected peer advertises the head whole',
 
   await new Promise((resolve) => auto2.once('move-to', resolve))
   t.pass('the fast-forward went through under the conservative default')
+
+  // the ff lands behind the advertised tip, so let the catch-up settle
+  await sync(auto1, auto2)
 })
 
 test('ff onto a trusted head keeps the untrusted tip pending', async function (t) {
-  const auto1 = await create(t, { isTrusted: () => false })
-  const auto2 = await create(t, auto1.key, { isTrusted: () => false })
-
   let trusted = null
   let trustedCalls = 0
 
+  const advertise = () => {
+    trustedCalls++
+    return trusted
+  }
+
+  const auto1 = await create(t, { mostRecentTrusted: advertise })
+  const auto2 = await create(t, auto1.key, { mostRecentTrusted: advertise })
+
+  // auto3 only ever accepts a head belonging to auto1
   const auto3 = await create(t, auto1.key, {
-    mostRecentTrusted: () => {
-      trustedCalls++
-      return trusted
-    }
+    isTrusted: (key) => b4a.equals(key, auto1.local.key)
   })
 
   await auto1.append(encode({ hello: 'world' }))
@@ -169,7 +177,7 @@ test('ff onto a trusted head keeps the untrusted tip pending', async function (t
     return
   }
 
-  t.ok(trustedCalls > 0, 'mostRecentTrusted was consulted for the untrusted head')
+  t.ok(trustedCalls > 0, 'the writers advertised a trusted head')
 
   t.ok(writerAtMove, 'the woken writer was not closed by the fast-forward')
   t.ok(writerAtMove && writerAtMove.isPending, 'it still has the tip pending')

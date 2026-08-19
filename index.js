@@ -613,7 +613,9 @@ module.exports = class Autobee extends ReadyResource {
     if (this._interrupting || this.closing || this.bootFrom) return
 
     try {
-      const ff = await FastForward.fromHeads(this, hints, {
+      const heads = await this._readTrustedHeads(hints, FastForward.DEFAULT_TIMEOUT)
+
+      const ff = await FastForward.fromHeads(this, heads, {
         timeout: FastForward.DEFAULT_TIMEOUT
       })
 
@@ -621,6 +623,30 @@ module.exports = class Autobee extends ReadyResource {
     } catch (err) {
       safetyCatch(err)
     }
+  }
+
+  async _readTrustedHeads(hints, timeout) {
+    const promises = []
+
+    for (const [hex, length] of hints) {
+      if (length === 0) continue
+      const key = b4a.from(hex, 'hex')
+      promises.push(this._getOplog(key, length, timeout ? { timeout } : null))
+    }
+
+    const ops = await Promise.all(promises)
+    const heads = []
+
+    for (const res of ops) {
+      if (res === null || !res.op.trusted) continue
+
+      for (const trusted of res.op.trusted) {
+        const head = this.trusted.read(trusted)
+        if (head !== null) heads.push(head)
+      }
+    }
+
+    return heads
   }
 
   async _getOplog(key, length, opts = null) {
