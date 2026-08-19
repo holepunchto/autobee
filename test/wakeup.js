@@ -27,15 +27,19 @@ test('wakeup - replication', async function (t) {
   t.ok(await same(auto2, auto3))
 })
 
-test('wakeup - onwakeup', async function (t) {
+test('wakeup - mostRecentTrusted', async function (t) {
   t.plan(6)
 
   const wakeups = []
-  const heads = []
+  const views = []
 
-  const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key)
-  const auto3 = await create(t, auto1.key, { apply: applyWithStall, onwakeup: createOnWakeup() })
+  const auto1 = await create(t, { isTrusted: () => false })
+  const auto2 = await create(t, auto1.key, { isTrusted: () => false })
+  const auto3 = await create(t, auto1.key, {
+    apply: applyWithStall,
+    isTrusted: () => false,
+    mostRecentTrusted: createMostRecentTrusted()
+  })
 
   await auto1.append(encode({ hello: 'world' }))
   await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
@@ -88,17 +92,17 @@ test('wakeup - onwakeup', async function (t) {
   t.ok(wakeups.length > 0, 'wokeup')
   t.alike(wakeups[0], { hello: 'from auto2' })
 
-  t.ok(b4a.isBuffer(heads[0].key) && heads[0].length > 0, 'onwakeup received head { key, length }')
+  t.ok(views[0] !== auto3._workingView, 'mostRecentTrusted received the candidate view')
 
-  function createOnWakeup() {
-    return async function (head, view) {
+  function createMostRecentTrusted() {
+    return async function (view) {
       const entry = await view.get(b4a.from('latest'))
       const data = decode(entry.value)
 
-      if (data.hello !== 'from auto2') return
+      if (data.hello !== 'from auto2') return null
 
       wakeups.push(data)
-      heads.push(head)
+      views.push(view)
 
       return { key: auto1.local.key, length: auto1.local.length }
     }
@@ -114,7 +118,7 @@ test('wakeup - onwakeup', async function (t) {
   }
 })
 
-test('wakeup - onwakeup via store', async function (t) {
+test('wakeup - via store', async function (t) {
   const dir = await t.tmp()
 
   const auto1 = await create(t)

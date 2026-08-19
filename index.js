@@ -19,11 +19,11 @@ const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
+const TrustedPeers = require('./lib/trusted.js')
 const UpdateChanges = require('./lib/updates.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
-const MIN_FF_GAP = 32
 
 module.exports = class Autobee extends ReadyResource {
   constructor(store, key = null, handlers = {}) {
@@ -84,6 +84,8 @@ module.exports = class Autobee extends ReadyResource {
 
     // conservative (default on): only fast-forward onto a head someone can serve whole
     this._conservativeFF = fastForward.conservative !== false
+
+    this.trusted = new TrustedPeers(handlers)
 
     this.ff = null
     this.fastForwarding = null
@@ -607,17 +609,18 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     // a scheduled fast-forward is applied by the drain before we look again
-    if (this.fastForwardTo !== null) return
-    if (this._interrupting || this.closing) return
+    if (this.fastForwardTo !== null || this.fastForwarding !== null) return
+    if (this._interrupting || this.closing || this.bootFrom) return
 
     try {
-      await this.fastForwardFromHeads(hints, { wait: false, timeout: FastForward.DEFAULT_TIMEOUT })
+      const ff = await FastForward.fromHeads(this, hints, {
+        timeout: FastForward.DEFAULT_TIMEOUT
+      })
+
+      if (ff !== null) await this._runFastForward(ff)
     } catch (err) {
       safetyCatch(err)
-      return false
     }
-
-    return true
   }
 
   async _getOplog(key, length, opts = null) {
@@ -1135,115 +1138,23 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  async fastForwardFromHeads(hints, { wait = true, timeout = 0 } = {}) {
-    if (!this._handlers.onwakeup) return false
-    if (this._interrupting) return false
-    if (!hints.size || this.fastForwarding || this.fastForwardTo || this.bootFrom) {
-      return false
-    }
+  async _initFromHead(head, tip) {
+    // legacy fastForward boot has an unknown length, so it resolves its own head
+    const ff = head.length
+      ? await FastForward.fromHead(this, head, null, { force: true })
+      : new FastForward(this, head, tip)
 
-    const promises = []
-    const heads = []
-    for (const [hex, length] of hints) {
-      if (length === 0) continue
-      const key = b4a.from(hex, 'hex')
-      heads.push({ key, length })
-      promises.push(this._getOplog(key, length, timeout ? { timeout } : null))
-    }
+    if (ff === null) return false
 
-    const ops = await Promise.all(promises)
-    if (this.fastForwarding || this.fastForwardTo) return false
-
-    let best = null
-    let bestFlushes = -1
-
-    for (let i = 0; i < ops.length; i++) {
-      const res = ops[i]
-      if (res === null) continue
-
-      if (res.op.views && res.op.views.flushes > bestFlushes) {
-        bestFlushes = res.op.views.flushes
-        best = res
-      }
-    }
-
-    if (best === null || bestFlushes - this.system.flushes < MIN_FF_GAP) return false
-
-    const head = { key: best.key, length: best.length }
-
-    const v = best.op.views.view
-    const view = this.bee.checkout({ key: v.key, length: v.start + v.length })
-
-    let trusted = null
-    try {
-      trusted = await this._handlers.onwakeup(head, view, this)
-      if (!trusted || this.fastForwarding || this.fastForwardTo) return false
-    } finally {
-      view.close()
-    }
-
-    return this._fastForwardFromHead(best, trusted, { wait, timeout })
-  }
-
-  async _fastForwardFromHead(head, trusted, { force = false, wait = true, timeout = 0 } = {}) {
-    const conservative = !force && this._conservativeFF
-    const timeoutOpts = timeout ? { timeout } : null
-
-    const oplog = await this._getOplog(head.key, head.length, {
-      conservative,
-      ...timeoutOpts
-    })
-    if (!oplog) return null
-
-    const verified = trusted
-      ? await this._getOplog(trusted.key, trusted.length, timeoutOpts)
-      : oplog
-    if (!verified) return null
-
-    // legacy nodes from non-indexers have no system info to fast-forward from
-    if (!oplog.op.views || !verified.op.views) return null
-
-    if (!force && verified.op.views.flushes - this.system.flushes < MIN_FF_GAP) {
-      return null
-    }
-
-    const tip = {
-      system: batchToHead(oplog.op.views.system),
-      verified: {
-        op: trusted || head,
-        flushes: verified.op.views.flushes
-      }
-    }
-
-    const moved = await this._moveTo(batchToHead(verified.op.views.system), tip)
-
-    if (moved && wait) return this.ff.promise
-
-    return null
-  }
-
-  // same as moveTo except we don't return the final promise
-  _initFromHead(head, tip) {
-    if (!head.length) {
-      // legacy fastForward boot
-      return this._runFastForward(new FastForward(this, head, tip))
-    }
-
-    return this._fastForwardFromHead(head, null, { force: true, wait: false })
-  }
-
-  // head is a system head; fast-forwards onto it, migrating in place if it's a legacy version
-  async _moveTo(systemHead, tip) {
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) return false
-
-    if (await this._runFastForward(new FastForward(this, systemHead, tip))) {
-      return true
-    }
-
-    return false
+    return this._runFastForward(ff)
   }
 
   async _runFastForward(ff) {
+    if (this.fastForwardTo !== null || this.fastForwarding !== null) {
+      await ff.close()
+      return false
+    }
+
     this.fastForwarding = ff
 
     const result = await ff.run()
@@ -1360,11 +1271,4 @@ function crashSoon(err) {
     throw err
   })
   throw err
-}
-
-function batchToHead(b) {
-  return {
-    key: b.key,
-    length: b.start + b.length
-  }
 }

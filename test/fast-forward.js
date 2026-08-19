@@ -2,6 +2,8 @@ const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 
+const FastForward = require('../lib/fast-forward.js')
+
 const { create, replicate, same, encode } = require('./helpers')
 
 // predates the moveTo removal
@@ -52,7 +54,7 @@ test('conservative ff skips a sparse head nobody can serve', async function (t) 
   s1.destroy()
   s2.destroy()
 
-  const auto2 = await create(t, auto1.key, { onwakeup: (head) => head })
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
 
   const s3 = mirror.replicate(true)
   const s4 = auto2.store.replicate(false)
@@ -63,18 +65,10 @@ test('conservative ff skips a sparse head nobody can serve', async function (t) 
   s4.destroy()
   await oplog.close()
 
-  const ffs = []
-  const moveTo = auto2._moveTo.bind(auto2)
-  auto2._moveTo = (head, tip) => {
-    ffs.push(head)
-    return moveTo(head, tip)
-  }
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = await FastForward.fromHead(auto2, head, null)
 
-  const hints = new Map([[b4a.toString(auto1.local.key, 'hex'), auto1.local.length]])
-  const moved = await auto2.fastForwardFromHeads(hints)
-
-  t.absent(moved, 'the fast-forward was skipped')
-  t.is(ffs.length, 0, 'no ff was attempted')
+  t.absent(ff, 'the fast-forward was skipped')
 })
 
 test('conservative: false attempts the sparse head', async function (t) {
@@ -85,7 +79,7 @@ test('conservative: false attempts the sparse head', async function (t) {
   }
 
   const auto2 = await create(t, auto1.key, {
-    onwakeup: (head) => head,
+    isTrusted: () => true,
     fastForward: { conservative: false }
   })
 
@@ -96,17 +90,11 @@ test('conservative: false attempts the sparse head', async function (t) {
   await unreplicate()
   await oplog.close()
 
-  const ffs = []
-  const moveTo = auto2._moveTo.bind(auto2)
-  auto2._moveTo = (head, tip) => {
-    ffs.push(head)
-    return moveTo(head, tip)
-  }
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = await FastForward.fromHead(auto2, head, null)
 
-  const hints = new Map([[b4a.toString(auto1.local.key, 'hex'), auto1.local.length]])
-  await auto2.fastForwardFromHeads(hints)
-
-  t.ok(ffs.length > 0, 'the ff was attempted instead of skipped')
+  t.ok(ff, 'the ff was attempted instead of skipped')
+  await ff.close()
 })
 
 test('conservative ff proceeds once a connected peer advertises the head whole', async function (t) {
@@ -116,7 +104,7 @@ test('conservative ff proceeds once a connected peer advertises the head whole',
     await auto1.append(encode({ value: 'a' + i }))
   }
 
-  const auto2 = await create(t, auto1.key, { onwakeup: (head) => head })
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
   t.teardown(replicate(auto1, auto2))
 
   await new Promise((resolve) => auto2.once('move-to', resolve))
