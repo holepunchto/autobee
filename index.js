@@ -250,6 +250,8 @@ module.exports = class Autobee extends ReadyResource {
         session.clearRequests(session.activeRequests, closingError)
       }
     }
+
+    if (this.fastForwarding) this.fastForwarding.clearRequests(closingError)
   }
 
   async changesFrom({ system } = {}) {
