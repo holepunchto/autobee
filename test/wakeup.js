@@ -37,7 +37,6 @@ test('wakeup - mostRecentTrusted', async function (t) {
   const auto2 = await create(t, auto1.key, { isTrusted: () => false })
   const auto3 = await create(t, auto1.key, {
     apply: applyWithStall,
-    isTrusted: () => false,
     mostRecentTrusted: createMostRecentTrusted()
   })
 
