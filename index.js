@@ -942,6 +942,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (t.undo) {
       this.stats.undos++
+      this.trusted.clear()
       t.view = await this.system.undo(t.undo)
     }
 
