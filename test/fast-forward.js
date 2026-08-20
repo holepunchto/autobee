@@ -340,7 +340,12 @@ test('candidate views are opened and closed through the handlers', async functio
   const auto2 = await create(t, auto1.key, {
     open(bee, auto) {
       opens++
-      return { bee, wrapped: true, get: (k) => bee.get(k) }
+      return {
+        bee,
+        wrapped: true,
+        get: (k) => bee.get(k),
+        write: (opts) => bee.write(opts)
+      }
     },
     close(view) {
       closes++
@@ -363,11 +368,14 @@ test('candidate views are opened and closed through the handlers', async functio
   await new Promise((resolve) => auto2.once('move-to', resolve))
   await sync(auto1, auto2)
 
-  t.comment('opens=' + opens + ' closes=' + closes)
   t.ok(seen.includes('condition-wrapped'), 'bootCondition got the opened view')
   t.ok(seen.includes('wrapped'), 'close() got the opened view')
-  t.ok(opens > 1, 'the candidate view was opened as well as the main view')
-  t.ok(closes > 0, 'candidate views are closed through the handler')
+
+  // only the main and working views stay open, every candidate view we opened
+  // along the way has to have been closed again
+  t.comment('after boot: opens=' + opens + ' closes=' + closes)
+  t.ok(opens > 2, 'candidate views were opened as well as the main and working views')
+  t.is(opens - closes, 2, 'no candidate view was left open')
 })
 
 test('boot from an unservable head gives up after the timeout', async function (t) {
