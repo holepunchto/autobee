@@ -708,6 +708,40 @@ test('writer-management - late joiner catches up on a gc"d writer', async functi
   t.is(info.length, 1, 'late joiner applied auto2 nodes')
 })
 
+// detachAndClose() sets the core inactive and _add() sets it active again, so
+// repeated gc/reopen cycles must not drift the replicator's session accounting
+test('writer-management - gc does not leak active core sessions', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2)
+
+  const id = b4a.toString(auto2.local.key, 'hex')
+
+  for (let i = 1; i <= 4; i++) {
+    await auto2.append(encode({ v: i }))
+    await replicateAndSync(auto1, auto2)
+
+    t.absent(auto1.writers.has(id), `round ${i}: writer gc"d again`)
+
+    const info = await auto1.system.get(auto2.local.key)
+    t.is(info.length, i, `round ${i}: node applied after reopen`)
+  }
+
+  const replicator = findReplicator(auto1, auto2.local.key)
+  if (replicator) t.is(replicator.activeSessions, 0, 'no active sessions left behind')
+})
+
+function findReplicator(auto, key) {
+  const tracker = auto.store.cores
+  const cores = tracker && tracker.map ? tracker.map.values() : []
+  for (const core of cores) {
+    if (core.key && b4a.equals(core.key, key)) return core.replicator
+  }
+  return null
+}
+
 async function getExternalViews(auto) {
   const writers = auto.getExternalWriters()
   const results = await Promise.all(writers.map((key) => auto.getWriterViews(key)))
