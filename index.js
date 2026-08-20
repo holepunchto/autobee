@@ -521,11 +521,12 @@ module.exports = class Autobee extends ReadyResource {
     this.stats.drains++
 
     if (this.bootFrom) {
-      const { head = null, bootCondition = null } = this.bootFrom
+      const { head = null, legacy = null, bootCondition = null } = this.bootFrom
 
       this.bootFrom = null
 
-      if (head) await this._bootFromHead(head, bootCondition)
+      if (legacy) await this._bootFromSystem(legacy)
+      else if (head) await this._bootFromHead(head, bootCondition)
     }
 
     // tracked across drain iteration
@@ -633,7 +634,7 @@ module.exports = class Autobee extends ReadyResource {
     if (this._interrupting || this.closing || this.bootFrom) return
 
     try {
-      const heads = await this._readTrustedHeads(hints, FastForward.DEFAULT_TIMEOUT)
+      const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
       const ff = await FastForward.fromHeads(this, heads, {
         timeout: FastForward.DEFAULT_TIMEOUT
@@ -645,7 +646,7 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _readTrustedHeads(hints, timeout) {
+  async _readCandidateHeads(hints, timeout) {
     const promises = []
 
     for (const [hex, length] of hints) {
@@ -658,7 +659,12 @@ module.exports = class Autobee extends ReadyResource {
     const heads = []
 
     for (const res of ops) {
-      if (res === null || !res.op.trusted) continue
+      if (res === null) continue
+
+      // the head we were woken on is a candidate in its own right
+      heads.push({ key: res.key, length: res.length })
+
+      if (!res.op.trusted) continue
 
       for (const trusted of res.op.trusted) {
         const head = this.trusted.read(trusted)
@@ -1202,6 +1208,17 @@ module.exports = class Autobee extends ReadyResource {
     return this.ff.promise
   }
 
+  // legacy: ungated boot straight onto a system head
+  async _bootFromSystem(system) {
+    try {
+      const ff = new FastForward(this, system, null, { timeout: FastForward.DEFAULT_TIMEOUT })
+      return await this._runFastForward(ff)
+    } catch (err) {
+      safetyCatch(err)
+      return false
+    }
+  }
+
   // the boot head seeds the view every trust decision here is made against,
   // since our own view is still empty
   async _bootFromHead(head, bootCondition) {
@@ -1252,9 +1269,12 @@ module.exports = class Autobee extends ReadyResource {
 
   async _bootAttempt(head, bootCondition, reference) {
     // peek, so the hints are still there for the drain once we have booted
-    const advertised = await this._readTrustedHeads(this._wakeup.hints, FastForward.DEFAULT_TIMEOUT)
+    const candidates = await this._readCandidateHeads(
+      this._wakeup.hints,
+      FastForward.DEFAULT_TIMEOUT
+    )
 
-    const ff = await FastForward.fromHeads(this, [head, ...advertised], {
+    const ff = await FastForward.fromHeads(this, [head, ...candidates], {
       force: true,
       timeout: FastForward.DEFAULT_TIMEOUT,
       condition: bootCondition,
@@ -1371,9 +1391,14 @@ function isObject(o) {
 }
 
 function getBootOption(boot) {
-  // old style, supported for now but will go away
-  if (boot && boot.key) return { head: boot, trusted: false, bootCondition: null }
-  return boot || null
+  if (!boot) return null
+
+  // oldest style, supported for now but will go away: a bare key is legacy
+  if (boot.key) return { legacy: boot, head: null, bootCondition: null }
+
+  asserts.assert(!(boot.head && boot.legacy), 'Boot from either a head or a legacy pointer')
+
+  return boot
 }
 
 function noop() {}
