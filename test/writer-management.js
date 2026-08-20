@@ -592,6 +592,122 @@ test('writer-management - emits writer event when writer is attached', async fun
   }
 })
 
+test('writer-management - gc drops non indexer writers once caught up', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  // weight 1 == added, but not an indexer
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ hello: 'world' }))
+  await replicateAndSync(auto1, auto2)
+
+  const id = b4a.toString(auto2.local.key, 'hex')
+
+  t.absent(auto1.writers.has(id), 'caught up non indexer is no longer an active writer')
+  t.ok(auto1.writers.has(b4a.toString(auto1.local.key, 'hex')), 'local writer is kept')
+
+  // the data is still applied, gc only drops the writer session
+  const info = await auto1.system.get(auto2.local.key)
+  t.is(info.length, 1, 'auto2 nodes stayed applied')
+})
+
+test('writer-management - gc keeps indexers resident', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ hello: 'world' }))
+  await replicateAndSync(auto1, auto2)
+
+  const id = b4a.toString(auto2.local.key, 'hex')
+  t.ok(auto1.writers.has(id), 'indexer is still an active writer')
+})
+
+test('writer-management - gc drops removed writers', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ hello: 'world' }))
+  await replicateAndSync(auto1, auto2)
+
+  const id = b4a.toString(auto2.local.key, 'hex')
+  const writer = auto1.writers.active.get(id)
+  t.ok(writer, 'auto2 is an active writer before removal')
+
+  await auto1.append(encode({ removeWriter: auto2.local.id }))
+  await auto1.update()
+
+  t.absent(auto1.writers.has(id), 'removed writer is gc"d from active writers')
+  t.ok(writer.isClosed, 'the writer core session was closed')
+})
+
+test('writer-management - gc does not drop a writer we have not caught up on', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2)
+
+  // auto1 hears about length 4 but has no blocks yet
+  const id = b4a.toString(auto2.local.key, 'hex')
+  await auto1.writers.wakeup(auto2.local.key, 4)
+  await auto1.update()
+
+  const writer = auto1.writers.active.get(id)
+  t.ok(writer, 'writer with an outstanding wakeup hint is kept')
+  t.ok(writer.isPending, 'writer is still queued for work')
+})
+
+test('writer-management - gc"d writer is picked back up when it appends again', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ v: 1 }))
+  await replicateAndSync(auto1, auto2)
+
+  const id = b4a.toString(auto2.local.key, 'hex')
+  t.absent(auto1.writers.has(id), 'writer was gc"d after catching up')
+
+  await auto2.append(encode({ v: 2 }))
+  await replicateAndSync(auto1, auto2)
+
+  const info = await auto1.system.get(auto2.local.key)
+  t.is(info.length, 2, 'auto1 reopened the writer and applied the new node')
+})
+
+test('writer-management - late joiner catches up on a gc"d writer', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ hello: 'world' }))
+  await replicateAndSync(auto1, auto2)
+
+  t.absent(auto1.writers.has(b4a.toString(auto2.local.key, 'hex')), 'auto1 gc"d auto2')
+
+  // a peer that only joins after the gc still has to converge
+  const auto3 = await create(t, auto1.key)
+  await replicateAndSync(auto1, auto2, auto3)
+
+  const entry = await auto3.view.get(b4a.from('latest'))
+  t.alike(decode(entry.value), { hello: 'world' }, 'late joiner sees the gc"d writer data')
+
+  const info = await auto3.system.get(auto2.local.key)
+  t.is(info.length, 1, 'late joiner applied auto2 nodes')
+})
+
 async function getExternalViews(auto) {
   const writers = auto.getExternalWriters()
   const results = await Promise.all(writers.map((key) => auto.getWriterViews(key)))

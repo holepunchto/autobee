@@ -543,6 +543,8 @@ module.exports = class Autobee extends ReadyResource {
         }
 
         await this._flushLocal()
+
+        if (!this._interrupting) await this.writers.refresh()
       } finally {
         if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
