@@ -673,32 +673,37 @@ module.exports = class Autobee extends ReadyResource {
     const core = this.openCore(key)
 
     try {
-      await core.ready()
-
-      const target = length >= 0 ? length : core.length
-      if (target === 0) return null
-
-      // conservative: only proceed when a connected peer can serve the head whole
-      if (opts && opts.conservative && core.remoteContiguousLength < target) return null
-
-      const buf = await core.get(target - 1, opts)
-      if (buf === null) return null
-
-      let op = encoding.decodeOplog(buf)
-
-      // legacy nodes always inflate, but only indexers carry views - callers
-      // that need system info must check op.views
-      if (op.version < 3) {
-        op = await this._inflateLegacyOplog(buf, core, target - 1, opts)
-      }
-
-      return {
-        key,
-        length: target,
-        op
-      }
+      return await this.readOplog(core, length, opts)
     } finally {
       await core.close()
+    }
+  }
+
+  // reads on a core the caller owns, so a walk does not churn a session per step
+  async readOplog(core, length, opts = null) {
+    await core.ready()
+
+    const target = length >= 0 ? length : core.length
+    if (target === 0) return null
+
+    // conservative: only proceed when a connected peer can serve the head whole
+    if (opts && opts.conservative && core.remoteContiguousLength < target) return null
+
+    const buf = await core.get(target - 1, opts)
+    if (buf === null) return null
+
+    let op = encoding.decodeOplog(buf)
+
+    // legacy nodes always inflate, but only indexers carry views - callers
+    // that need system info must check op.views
+    if (op.version < 3) {
+      op = await this._inflateLegacyOplog(buf, core, target - 1, opts)
+    }
+
+    return {
+      key: core.key,
+      length: target,
+      op
     }
   }
 
