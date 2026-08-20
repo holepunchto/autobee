@@ -20,6 +20,7 @@ const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
+const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
@@ -56,7 +57,7 @@ module.exports = class Autobee extends ReadyResource {
     this.discoveryKey = null
     this.id = null
     this.bootstrap = null
-    this.handlers = handlers
+    this._handlers = handlers
     this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
 
     this.system = new System(this.store.namespace('system'), this.name, {
@@ -66,7 +67,7 @@ module.exports = class Autobee extends ReadyResource {
     this.system.auto = this
 
     this.bee = bee.snapshot()
-    this.view = handlers.open ? handlers.open(this.bee, this) : this.bee
+    this.view = ApplyView.open(this.bee, this)
     this.optimistic = handlers.optimistic !== false // TODO: should default to false instead
 
     this.name = name // for debugging
@@ -92,7 +93,7 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwardTo = null
 
     this._workingBee = bee
-    this._workingView = handlers.open ? handlers.open(this._workingBee, this) : this._workingBee
+    this._workingView = new ApplyView(this._workingBee, this)
 
     this._localSystemStart = 0
     this._localSystemLength = 0
@@ -110,7 +111,6 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingState = null
     this._bootingAll = null
 
-    this._handlers = handlers
     this._now = handlers.now || Date.now // overridable for clock-drift tests
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
@@ -240,14 +240,14 @@ module.exports = class Autobee extends ReadyResource {
       await this._bootingAll
     } catch {}
 
-    if (this._handlers.close) await this._handlers.close(this.view)
+    await ApplyView.close(this.view, this)
 
     if (this.writers) await this.writers.close()
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
     if (this.bootstrap && !this.bootstrap.closed) await this.bootstrap.close()
-    await this._workingBee.close()
+    await this._workingView.close()
     await this.bee.close()
     await this.store.close()
   }
@@ -294,6 +294,14 @@ module.exports = class Autobee extends ReadyResource {
 
   hintWakeup(wakeup) {
     this._wakeup.hint(wakeup)
+  }
+
+  // the view an oplog head points at, opened and closed through the handlers
+  openViewAt(oplog) {
+    const v = oplog.op.views.view
+    if (!v) return null
+
+    return new ApplyView(this.bee.checkout({ key: v.key, length: v.start + v.length }), this)
   }
 
   openCore(key) {
@@ -409,8 +417,8 @@ module.exports = class Autobee extends ReadyResource {
 
     // @todo migration
     if (result.migration) {
-      if (this.handlers.migrate) {
-        view = (await this.handlers.migrate(result.migration.views)) || EMPTY_HEAD
+      if (this._handlers.migrate) {
+        view = (await this._handlers.migrate(result.migration.views)) || EMPTY_HEAD
         this._catchupMigratedNodes = result.migration.catchup
         await this._storeMigratedView(view)
       }
@@ -513,12 +521,11 @@ module.exports = class Autobee extends ReadyResource {
     this.stats.drains++
 
     if (this.bootFrom) {
-      const { head = null, trusted = false, bootCondition = null } = this.bootFrom
+      const { head = null, bootCondition = null } = this.bootFrom
 
       this.bootFrom = null
 
-      if (head) await this._initFromHead(head)
-      else if (trusted) await this._bootFromTrusted(bootCondition)
+      if (head) await this._bootFromHead(head, bootCondition)
     }
 
     // tracked across drain iteration
@@ -1032,7 +1039,7 @@ module.exports = class Autobee extends ReadyResource {
     if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
       this.stats.applies++
       this._host.applying = batch
-      await this._handlers.apply(userBatch, this._workingView, this._host)
+      await this._workingView.apply(userBatch)
       this._host.applying = null
     }
 
@@ -1190,39 +1197,46 @@ module.exports = class Autobee extends ReadyResource {
     return this.ff.promise
   }
 
-  async _bootFromTrusted(bootCondition) {
-    while (!this._interrupting) {
-      this._bootWait = rrp()
+  // the boot head seeds the view every trust decision here is made against,
+  // since our own view is still empty
+  async _bootFromHead(head, bootCondition) {
+    const opened = await this._bootReference(head)
+    const reference = opened === null ? null : opened.view
 
-      // peek, so the hints are still there for the drain once we have booted
-      const heads = await this._readTrustedHeads(this._wakeup.hints, FastForward.DEFAULT_TIMEOUT)
+    try {
+      while (!this._interrupting) {
+        this._bootWait = rrp()
 
-      const ff = heads.length
-        ? await FastForward.fromHeads(this, heads, {
-            force: true,
-            timeout: FastForward.DEFAULT_TIMEOUT,
-            condition: bootCondition
-          })
-        : null
+        // peek, so the hints are still there for the drain once we have booted
+        const advertised = await this._readTrustedHeads(
+          this._wakeup.hints,
+          FastForward.DEFAULT_TIMEOUT
+        )
 
-      if (ff !== null && (await this._runFastForward(ff))) {
-        this._bootWait = null
-        return
+        const ff = await FastForward.fromHeads(this, [head, ...advertised], {
+          force: true,
+          timeout: FastForward.DEFAULT_TIMEOUT,
+          condition: bootCondition,
+          reference
+        })
+
+        if (ff !== null && (await this._runFastForward(ff))) return
+        if (this._interrupting) break
+
+        await this._bootWait.promise
       }
-
-      if (this._interrupting) break
-
-      await this._bootWait.promise
+    } finally {
+      this._bootWait = null
+      if (opened !== null) await opened.close()
     }
-
-    this._bootWait = null
   }
 
-  async _initFromHead(head) {
-    const ff = await FastForward.fromHead(this, head, null, { force: true })
-    if (ff === null) return false
+  async _bootReference(head) {
+    const oplog = await FastForward.flushHead(this, head, {
+      timeout: FastForward.DEFAULT_TIMEOUT
+    })
 
-    return this._runFastForward(ff)
+    return oplog === null ? null : this.openViewAt(oplog)
   }
 
   async _runFastForward(ff) {
@@ -1268,7 +1282,7 @@ module.exports = class Autobee extends ReadyResource {
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
-      const view = (await this.handlers.migrate(migrate)) || EMPTY_HEAD
+      const view = (await this._handlers.migrate(migrate)) || EMPTY_HEAD
       await this._storeMigratedView(view)
       this.bee.move(view)
       this._workingBee.move(view)

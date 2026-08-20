@@ -209,7 +209,7 @@ test('boot from a trusted peer', async function (t) {
     isTrusted: () => true,
     fastForward: {
       boot: {
-        trusted: true,
+        head: { key: auto1.local.key, length: auto1.local.length },
         bootCondition: async (view) => {
           const entry = await view.get(b4a.from('latest'))
           conditions.push(!!entry)
@@ -242,7 +242,12 @@ test('boot from trusted parks while the condition rejects', async function (t) {
 
   const auto2 = await create(t, auto1.key, {
     isTrusted: () => true,
-    fastForward: { boot: { trusted: true, bootCondition: () => accept } }
+    fastForward: {
+      boot: {
+        head: { key: auto1.local.key, length: auto1.local.length },
+        bootCondition: () => accept
+      }
+    }
   })
 
   auto2.once('move-to', () => {
@@ -319,4 +324,48 @@ test('a fast-forward asks peers to re-announce', async function (t) {
   t.is(requestsAtMove, 1, 'the fast-forward requested a wakeup')
 
   await sync(auto1, auto2)
+})
+
+test('candidate views are opened and closed through the handlers', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  let opens = 0
+  let closes = 0
+  const seen = []
+
+  const auto2 = await create(t, auto1.key, {
+    open(bee, auto) {
+      opens++
+      return { bee, wrapped: true, get: (k) => bee.get(k) }
+    },
+    close(view) {
+      closes++
+      if (view && view.wrapped) seen.push('wrapped')
+    },
+    isTrusted: () => true,
+    fastForward: {
+      boot: {
+        head: { key: auto1.local.key, length: auto1.local.length },
+        bootCondition: (target) => {
+          seen.push(target && target.wrapped ? 'condition-wrapped' : 'condition-raw')
+          return true
+        }
+      }
+    }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  await sync(auto1, auto2)
+
+  t.comment('opens=' + opens + ' closes=' + closes)
+  t.ok(seen.includes('condition-wrapped'), 'bootCondition got the opened view')
+  t.ok(seen.includes('wrapped'), 'close() got the opened view')
+  t.ok(opens > 1, 'the candidate view was opened as well as the main view')
+  t.ok(closes > 0, 'candidate views are closed through the handler')
 })

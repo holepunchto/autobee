@@ -98,7 +98,7 @@ test('wakeup - trusted advertisement', async function (t) {
   }
 
   t.ok(views.length > 0, 'auto1 was asked what it trusts when flushing')
-  t.is(views[0], auto1._workingView, 'the advertiser is asked against its own view')
+  t.is(views[0], auto1._workingView.view, 'the advertiser is asked against its own view')
 
   t.ok(
     trustChecks.some((key) => b4a.equals(key, auto1.local.key)),
