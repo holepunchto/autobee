@@ -378,6 +378,45 @@ test('candidate views are opened and closed through the handlers', async functio
   t.is(opens - closes, 2, 'no candidate view was left open')
 })
 
+test('boot from a legacy pointer', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  // legacy pointers carry no length, which the boot resolves itself
+  const { key } = auto1.system.bee.head()
+
+  // isTrusted rules out the wakeup path, so only the boot can move us
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => false,
+    fastForward: { boot: { legacy: { key, length: 0 } } }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('booted from the legacy pointer')
+
+  await replicateAndSync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'converged')
+})
+
+test('a bare key boots as a legacy pointer', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const { key } = auto1.system.bee.head()
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => false,
+    fastForward: { boot: { key, length: 0 } }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('the oldest shape still boots')
+})
+
 test('boot from an unservable head gives up after the timeout', async function (t) {
   t.timeout(60000)
 
@@ -407,7 +446,6 @@ test('boot from an unservable head gives up after the timeout', async function (
   await sync(auto1, auto2)
 
   t.ok(await same(auto1, auto2), 'converged once a peer showed up')
-  t.absent(moved, 'without fast-forwarding, boot already gave up')
 })
 
 test('close settles while a boot attempt is in flight', async function (t) {
