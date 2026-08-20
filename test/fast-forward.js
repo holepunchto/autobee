@@ -369,3 +369,57 @@ test('candidate views are opened and closed through the handlers', async functio
   t.ok(opens > 1, 'the candidate view was opened as well as the main view')
   t.ok(closes > 0, 'candidate views are closed through the handler')
 })
+
+test('boot from an unservable head gives up after the timeout', async function (t) {
+  t.timeout(60000)
+
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+
+  const errors = []
+  let moved = false
+
+  const auto2 = await create(t, auto1.key, { fastForward: { boot: { head } } })
+  auto2.on('error', (err) => errors.push(err))
+  auto2.once('move-to', () => {
+    moved = true
+  })
+
+  // no peers: the boot read times out (5s) and must not take the instance down
+  await new Promise((resolve) => setTimeout(resolve, 6000))
+
+  t.is(errors.length, 0, 'the timeout did not surface as an error')
+  t.absent(auto2.closing, 'the instance is still alive')
+  t.absent(moved, 'nothing was booted')
+
+  // boot is one shot, so a peer showing up later syncs the ordinary way
+  t.teardown(replicate(auto1, auto2))
+  await sync(auto1, auto2)
+
+  t.ok(await same(auto1, auto2), 'converged once a peer showed up')
+  t.absent(moved, 'without fast-forwarding, boot already gave up')
+})
+
+test('close settles while a boot attempt is in flight', async function (t) {
+  t.timeout(60000)
+
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const store = await t.tmp()
+  const auto2 = await create(t, auto1.key, {
+    storage: store,
+    fastForward: { boot: { head: { key: auto1.local.key, length: auto1.local.length } } }
+  })
+
+  await new Promise((resolve) => setTimeout(resolve, 200))
+
+  const started = Date.now()
+  await auto2.close()
+  const elapsed = Date.now() - started
+
+  t.comment('close took ' + elapsed + 'ms')
+  t.ok(elapsed < 5000, 'close did not wait out the boot timeout')
+})

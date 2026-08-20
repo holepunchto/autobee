@@ -1200,27 +1200,39 @@ module.exports = class Autobee extends ReadyResource {
   // the boot head seeds the view every trust decision here is made against,
   // since our own view is still empty
   async _bootFromHead(head, bootCondition) {
-    const opened = await this._bootReference(head)
-    const reference = opened === null ? null : opened.view
+    // just a head: one attempt, we do not wait around if it cannot be read
+    if (bootCondition === null) {
+      try {
+        const ff = await FastForward.fromHead(this, head, null, {
+          force: true,
+          timeout: FastForward.DEFAULT_TIMEOUT
+        })
+
+        return ff !== null && (await this._runFastForward(ff))
+      } catch (err) {
+        safetyCatch(err)
+        return false
+      }
+    }
+
+    // a condition needs the view at head to check against, so park until we
+    // can read it and something acceptable turns up
+    let opened = null
 
     try {
       while (!this._interrupting) {
         this._bootWait = rrp()
 
-        // peek, so the hints are still there for the drain once we have booted
-        const advertised = await this._readTrustedHeads(
-          this._wakeup.hints,
-          FastForward.DEFAULT_TIMEOUT
-        )
+        try {
+          if (opened === null) opened = await this._bootReference(head)
 
-        const ff = await FastForward.fromHeads(this, [head, ...advertised], {
-          force: true,
-          timeout: FastForward.DEFAULT_TIMEOUT,
-          condition: bootCondition,
-          reference
-        })
+          if (opened !== null && (await this._bootAttempt(head, bootCondition, opened.view))) {
+            return true
+          }
+        } catch (err) {
+          safetyCatch(err)
+        }
 
-        if (ff !== null && (await this._runFastForward(ff))) return
         if (this._interrupting) break
 
         await this._bootWait.promise
@@ -1229,6 +1241,22 @@ module.exports = class Autobee extends ReadyResource {
       this._bootWait = null
       if (opened !== null) await opened.close()
     }
+
+    return false
+  }
+
+  async _bootAttempt(head, bootCondition, reference) {
+    // peek, so the hints are still there for the drain once we have booted
+    const advertised = await this._readTrustedHeads(this._wakeup.hints, FastForward.DEFAULT_TIMEOUT)
+
+    const ff = await FastForward.fromHeads(this, [head, ...advertised], {
+      force: true,
+      timeout: FastForward.DEFAULT_TIMEOUT,
+      condition: bootCondition,
+      reference
+    })
+
+    return ff !== null && (await this._runFastForward(ff))
   }
 
   async _bootReference(head) {
