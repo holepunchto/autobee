@@ -263,25 +263,6 @@ module.exports = class Autobee extends ReadyResource {
     if (this.fastForwarding) this.fastForwarding.clearRequests(closingError)
   }
 
-  async changesFrom({ system } = {}) {
-    const info = await this.system.getInfo()
-
-    const current = {
-      flushes: info ? info.flushes : 0,
-      system: this.system.bee.head(),
-      view: info ? info.view : EMPTY_HEAD
-    }
-
-    // no common ancestor (null) -> flushes -1 never matches, forcing a full diff
-    const shared = (await this.system.commonAncestor(system || EMPTY_HEAD)) || {
-      flushes: -1,
-      system: EMPTY_HEAD,
-      view: EMPTY_HEAD
-    }
-
-    return UpdateChanges.from(shared, current)
-  }
-
   replicate(...args) {
     const stream = this.store.replicate(...args)
     this._wakeup.addStream(stream)
@@ -528,9 +509,6 @@ module.exports = class Autobee extends ReadyResource {
       if (legacy) await this._bootFromSystem(legacy)
       else if (head) await this._bootFromHead(head, bootCondition)
     }
-
-    // tracked across drain iteration
-    this.system.shared = null
 
     this._ackRequired = false
 
@@ -954,7 +932,6 @@ module.exports = class Autobee extends ReadyResource {
   async _optimisticBatch(batch) {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
-    const rollbackShared = this.system.shared
     const rollbackAttestations = this.writers.attestations.length
 
     const t = await this.prepareBatch(batch)
@@ -977,7 +954,6 @@ module.exports = class Autobee extends ReadyResource {
         this._workingBee.move(rollbackView)
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
-        this.system.shared = rollbackShared
         // don't attest grants that were just undone
         this.writers.attestations.length = rollbackAttestations
         return false
@@ -1326,12 +1302,6 @@ module.exports = class Autobee extends ReadyResource {
 
     this.system.bee.move(head)
     await this.system.reset()
-
-    this.system.shared = this.fastForwardTo.shared || {
-      flushes: -1,
-      view: EMPTY_HEAD,
-      system: EMPTY_HEAD
-    }
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
