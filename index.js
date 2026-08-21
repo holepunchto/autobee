@@ -722,7 +722,7 @@ module.exports = class Autobee extends ReadyResource {
       value: m.node.value
     }
 
-    if (m.digest === null || m.checkpoint === null) return op
+    if (m.digest === null || m.checkpoint === null || !m.checkpoint.system) return op
 
     const fetches = []
 
@@ -738,9 +738,17 @@ module.exports = class Autobee extends ReadyResource {
     const { digest } = encoding.decodeRawOplog(digestNode)
     const { checkpoint } = encoding.decodeRawOplog(checkpointNode)
 
+    // a checkpoint entry does not always carry a fresh system checkpoint -
+    // the round it points at may only have checkpointed other views
+    if (!checkpoint.system || !checkpoint.system.checkpoint) return op
+
     op.views = {
+      // start:0 since a legacy checkpoint's length is already the absolute
+      // system length, unlike a modern flush's {start, length} delta pair -
+      // batchToHead() computes start + length, so this keeps that math correct
       system: {
         key: digest.key,
+        start: 0,
         length: checkpoint.system.checkpoint.length
       },
       flushes: seq
