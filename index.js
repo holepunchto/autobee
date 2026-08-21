@@ -586,6 +586,8 @@ module.exports = class Autobee extends ReadyResource {
         updating.resolve()
       }
     }
+
+    await this._storeBoot()
   }
 
   _onGroupUpdate({ key, length }) {
@@ -1064,8 +1066,6 @@ module.exports = class Autobee extends ReadyResource {
 
     this.writers.attest(witnessed)
 
-    await this._storeBoot()
-
     for (const { key, added, isAnchor } of changed) {
       if (isAnchor) {
         // no Writer/ActiveWriters tracking, but still wake anything linked to it
@@ -1350,9 +1350,8 @@ module.exports = class Autobee extends ReadyResource {
     // we moved, so ask our peers to tell us their heads again
     this._requestWakeup()
 
-    await this._storeBoot()
-
     await this._update(changes)
+    await this._storeBoot()
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
