@@ -235,6 +235,8 @@ module.exports = class Autobee extends ReadyResource {
       await this._draining
     }
 
+    if (this._updating) await this._updating
+
     // let in-flight writer adds finish
     try {
       await this._bootingAll
@@ -553,19 +555,16 @@ module.exports = class Autobee extends ReadyResource {
     this._draining = null
     if (this._interrupting) return
 
-    if (this._needsUpdate) {
-      const updating = rrp()
-      this._updating = updating.promise
+    const updating = rrp()
+    this._updating = updating.promise
 
-      try {
-        await this._update(changes)
-      } finally {
-        this._updating = null
-        updating.resolve()
-      }
+    try {
+      if (this._needsUpdate) await this._update(changes)
+      await this._storeBoot()
+    } finally {
+      this._updating = null
+      updating.resolve()
     }
-
-    await this._storeBoot()
   }
 
   _onGroupUpdate({ key, length }) {
