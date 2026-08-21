@@ -156,14 +156,20 @@ test('ff onto a trusted head keeps the untrusted tip pending', async function (t
   const id = b4a.toString(auto2.local.key, 'hex')
 
   let flushesAtMove = -1
-  let writerAtMove = null
+  let writerWasOpenAtMove = false
+  let writerWasPendingAtMove = false
 
   const moved = new Promise((resolve, reject) => {
     const timer = setTimeout(reject, 10_000)
     auto3.once('move-to', () => {
       clearTimeout(timer)
       flushesAtMove = auto3.system.flushes
-      writerAtMove = auto3.writers.active.get(id) || null
+      // snapshot booleans here - the writer is only guaranteed to still be
+      // pending at this exact instant, since the drain reapplies the tip
+      // (and may gc the now-caught-up writer) as soon as this listener returns
+      const writerAtMove = auto3.writers.active.get(id) || null
+      writerWasOpenAtMove = !!writerAtMove
+      writerWasPendingAtMove = !!writerAtMove && writerAtMove.isPending
       resolve()
     })
   })
@@ -180,8 +186,8 @@ test('ff onto a trusted head keeps the untrusted tip pending', async function (t
 
   t.ok(trustedCalls > 0, 'the writers advertised a trusted head')
 
-  t.ok(writerAtMove, 'the woken writer was not closed by the fast-forward')
-  t.ok(writerAtMove && writerAtMove.isPending, 'it still has the tip pending')
+  t.ok(writerWasOpenAtMove, 'the woken writer was not closed by the fast-forward')
+  t.ok(writerWasPendingAtMove, 'it still has the tip pending')
 
   // auto3 is sparse after the ff
   t.teardown(replicate(auto1, auto2, auto3))

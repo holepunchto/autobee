@@ -546,6 +546,8 @@ module.exports = class Autobee extends ReadyResource {
         }
 
         await this._flushLocal()
+
+        if (!this._interrupting) await this.writers.refresh()
       } finally {
         if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
@@ -596,17 +598,27 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _flushWakeup() {
+  // wakeup hints keep arriving asynchronously
+  async _applyWakeupHints() {
     const hints = this._wakeup.flush()
-    if (!hints.size) return
+    if (!hints.size) return hints
 
     this.previousDrain = Date.now()
 
     for (const [hex, length] of hints) {
       const key = b4a.from(hex, 'hex')
-      if (this.writers.has(hex)) continue
+      // wakeup() itself no-ops the add for an already-active writer, but still
+      // needs to run so it can hint() the announced length - skipping it here
+      // for active writers left gc with no hint to protect them
       await this.writers.wakeup(key, length)
     }
+
+    return hints
+  }
+
+  async _flushWakeup() {
+    const hints = await this._applyWakeupHints()
+    if (!hints.size) return
 
     // a scheduled fast-forward is applied by the drain before we look again
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return
@@ -1314,6 +1326,9 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this.fastForwardTo = null
+
+    // process any wakeup while fast-forward itself was in flight
+    await this._applyWakeupHints()
     await this.writers.refresh()
 
     // we moved, so ask our peers to tell us their heads again
