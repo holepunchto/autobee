@@ -909,35 +909,28 @@ module.exports = class Autobee extends ReadyResource {
       this._catchupMigratedNodes = null
     }
 
-    let updated = false
+    // apply the best next node to keep the prefix stable
+    const next = await this.writers.nextPendingNode()
+    if (next === null) return false
 
-    const pending = this.writers.pending.slice()
+    const { writer: w, batch } = next
 
-    for (let i = pending.length - 1; i >= 0; i--) {
-      const w = pending[i]
-
-      const batch = await w.next()
-      if (batch === null) continue
-
-      if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
-        await this._processBatch(batch)
-        w.notify(batch)
-        updated = true
-        continue
-      }
-
-      if (this.optimistic && !w.isRemoved && batch[0].optimistic) {
-        if (!(await this._optimisticBatch(batch))) {
-          w.removePending()
-          continue
-        }
-        w.notify(batch)
-        updated = true
-        continue
-      }
+    if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
+      await this._processBatch(batch)
+      w.notify(batch)
+      return true
     }
 
-    return updated
+    if (this.optimistic && !w.isRemoved && batch[0].optimistic) {
+      if (!(await this._optimisticBatch(batch))) {
+        w.removePending()
+        return true
+      }
+      w.notify(batch)
+      return true
+    }
+
+    return true
   }
 
   async _optimisticBatch(batch) {
