@@ -78,7 +78,10 @@ Options:
   encryptionKey: Buffer,         // 32-byte key to encrypt all data at rest
   encrypted: false,              // set true if using encryptionKey
   keyPair: { publicKey, secretKey }, // custom signing key pair for the local writer
-  optimistic: true               // allow optimistic writes from unknown writers
+  optimistic: true,              // allow optimistic writes from unknown writers
+  isTrusted (key, reference) {}, // do we trust this writer, see Fast-forward
+  mostRecentTrusted (target, reference) {}, // the head we vouch for, see Fast-forward
+  fastForward: {}                // see Fast-forward
 }
 ```
 
@@ -221,6 +224,50 @@ Create an anchor node. Returns `{ key, length }`. Anchors are used to create a v
 #### `host.genesis`
 
 `true` if the system has not yet processed any nodes. Use this to bootstrap the first writer.
+
+### Fast-forward
+
+Fast-forward only ever deals in oplog heads — `{ key, length }` of a writer's core, never a system head.
+
+Each flush stamps the head you vouch for into your own oplog, and peers read those stamps out of the writers they wake up on, so trust travels with the log.
+
+#### `isTrusted(key, reference)`
+
+Return whether `key` is a writer you trust, judged against the `reference` view.
+
+Positive answers are cached until an undo rewinds the view, and the default is `true` unless you supply `mostRecentTrusted`, in which case it is `false`.
+
+#### `mostRecentTrusted(target, reference)`
+
+Return the oplog head you most recently vouched for, given the `target` view being considered.
+
+Called at flush time to stamp your own oplog (with your view as `target` and a `null` reference), and again per candidate during discovery.
+
+#### `fastForward.boot`
+
+```js
+{
+  head: { key, length },       // oplog head to boot from
+  legacy: { key, length },     // pre-2.0 pointer, see below
+  bootCondition (target, reference) {} // optional gate on the view we would land on
+}
+```
+
+Pass one of `head` or `legacy`, not both.
+
+Without `bootCondition` this is a single attempt that gives up if the head cannot be read; with one it parks until the condition is satisfied, which today means indefinitely if it never is.
+
+`legacy` is for records written before boot heads were oplog heads: the key is a _system_ head and a `0` length is resolved from the core. It boots ungated - `bootCondition` does not apply - and will be removed, so don't reach for it. A bare `{ key, length }` in place of the whole struct means the same thing, older still.
+
+#### `fastForward.conservative`
+
+Defaults to `true`: only fast-forward onto a head a connected peer can serve whole.
+
+The check covers the oplog head only, not the system and view cores the fast-forward then reads.
+
+#### `await db.moveTo(head)`
+
+Fast-forward onto an oplog head, ignoring the usual distance and conservative checks. Resolves `{ to, from }`.
 
 ### Encryption
 

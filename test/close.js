@@ -11,10 +11,9 @@ test('close settles while a drain waits on unavailable blocks', async function (
     await auto1.append(encode({ value: 'a' + i }))
   }
 
-  // boot a member from auto1's system head without any replication - the
-  // first drain fast-forwards towards the head and fetches blocks that can
-  // never arrive
-  const to = auto1.system.bee.head()
+  // boot a member from auto1's head without any replication - the first drain
+  // fast-forwards towards the head and fetches blocks that can never arrive
+  const to = { key: auto1.local.key, length: auto1.local.length }
   const auto2 = await create(t, auto1.key, { fastForward: { boot: to } })
 
   auto2.update().catch(() => {})

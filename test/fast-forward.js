@@ -2,7 +2,10 @@ const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 
-const { create, replicate, same, encode } = require('./helpers')
+const FastForward = require('../lib/fast-forward.js')
+const encoding = require('../lib/encoding.js')
+
+const { create, replicate, replicateAndSync, same, sync, encode, decode } = require('./helpers')
 
 // predates the moveTo removal
 test.skip('fast-forward - simple', async function (t) {
@@ -52,7 +55,7 @@ test('conservative ff skips a sparse head nobody can serve', async function (t) 
   s1.destroy()
   s2.destroy()
 
-  const auto2 = await create(t, auto1.key, { onwakeup: (head) => head })
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
 
   const s3 = mirror.replicate(true)
   const s4 = auto2.store.replicate(false)
@@ -63,18 +66,10 @@ test('conservative ff skips a sparse head nobody can serve', async function (t) 
   s4.destroy()
   await oplog.close()
 
-  const ffs = []
-  const moveTo = auto2._moveTo.bind(auto2)
-  auto2._moveTo = (head, tip) => {
-    ffs.push(head)
-    return moveTo(head, tip)
-  }
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = await FastForward.fromHead(auto2, head, null)
 
-  const hints = new Map([[b4a.toString(auto1.local.key, 'hex'), auto1.local.length]])
-  const moved = await auto2.fastForwardFromHeads(hints)
-
-  t.absent(moved, 'the fast-forward was skipped')
-  t.is(ffs.length, 0, 'no ff was attempted')
+  t.absent(ff, 'the fast-forward was skipped')
 })
 
 test('conservative: false attempts the sparse head', async function (t) {
@@ -85,7 +80,7 @@ test('conservative: false attempts the sparse head', async function (t) {
   }
 
   const auto2 = await create(t, auto1.key, {
-    onwakeup: (head) => head,
+    isTrusted: () => true,
     fastForward: { conservative: false }
   })
 
@@ -96,29 +91,381 @@ test('conservative: false attempts the sparse head', async function (t) {
   await unreplicate()
   await oplog.close()
 
-  const ffs = []
-  const moveTo = auto2._moveTo.bind(auto2)
-  auto2._moveTo = (head, tip) => {
-    ffs.push(head)
-    return moveTo(head, tip)
-  }
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = await FastForward.fromHead(auto2, head, null)
 
-  const hints = new Map([[b4a.toString(auto1.local.key, 'hex'), auto1.local.length]])
-  await auto2.fastForwardFromHeads(hints)
-
-  t.ok(ffs.length > 0, 'the ff was attempted instead of skipped')
+  t.ok(ff, 'the ff was attempted instead of skipped')
+  await ff.close()
 })
 
 test('conservative ff proceeds once a connected peer advertises the head whole', async function (t) {
-  const auto1 = await create(t)
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
 
   for (let i = 0; i < 1000; i++) {
     await auto1.append(encode({ value: 'a' + i }))
   }
 
-  const auto2 = await create(t, auto1.key, { onwakeup: (head) => head })
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
   t.teardown(replicate(auto1, auto2))
 
   await new Promise((resolve) => auto2.once('move-to', resolve))
   t.pass('the fast-forward went through under the conservative default')
+
+  // move-to fires before the tip is reapplied, so let the catch-up settle
+  await sync(auto1, auto2)
+})
+
+test('ff onto a trusted head keeps the untrusted tip pending', async function (t) {
+  let trusted = null
+  let trustedCalls = 0
+
+  const advertise = () => {
+    trustedCalls++
+    return trusted
+  }
+
+  const auto1 = await create(t, { mostRecentTrusted: advertise })
+  const auto2 = await create(t, auto1.key, { mostRecentTrusted: advertise })
+
+  // auto3 only ever accepts a head belonging to auto1
+  const auto3 = await create(t, auto1.key, {
+    isTrusted: (key) => b4a.equals(key, auto1.local.key)
+  })
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+
+  await replicateAndSync(auto1, auto2, auto3)
+
+  for (let i = 0; i < 100; i++) {
+    await auto1.append(encode({ hello: 'world' + i }))
+  }
+
+  await replicateAndSync(auto1, auto2)
+
+  // the only head auto3 trusts, captured before auto2 writes the tip
+  trusted = { key: auto1.local.key, length: auto1.local.length }
+
+  const TIP = 5
+  for (let i = 0; i < TIP; i++) {
+    await auto2.append(encode({ hello: 'tip' + i }))
+  }
+
+  const id = b4a.toString(auto2.local.key, 'hex')
+
+  let flushesAtMove = -1
+  let writerAtMove = null
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(reject, 10_000)
+    auto3.once('move-to', () => {
+      clearTimeout(timer)
+      flushesAtMove = auto3.system.flushes
+      writerAtMove = auto3.writers.active.get(id) || null
+      resolve()
+    })
+  })
+
+  await replicateAndSync(auto1, auto2, auto3)
+
+  try {
+    await moved
+    t.pass('auto3 fast-forwarded')
+  } catch {
+    t.fail('auto3 did not fast-forward')
+    return
+  }
+
+  t.ok(trustedCalls > 0, 'the writers advertised a trusted head')
+
+  t.ok(writerAtMove, 'the woken writer was not closed by the fast-forward')
+  t.ok(writerAtMove && writerAtMove.isPending, 'it still has the tip pending')
+
+  // auto3 is sparse after the ff
+  t.teardown(replicate(auto1, auto2, auto3))
+  t.ok(await same(auto2, auto3), 'auto3 converged on the tip')
+
+  t.ok(auto3.system.flushes > flushesAtMove, 'auto3 applied past the head it moved to')
+
+  const info = await auto3.system.get(auto2.local.key)
+  t.is(info.length, auto2.local.length, 'the woken writer was applied in full')
+
+  const entry = await auto3.view.get(b4a.from('latest'))
+  t.alike(decode(entry.value), { hello: 'tip' + (TIP - 1) }, 'the tip landed after the ff')
+})
+
+test('boot from a trusted peer', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const conditions = []
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    fastForward: {
+      boot: {
+        head: { key: auto1.local.key, length: auto1.local.length },
+        bootCondition: async (view) => {
+          const entry = await view.get(b4a.from('latest'))
+          conditions.push(!!entry)
+          return !!entry
+        }
+      }
+    }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('booted onto a trusted head')
+
+  t.ok(conditions.length > 0, 'bootCondition was consulted with the candidate view')
+
+  await replicateAndSync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'converged')
+})
+
+test('boot from trusted parks while the condition rejects', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'b' + i }))
+
+  let accept = false
+  let moved = false
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    fastForward: {
+      boot: {
+        head: { key: auto1.local.key, length: auto1.local.length },
+        bootCondition: () => accept
+      }
+    }
+  })
+
+  auto2.once('move-to', () => {
+    moved = true
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  t.absent(moved, 'parked while the condition rejects')
+
+  accept = true
+  await auto1.append(encode({ value: 'unblock' }))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('booted once the condition accepted')
+
+  await sync(auto1, auto2)
+})
+
+test('boot from a head above the last flush', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  // a batch: only its last node carries views, so mid-batch is not a flush head
+  await auto1.append([encode({ value: 'x' }), encode({ value: 'y' }), encode({ value: 'z' })])
+
+  const mid = { key: auto1.local.key, length: auto1.local.length - 1 }
+
+  const block = await auto1.local.get(mid.length - 1)
+  const op = encoding.decodeOplog(block)
+  t.absent(op.views, 'the head we boot from is not a flush head')
+
+  const auto2 = await create(t, auto1.key, { fastForward: { boot: { head: mid } } })
+  t.teardown(replicate(auto1, auto2))
+
+  const moved = await Promise.race([
+    new Promise((resolve) => auto2.once('move-to', () => resolve(true))),
+    new Promise((resolve) => setTimeout(() => resolve(false), 3000))
+  ])
+
+  t.ok(moved, 'walked back to the nearest flush head and booted')
+
+  await sync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'converged on the full tip')
+})
+
+test('a fast-forward asks peers to re-announce', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
+
+  let requests = 0
+  const session = auto2._wakeup._session
+  const broadcastLookup = session.broadcastLookup.bind(session)
+  session.broadcastLookup = (req) => {
+    requests++
+    return broadcastLookup(req)
+  }
+
+  let requestsAtMove = -1
+  auto2.once('move-to', () => {
+    requestsAtMove = requests
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+
+  t.is(requestsAtMove, 1, 'the fast-forward requested a wakeup')
+
+  await sync(auto1, auto2)
+})
+
+test('candidate views are opened and closed through the handlers', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  let opens = 0
+  let closes = 0
+  const seen = []
+
+  const auto2 = await create(t, auto1.key, {
+    open(bee, auto) {
+      opens++
+      return {
+        bee,
+        wrapped: true,
+        get: (k) => bee.get(k),
+        write: (opts) => bee.write(opts)
+      }
+    },
+    close(view) {
+      closes++
+      if (view && view.wrapped) seen.push('wrapped')
+    },
+    isTrusted: () => true,
+    fastForward: {
+      boot: {
+        head: { key: auto1.local.key, length: auto1.local.length },
+        bootCondition: (target) => {
+          seen.push(target && target.wrapped ? 'condition-wrapped' : 'condition-raw')
+          return true
+        }
+      }
+    }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  await sync(auto1, auto2)
+
+  t.ok(seen.includes('condition-wrapped'), 'bootCondition got the opened view')
+  t.ok(seen.includes('wrapped'), 'close() got the opened view')
+
+  // only the main and working views stay open, every candidate view we opened
+  // along the way has to have been closed again
+  t.comment('after boot: opens=' + opens + ' closes=' + closes)
+  t.ok(opens > 2, 'candidate views were opened as well as the main and working views')
+  t.is(opens - closes, 2, 'no candidate view was left open')
+})
+
+test('boot from a legacy pointer', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  // legacy pointers carry no length, which the boot resolves itself
+  const { key } = auto1.system.bee.head()
+
+  // isTrusted rules out the wakeup path, so only the boot can move us
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => false,
+    fastForward: { boot: { legacy: { key, length: 0 } } }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('booted from the legacy pointer')
+
+  await replicateAndSync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'converged')
+})
+
+test('a bare key boots as a legacy pointer', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const { key } = auto1.system.bee.head()
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => false,
+    fastForward: { boot: { key, length: 0 } }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('the oldest shape still boots')
+})
+
+test('boot from an unservable head gives up after the timeout', async function (t) {
+  t.timeout(60000)
+
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+
+  const errors = []
+  let moved = false
+
+  const auto2 = await create(t, auto1.key, { fastForward: { boot: { head } } })
+  auto2.on('error', (err) => errors.push(err))
+  auto2.once('move-to', () => {
+    moved = true
+  })
+
+  // no peers: the boot read times out (5s) and must not take the instance down
+  await new Promise((resolve) => setTimeout(resolve, 6000))
+
+  t.is(errors.length, 0, 'the timeout did not surface as an error')
+  t.absent(auto2.closing, 'the instance is still alive')
+  t.absent(moved, 'nothing was booted')
+
+  // boot is one shot, so a peer showing up later syncs the ordinary way
+  t.teardown(replicate(auto1, auto2))
+  await sync(auto1, auto2)
+
+  t.ok(await same(auto1, auto2), 'converged once a peer showed up')
+})
+
+test('close settles while a boot attempt is in flight', async function (t) {
+  t.timeout(60000)
+
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const store = await t.tmp()
+  const auto2 = await create(t, auto1.key, {
+    storage: store,
+    fastForward: { boot: { head: { key: auto1.local.key, length: auto1.local.length } } }
+  })
+
+  await new Promise((resolve) => setTimeout(resolve, 200))
+
+  const started = Date.now()
+  await auto2.close()
+  const elapsed = Date.now() - started
+
+  t.comment('close took ' + elapsed + 'ms')
+  t.ok(elapsed < 5000, 'close did not wait out the boot timeout')
 })

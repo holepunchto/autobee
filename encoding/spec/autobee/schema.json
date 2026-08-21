@@ -750,6 +750,12 @@
           "array": true,
           "type": "@autobee/attestation",
           "version": 1
+        },
+        {
+          "name": "trusted",
+          "array": true,
+          "type": "@autobee/trusted-head",
+          "version": 1
         }
       ]
     },
@@ -801,6 +807,32 @@
           "name": "namespace",
           "required": false,
           "type": "fixed32",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "trusted-head",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "flushes",
+          "required": true,
+          "type": "uint",
           "version": 1
         }
       ]

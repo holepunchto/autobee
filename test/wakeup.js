@@ -1,6 +1,6 @@
 const test = require('brittle')
 const Corestore = require('corestore')
-const { create, replicate, replicateAndSync, encode, same, decode, apply } = require('./helpers')
+const { create, replicate, replicateAndSync, encode, same, decode } = require('./helpers')
 const b4a = require('b4a')
 const ProtomuxWakeup = require('protomux-wakeup')
 
@@ -27,15 +27,27 @@ test('wakeup - replication', async function (t) {
   t.ok(await same(auto2, auto3))
 })
 
-test('wakeup - onwakeup', async function (t) {
+test('wakeup - trusted advertisement', async function (t) {
   t.plan(6)
 
-  const wakeups = []
-  const heads = []
+  const views = []
+  const trustChecks = []
 
-  const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key)
-  const auto3 = await create(t, auto1.key, { apply: applyWithStall, onwakeup: createOnWakeup() })
+  const auto1 = await create(t, {
+    mostRecentTrusted: (view) => {
+      views.push(view)
+      return { key: auto1.local.key, length: auto1.local.length }
+    }
+  })
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => false })
+
+  const auto3 = await create(t, auto1.key, {
+    isTrusted: (key) => {
+      trustChecks.push(key)
+      return b4a.equals(key, auto1.local.key)
+    }
+  })
 
   await auto1.append(encode({ hello: 'world' }))
   await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
@@ -51,7 +63,7 @@ test('wakeup - onwakeup', async function (t) {
   await replicateAndSync(auto1, auto2)
 
   const moved = new Promise((resolve, reject) => {
-    const timer = setTimeout(reject, 2_000)
+    const timer = setTimeout(reject, 10_000)
     auto3.once('move-to', () => {
       clearTimeout(timer)
       resolve()
@@ -85,36 +97,16 @@ test('wakeup - onwakeup', async function (t) {
     t.alike(data, { hello: 'from auto2' })
   }
 
-  t.ok(wakeups.length > 0, 'wokeup')
-  t.alike(wakeups[0], { hello: 'from auto2' })
+  t.ok(views.length > 0, 'auto1 was asked what it trusts when flushing')
+  t.is(views[0], auto1._workingView.view, 'the advertiser is asked against its own view')
 
-  t.ok(b4a.isBuffer(heads[0].key) && heads[0].length > 0, 'onwakeup received head { key, length }')
-
-  function createOnWakeup() {
-    return async function (head, view) {
-      const entry = await view.get(b4a.from('latest'))
-      const data = decode(entry.value)
-
-      if (data.hello !== 'from auto2') return
-
-      wakeups.push(data)
-      heads.push(head)
-
-      return { key: auto1.local.key, length: auto1.local.length }
-    }
-  }
-
-  function applyWithStall(nodes, view, base) {
-    const node = nodes[0]
-
-    // short circuit normal sync
-    if (b4a.equals(node.key, auto1.local.key) && node.length > 2) return
-
-    return apply(nodes, view, base)
-  }
+  t.ok(
+    trustChecks.some((key) => b4a.equals(key, auto1.local.key)),
+    'auto3 was asked whether it trusts the advertised head'
+  )
 })
 
-test('wakeup - onwakeup via store', async function (t) {
+test('wakeup - via store', async function (t) {
   const dir = await t.tmp()
 
   const auto1 = await create(t)

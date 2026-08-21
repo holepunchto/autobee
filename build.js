@@ -275,6 +275,27 @@ auto.register({
 })
 
 auto.register({
+  name: 'trusted-head',
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'length',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'flushes',
+      type: 'uint',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'oplog-message-v3',
   fields: [
     {
@@ -312,6 +333,11 @@ auto.register({
     {
       name: 'attestations',
       type: '@autobee/attestation',
+      array: true
+    },
+    {
+      name: 'trusted',
+      type: '@autobee/trusted-head',
       array: true
     }
   ]

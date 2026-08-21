@@ -1,6 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
-const { create, replicateAndSync, encode } = require('./helpers')
+const { create, replicate, replicateAndSync, encode } = require('./helpers')
 
 test('perf - append 1k', async function (t) {
   t.timeout(120_000)
@@ -34,6 +34,8 @@ test('perf - append 1k (2 autos)', async function (t) {
   t.comment('inserted 1k')
 
   await replicateAndSync(auto1, auto2)
+
+  t.teardown(replicate(auto1, auto2))
 
   const node = await auto2.view.get(b4a.from('latest'))
 
