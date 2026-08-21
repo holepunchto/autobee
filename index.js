@@ -235,6 +235,8 @@ module.exports = class Autobee extends ReadyResource {
       await this._draining
     }
 
+    if (this._updating) await this._updating
+
     // let in-flight writer adds finish
     try {
       await this._bootingAll
@@ -261,25 +263,6 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this.fastForwarding) this.fastForwarding.clearRequests(closingError)
-  }
-
-  async changesFrom({ system } = {}) {
-    const info = await this.system.getInfo()
-
-    const current = {
-      flushes: info ? info.flushes : 0,
-      system: this.system.bee.head(),
-      view: info ? info.view : EMPTY_HEAD
-    }
-
-    // no common ancestor (null) -> flushes -1 never matches, forcing a full diff
-    const shared = (await this.system.commonAncestor(system || EMPTY_HEAD)) || {
-      flushes: -1,
-      system: EMPTY_HEAD,
-      view: EMPTY_HEAD
-    }
-
-    return UpdateChanges.from(shared, current)
   }
 
   replicate(...args) {
@@ -529,9 +512,6 @@ module.exports = class Autobee extends ReadyResource {
       else if (head) await this._bootFromHead(head, bootCondition)
     }
 
-    // tracked across drain iteration
-    this.system.shared = null
-
     this._ackRequired = false
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
@@ -575,16 +555,15 @@ module.exports = class Autobee extends ReadyResource {
     this._draining = null
     if (this._interrupting) return
 
-    if (this._needsUpdate) {
-      const updating = rrp()
-      this._updating = updating.promise
+    const updating = rrp()
+    this._updating = updating.promise
 
-      try {
-        await this._update(changes)
-      } finally {
-        this._updating = null
-        updating.resolve()
-      }
+    try {
+      if (this._needsUpdate) await this._update(changes)
+      await this._storeBoot()
+    } finally {
+      this._updating = null
+      updating.resolve()
     }
   }
 
@@ -952,7 +931,6 @@ module.exports = class Autobee extends ReadyResource {
   async _optimisticBatch(batch) {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
-    const rollbackShared = this.system.shared
     const rollbackAttestations = this.writers.attestations.length
 
     const t = await this.prepareBatch(batch)
@@ -975,7 +953,6 @@ module.exports = class Autobee extends ReadyResource {
         this._workingBee.move(rollbackView)
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
-        this.system.shared = rollbackShared
         // don't attest grants that were just undone
         this.writers.attestations.length = rollbackAttestations
         return false
@@ -1063,8 +1040,6 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this.writers.attest(witnessed)
-
-    await this._storeBoot()
 
     for (const { key, added, isAnchor } of changed) {
       if (isAnchor) {
@@ -1327,12 +1302,6 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    this.system.shared = this.fastForwardTo.shared || {
-      flushes: -1,
-      view: EMPTY_HEAD,
-      system: EMPTY_HEAD
-    }
-
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
       const view = (await this._handlers.migrate(migrate)) || EMPTY_HEAD
@@ -1350,9 +1319,8 @@ module.exports = class Autobee extends ReadyResource {
     // we moved, so ask our peers to tell us their heads again
     this._requestWakeup()
 
-    await this._storeBoot()
-
     await this._update(changes)
+    await this._storeBoot()
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
