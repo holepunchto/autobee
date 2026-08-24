@@ -865,9 +865,16 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bumpMigratedWriters() {
+    const opened = new Set()
+
     for (const batch of this._catchupMigratedNodes) {
       await this._processBatch(batch)
+      for (const node of batch) {
+        if (node.from) opened.add(node.from)
+      }
     }
+
+    for (const core of opened) await core.close()
   }
 
   // append a null value node to ack writer
