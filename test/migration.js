@@ -1,7 +1,4 @@
 const test = require('brittle')
-const os = require('os')
-const path = require('path')
-const fs = require('fs/promises')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 const Hyperbee = require('hyperbee2')
@@ -21,13 +18,20 @@ const { replicate, sync } = require('./helpers')
 // the confirmed prefix as of each writer's own last checkpoint is physically
 // present in the shared 'log' view core, so a and b both migrate to the same
 // 200-entry view, and c migrates to a 100-entry view.
-const skip = os.platform() !== 'linux'
+//
+// Copying/reading these fixtures needs Node's fs/path/os, which Bare doesn't
+// provide as builtins - skip entirely under Bare (this file is loaded by
+// test/all.js, which also runs under `bare test/all.js`), same as any
+// non-linux platform. The requires below are gated on the same check so
+// loading this file never throws under Bare in the first place.
+const IS_BARE = typeof global.Bare !== 'undefined'
+const skip = IS_BARE || require('os').platform() !== 'linux'
 
-const FIXTURE = path.join(__dirname, 'fixtures/migration/autobase-v7.28.1-linux')
-const BASE_KEY = b4a.from(
-  '7f22e8f8460095e563eb47a71843a6be852bd8c800d27904eef26068149b921a',
-  'hex'
-)
+const path = skip ? null : require('path')
+const fs = skip ? null : require('fs/promises')
+
+const FIXTURE = skip ? null : path.join(__dirname, 'fixtures/migration/autobase-v7.28.1-linux')
+const BASE_KEY = b4a.from('7f22e8f8460095e563eb47a71843a6be852bd8c800d27904eef26068149b921a', 'hex')
 const SECRET_KEY = b4a.alloc(32).fill('secret')
 const LEGACY_VIEW_NAME = 'log'
 
@@ -40,7 +44,9 @@ async function apply(batch, view, base) {
     if (!value) continue
 
     const data = JSON.parse(b4a.toString(value))
-    if (data && data.add) await base.addWriter(Buffer.from(data.add, 'hex'), { indexer: !!data.indexer })
+    if (data && data.add) {
+      await base.addWriter(Buffer.from(data.add, 'hex'), { indexer: !!data.indexer })
+    }
   }
 }
 
@@ -61,7 +67,7 @@ async function apply(batch, view, base) {
 // `auto` is assigned after construction but only ever read here once
 // migrate() is invoked (from auto.ready()), by which point it is set.
 function migrateInto(store, state, getAuto) {
-  return async function migrate(views) {
+  return async function (views) {
     state.calls = (state.calls || 0) + 1
 
     const legacy = views.get(LEGACY_VIEW_NAME)
@@ -189,17 +195,21 @@ test('migration - a (indexer, frozen fully indexed at 200) migrates', { skip }, 
   t.is(await messageAt(a, A_CONFIRMED - 1), 'm198')
 })
 
-test('migration - b (indexer, unconfirmed tail past 200) migrates to the confirmed prefix', { skip }, async function (t) {
-  const state = {}
-  const b = await openFixture(t, 'b', state)
+test(
+  'migration - b (indexer, unconfirmed tail past 200) migrates to the confirmed prefix',
+  { skip },
+  async function (t) {
+    const state = {}
+    const b = await openFixture(t, 'b', state)
 
-  t.ok(state.calls, 'migrate handler ran')
-  // b kept writing 50 more messages after a went offline, but those never
-  // got confirmed/indexed, so only the confirmed prefix is physically
-  // persisted in the legacy 'log' view core and available to migrate
-  t.is(state.length, B_CONFIRMED)
-  t.is(await messageAt(b, B_CONFIRMED - 1), 'm198')
-})
+    t.ok(state.calls, 'migrate handler ran')
+    // b kept writing 50 more messages after a went offline, but those never
+    // got confirmed/indexed, so only the confirmed prefix is physically
+    // persisted in the legacy 'log' view core and available to migrate
+    t.is(state.length, B_CONFIRMED)
+    t.is(await messageAt(b, B_CONFIRMED - 1), 'm198')
+  }
+)
 
 test('migration - c (non-indexer, frozen at 100) migrates', { skip }, async function (t) {
   const state = {}
@@ -251,66 +261,74 @@ test('migration - 1) c migrates, b migrates, c fast-forwards onto b', { skip }, 
 // brand new peer straight onto that head should trigger fast-forward's own
 // migration path (FastForward._migrate / index.js _applyFastForward) rather
 // than the cold-boot one, since the announced head is still a legacy system.
-test('migration - 2) a fresh peer boots straight onto a migrated head, triggering ff migration', { skip }, async function (t) {
-  const bState = {}
-  const b = await openFixture(t, 'b', bState)
+test(
+  'migration - 2) a fresh peer boots straight onto a migrated head, triggering ff migration',
+  { skip },
+  async function (t) {
+    const bState = {}
+    const b = await openFixture(t, 'b', bState)
 
-  const head = safeHeadOfB(b)
+    const head = safeHeadOfB(b)
 
-  const joinerStore = new Corestore(await t.tmp())
-  const joinerState = {}
-  const joiner = makeAutobee(joinerStore, joinerState, { fastForward: { boot: { head } } })
-  t.teardown(() => joiner.close())
+    const joinerStore = new Corestore(await t.tmp())
+    const joinerState = {}
+    const joiner = makeAutobee(joinerStore, joinerState, { fastForward: { boot: { head } } })
+    t.teardown(() => joiner.close())
 
-  const done = replicate(b, joiner)
+    const done = replicate(b, joiner)
 
-  await joiner.ready()
+    await joiner.ready()
 
-  // boot-time fast-forward runs off the drain, asynchronously to ready() -
-  // it isn't done by the time ready() resolves, only by the time it has
-  // actually caught up to b
-  await sync(b, joiner)
-  await done()
+    // boot-time fast-forward runs off the drain, asynchronously to ready() -
+    // it isn't done by the time ready() resolves, only by the time it has
+    // actually caught up to b
+    await sync(b, joiner)
+    await done()
 
-  t.ok(joinerState.calls, 'ff-triggered migration called the migrate handler')
-  t.is(joinerState.length, B_CONFIRMED)
+    t.ok(joinerState.calls, 'ff-triggered migration called the migrate handler')
+    t.is(joinerState.length, B_CONFIRMED)
 
-  t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
-  await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
-})
+    t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
+    await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
+  }
+)
 
 // 3) a comes online first and migrates; c migrates its own (smaller) local
 // storage and then fast-forwards onto a; b then comes online and migrates,
 // and c fast-forwards onto b too - a multi-hop chain of ff-triggered
 // re-migrations from two different source peers.
-test('migration - 3) a online, c migrates and ffs onto a, then b online and c ffs onto b too', { skip }, async function (t) {
-  const aState = {}
-  const a = await openFixture(t, 'a', aState)
+test(
+  'migration - 3) a online, c migrates and ffs onto a, then b online and c ffs onto b too',
+  { skip },
+  async function (t) {
+    const aState = {}
+    const a = await openFixture(t, 'a', aState)
 
-  const cState = {}
-  const c = await openFixture(t, 'c', cState)
+    const cState = {}
+    const c = await openFixture(t, 'c', cState)
 
-  t.is(cState.length, C_CONFIRMED)
+    t.is(cState.length, C_CONFIRMED)
 
-  const doneA = replicate(a, c)
-  const ffA = await c.moveTo(localHead(a))
-  t.ok(ffA, 'c fast-forwarded onto a')
+    const doneA = replicate(a, c)
+    const ffA = await c.moveTo(localHead(a))
+    t.ok(ffA, 'c fast-forwarded onto a')
 
-  await sync(a, c)
-  await doneA()
+    await sync(a, c)
+    await doneA()
 
-  t.is(await messageAt(c, A_CONFIRMED - 1), 'm198')
+    t.is(await messageAt(c, A_CONFIRMED - 1), 'm198')
 
-  const bState = {}
-  const b = await openFixture(t, 'b', bState)
+    const bState = {}
+    const b = await openFixture(t, 'b', bState)
 
-  const doneB = replicate(b, c)
-  const ffB = await c.moveTo(safeHeadOfB(b))
-  t.ok(ffB, 'c fast-forwarded onto b')
+    const doneB = replicate(b, c)
+    const ffB = await c.moveTo(safeHeadOfB(b))
+    t.ok(ffB, 'c fast-forwarded onto b')
 
-  await sync(b, c)
-  await doneB()
+    await sync(b, c)
+    await doneB()
 
-  t.is(await messageAt(c, B_CONFIRMED - 1), 'm198')
-  await sameContent(t, c, b, B_CONFIRMED, 'c vs b')
-})
+    t.is(await messageAt(c, B_CONFIRMED - 1), 'm198')
+    await sameContent(t, c, b, B_CONFIRMED, 'c vs b')
+  }
+)
