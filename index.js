@@ -116,8 +116,13 @@ module.exports = class Autobee extends ReadyResource {
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
-    this._acks = new AckTracker({ target: handlers.ackTarget })
-    this._ackTimer = null
+    this._acks = new AckTracker({
+      target: handlers.ackTarget,
+      max: handlers.ackMax,
+      ontimeout: () => {
+        if (!this._interrupting) this.bumpSoon()
+      }
+    })
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
     this._notifyHandler = null
@@ -229,10 +234,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
-    if (this._ackTimer !== null) {
-      clearTimeout(this._ackTimer)
-      this._ackTimer = null
-    }
+    this._acks.clear()
     if (this._bootWait !== null) this._bootWait.resolve()
     if (this._notifyHandler) this._notifyHandler.destroy()
     if (this._draining) {
@@ -897,16 +899,7 @@ module.exports = class Autobee extends ReadyResource {
     if (this.writers.localWriter.pending !== null) return false
 
     const delay = this._acks.delay(this.local.key, this._now(), this.system.members)
-    if (delay > 0) {
-      if (this._ackTimer === null) {
-        this._ackTimer = setTimeout(() => {
-          this._ackTimer = null
-          if (!this._interrupting) this.bumpSoon()
-        }, delay)
-        if (this._ackTimer.unref) this._ackTimer.unref()
-      }
-      return false
-    }
+    if (delay > 0) return false
 
     const links = this.system.getLinks(this.local.key)
     const t = Math.max(this._now(), this.system.timestamp)

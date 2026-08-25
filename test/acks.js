@@ -47,6 +47,55 @@ test('acks - tracker delay is deterministic and pays after the deadline', functi
   }
 })
 
+test('acks - tracker timer is cancelled on clear and on settling out', function (t) {
+  const key = b4a.alloc(32).fill('k')
+  const other = b4a.alloc(32).fill('o')
+  const local = b4a.alloc(32).fill('l')
+
+  const acks = new AckTracker()
+  acks.add(key, 1)
+
+  const d = acks.delay(local, Date.now(), 10)
+  if (d === 0) {
+    t.pass('drew zero, no timer to cancel')
+  } else {
+    t.ok(acks.timer !== null, 'timer scheduled while holding off')
+    acks.clear()
+    t.is(acks.timer, null, 'clear cancels the timer')
+  }
+
+  acks.add(key, 1)
+  if (acks.delay(local, Date.now(), 10) > 0) {
+    acks.settle({ key: other }, { key, length: 1 })
+    t.is(acks.size, 0, 'settled out')
+    t.is(acks.timer, null, 'settling the last entry cancels the timer')
+  }
+})
+
+test('acks - tracker never schedules a timer beyond the max backoff', function (t) {
+  const local = b4a.alloc(32).fill('l')
+  const max = 1000
+
+  let above = null
+  let below = null
+
+  for (let i = 0; i < 100 && (above === null || below === null); i++) {
+    const acks = new AckTracker({ target: 4 * max, max })
+    acks.add(b4a.alloc(32).fill(i + 1), 1)
+    const d = acks.delay(local, Date.now(), 1)
+    if (d > max && above === null) above = acks
+    if (d > 0 && d <= max && below === null) below = acks
+    else if (above !== acks) acks.clear()
+  }
+
+  t.ok(above !== null && below !== null, 'found draws on both sides of the max')
+  t.is(above.timer, null, 'no timer for a draw beyond the max')
+  t.ok(below.timer !== null, 'timer for a draw within the max')
+
+  above.clear()
+  below.clear()
+})
+
 test('acks - tracker window scales with member count and target', function (t) {
   const key = b4a.alloc(32).fill('k')
   const local = b4a.alloc(32).fill('l')
