@@ -32,19 +32,32 @@ test('acks - tracker delay is deterministic and pays after the deadline', functi
   const key = b4a.alloc(32).fill('k')
   const local = b4a.alloc(32).fill('l')
 
-  t.is(acks.delay(local, 1000), -1, 'nothing pending')
+  t.is(acks.delay(local, 1000, 10), -1, 'nothing pending')
 
   acks.add(key, 1)
 
-  const d1 = acks.delay(local, 1000)
-  const d2 = acks.delay(local, 1000)
+  const d1 = acks.delay(local, 1000, 10)
+  const d2 = acks.delay(local, 1000, 10)
   t.is(d1, d2, 'same draw for same inputs')
 
   if (d1 === -1) {
     t.pass('drew zero, pays immediately')
   } else {
-    t.is(acks.delay(local, 1000 + d1), -1, 'pays once the deadline passed')
+    t.is(acks.delay(local, 1000 + d1, 10), -1, 'pays once the deadline passed')
   }
+})
+
+test('acks - tracker window scales with member count', function (t) {
+  const key = b4a.alloc(32).fill('k')
+  const local = b4a.alloc(32).fill('l')
+
+  const small = new AckTracker()
+  small.add(key, 1)
+  t.ok(small.delay(local, 0, 1) < 200, 'single member draws within one target slot')
+
+  const big = new AckTracker()
+  big.add(key, 1)
+  t.ok(big.delay(local, 0, 1000) < 200000, 'big room draws within members * target')
 })
 
 test('acks - a single writer acks an optimistic join', async function (t) {

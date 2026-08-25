@@ -896,7 +896,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.writers.localWriter.pending !== null) return false
 
-    const delay = this._acks.delay(this.local.key, this._now())
+    const delay = this._acks.delay(this.local.key, this._now(), this.system.members)
     if (delay > 0) {
       if (this._ackTimer === null) {
         this._ackTimer = setTimeout(() => {
