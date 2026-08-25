@@ -401,7 +401,9 @@ module.exports = class Autobee extends ReadyResource {
     // @todo migration
     if (result.migration) {
       if (this._handlers.migrate) {
-        view = (await this._handlers.migrate(result.migration.views, result.migration.system)) || EMPTY_HEAD
+        view =
+          (await this._handlers.migrate(result.migration.views, result.migration.system)) ||
+          EMPTY_HEAD
         this._catchupMigratedNodes = result.migration.catchup
         await this._storeMigratedView(view)
       }
