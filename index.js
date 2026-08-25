@@ -133,6 +133,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._catchupMigratedNodes = null
     this._migratedView = null
+    this._migratedLegacyHead = null
 
     this.ready().catch(noop)
   }
@@ -407,7 +408,10 @@ module.exports = class Autobee extends ReadyResource {
           (await this._handlers.migrate(result.migration.views, result.migration.system)) ||
           EMPTY_HEAD
         this._catchupMigratedNodes = result.migration.catchup
+
         if (view.length) this._migratedView = view
+        this._migratedLegacyHead = result.migration.system
+
         await this._storeMigratedView(view)
       }
 
@@ -738,14 +742,9 @@ module.exports = class Autobee extends ReadyResource {
     const { digest } = encoding.decodeRawOplog(digestNode)
     const { checkpoint } = encoding.decodeRawOplog(checkpointNode)
 
-    // a checkpoint entry does not always carry a fresh system checkpoint -
-    // the round it points at may only have checkpointed other views
     if (!checkpoint.system || !checkpoint.system.checkpoint) return op
 
     op.views = {
-      // start:0 since a legacy checkpoint's length is already the absolute
-      // system length, unlike a modern flush's {start, length} delta pair -
-      // batchToHead() computes start + length, so this keeps that math correct
       system: {
         key: digest.key,
         start: 0,
@@ -1332,7 +1331,10 @@ module.exports = class Autobee extends ReadyResource {
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
       const view = (await this._handlers.migrate(migrate, head)) || EMPTY_HEAD
+
       if (view.length) this._migratedView = view
+      this._migratedLegacyHead = head
+
       await this._storeMigratedView(view)
       this.bee.move(view)
       this._workingBee.move(view)
