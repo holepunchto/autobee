@@ -32,7 +32,7 @@ test('acks - tracker delay is deterministic and pays after the deadline', functi
   const key = b4a.alloc(32).fill('k')
   const local = b4a.alloc(32).fill('l')
 
-  t.is(acks.delay(local, 1000, 10), -1, 'nothing pending')
+  t.is(acks.delay(local, 1000, 10), 0, 'nothing pending')
 
   acks.add(key, 1)
 
@@ -40,14 +40,14 @@ test('acks - tracker delay is deterministic and pays after the deadline', functi
   const d2 = acks.delay(local, 1000, 10)
   t.is(d1, d2, 'same draw for same inputs')
 
-  if (d1 === -1) {
+  if (d1 === 0) {
     t.pass('drew zero, pays immediately')
   } else {
-    t.is(acks.delay(local, 1000 + d1, 10), -1, 'pays once the deadline passed')
+    t.is(acks.delay(local, 1000 + d1, 10), 0, 'pays once the deadline passed')
   }
 })
 
-test('acks - tracker window scales with member count', function (t) {
+test('acks - tracker window scales with member count and target', function (t) {
   const key = b4a.alloc(32).fill('k')
   const local = b4a.alloc(32).fill('l')
 
@@ -58,16 +58,20 @@ test('acks - tracker window scales with member count', function (t) {
   const big = new AckTracker()
   big.add(key, 1)
   t.ok(big.delay(local, 0, 1000) < 200000, 'big room draws within members * target')
+
+  const fast = new AckTracker({ target: 30 })
+  fast.add(key, 1)
+  t.ok(fast.delay(local, 0, 1) < 30, 'target option shrinks the window')
 })
 
 test('acks - a single writer acks an optimistic join', async function (t) {
   t.timeout(60000)
 
-  const root = await create(t, null)
+  const root = await create(t, null, { ackTarget: 30 })
   const autos = [root]
 
   for (let i = 0; i < 9; i++) {
-    const auto = await create(t, root.key)
+    const auto = await create(t, root.key, { ackTarget: 30 })
     await root.append(encode({ addWriter: auto.local.id }))
     autos.push(auto)
   }
@@ -75,7 +79,7 @@ test('acks - a single writer acks an optimistic join', async function (t) {
   const done = replicate(...autos)
   await sync(...autos)
 
-  const joiner = await create(t, root.key)
+  const joiner = await create(t, root.key, { ackTarget: 30 })
   await joiner.append(encode({ addWriter: joiner.local.id, ackWriter: joiner.local.id }), {
     optimistic: true
   })
@@ -86,7 +90,7 @@ test('acks - a single writer acks an optimistic join', async function (t) {
   await root.wakeup({ key: joiner.local.key, length: joiner.local.length })
   await sync(...autos, joiner)
 
-  await new Promise((resolve) => setTimeout(resolve, 1000))
+  await new Promise((resolve) => setTimeout(resolve, 500))
   await sync(...autos, joiner)
 
   const ackers = []
