@@ -41,6 +41,11 @@ auto.register({
       name: 'indexers',
       type: '@autobee/link',
       array: true // just for compat
+    },
+    {
+      name: 'members',
+      type: 'uint',
+      required: false
     }
   ]
 })

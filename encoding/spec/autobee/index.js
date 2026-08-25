@@ -461,12 +461,13 @@ const encoding18 = {
     c.uint.preencode(state, m.flushes)
     encoding22.preencode(state, m.view)
     encoding18_3.preencode(state, m.heads)
-    state.end++ // max flag is 1 so always one byte
+    state.end++ // max flag is 2 so always one byte
 
     if (m.indexers) encoding18_4.preencode(state, m.indexers)
+    if (m.members) c.uint.preencode(state, m.members)
   },
   encode(state, m) {
-    const flags = m.indexers ? 1 : 0
+    const flags = (m.indexers ? 1 : 0) | (m.members ? 2 : 0)
 
     c.uint.encode(state, m.timestamp)
     c.uint.encode(state, m.flushes)
@@ -475,6 +476,7 @@ const encoding18 = {
     c.uint.encode(state, flags)
 
     if (m.indexers) encoding18_4.encode(state, m.indexers)
+    if (m.members) c.uint.encode(state, m.members)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -490,7 +492,8 @@ const encoding18 = {
       flushes: r1,
       view: r2,
       heads: r3,
-      indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null
+      indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null,
+      members: (flags & 2) !== 0 ? c.uint.decode(state) : 0
     }
   }
 }
