@@ -1,5 +1,51 @@
 const test = require('brittle')
+const b4a = require('b4a')
+const AckTracker = require('../lib/ack-tracker.js')
 const { create, replicate, sync, encode } = require('./helpers')
+
+test('acks - tracker add, settle and clear', function (t) {
+  const acks = new AckTracker()
+  const a = b4a.alloc(32).fill('a')
+  const b = b4a.alloc(32).fill('b')
+
+  acks.add(a, 1)
+  acks.add(a, 3)
+  acks.add(a, 2)
+  acks.add(b, 1)
+  t.is(acks.size, 2, 'deduped per key, keeps max length')
+
+  acks.settle({ key: a }, { key: a, length: 5 })
+  t.is(acks.size, 2, 'self-advance does not settle')
+
+  acks.settle({ key: b }, { key: a, length: 2 })
+  t.is(acks.size, 2, 'link below owed length does not settle')
+
+  acks.settle({ key: b }, { key: a, length: 3 })
+  t.is(acks.size, 1, 'link at owed length settles')
+
+  acks.clear()
+  t.is(acks.size, 0)
+})
+
+test('acks - tracker delay is deterministic and pays after the deadline', function (t) {
+  const acks = new AckTracker()
+  const key = b4a.alloc(32).fill('k')
+  const local = b4a.alloc(32).fill('l')
+
+  t.is(acks.delay(local, 1000), -1, 'nothing pending')
+
+  acks.add(key, 1)
+
+  const d1 = acks.delay(local, 1000)
+  const d2 = acks.delay(local, 1000)
+  t.is(d1, d2, 'same draw for same inputs')
+
+  if (d1 === -1) {
+    t.pass('drew zero, pays immediately')
+  } else {
+    t.is(acks.delay(local, 1000 + d1), -1, 'pays once the deadline passed')
+  }
+})
 
 test('acks - a single writer acks an optimistic join', async function (t) {
   t.timeout(60000)
