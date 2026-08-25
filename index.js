@@ -22,6 +22,7 @@ const { ActiveWriters } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
+const AckTracker = require('./lib/ack-tracker.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
@@ -115,8 +116,8 @@ module.exports = class Autobee extends ReadyResource {
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
-    this._ackRequired = false
-    this._ackedHeads = new Map()
+    this._acks = new AckTracker()
+    this._ackTimer = null
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
     this._notifyHandler = null
@@ -228,6 +229,10 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    if (this._ackTimer !== null) {
+      clearTimeout(this._ackTimer)
+      this._ackTimer = null
+    }
     if (this._bootWait !== null) this._bootWait.resolve()
     if (this._notifyHandler) this._notifyHandler.destroy()
     if (this._draining) {
@@ -517,8 +522,6 @@ module.exports = class Autobee extends ReadyResource {
       if (legacy) await this._bootFromSystem(legacy)
       else if (head) await this._bootFromHead(head, bootCondition)
     }
-
-    this._ackRequired = false
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
@@ -888,34 +891,28 @@ module.exports = class Autobee extends ReadyResource {
 
   // append a null value node to ack writer
   _appendAck() {
-    if (!this._ackRequired) return false
+    if (this._acks.size === 0) return false
     if (!this.writers.writable) return false
 
     if (this.writers.localWriter.pending !== null) return false
 
-    const links = this.system.getLinks(this.local.key)
-    const t = Math.max(this._now(), this.system.timestamp)
-
-    let unlinked = false
-    for (const { key, length } of links) {
-      const hex = b4a.toString(key, 'hex')
-      const acked = this._ackedHeads.get(hex) || 0
-      if (length > acked) {
-        unlinked = true
-        break
+    const delay = this._acks.delay(this.local.key, this._now())
+    if (delay > 0) {
+      if (this._ackTimer === null) {
+        this._ackTimer = setTimeout(() => {
+          this._ackTimer = null
+          if (!this._interrupting) this.bumpSoon()
+        }, delay)
+        if (this._ackTimer.unref) this._ackTimer.unref()
       }
-    }
-    if (!unlinked) {
-      this._ackRequired = false
       return false
     }
 
-    for (const { key, length } of links) {
-      this._ackedHeads.set(b4a.toString(key, 'hex'), length)
-    }
+    const links = this.system.getLinks(this.local.key)
+    const t = Math.max(this._now(), this.system.timestamp)
 
     this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null)
-    this._ackRequired = false
+    this._acks.clear()
     return true
   }
 
@@ -1324,6 +1321,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this.system.bee.move(head)
     await this.system.reset()
+
+    // the flushed state we jumped to already links everything we owed
+    this._acks.clear()
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
