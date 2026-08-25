@@ -292,6 +292,7 @@ function infoLegacyMap(info) {
     version: info.version,
     timestamp: 0,
     flushes: 0,
+    members: info.members,
     view: null,
     views: info.views,
     heads: info.heads,
