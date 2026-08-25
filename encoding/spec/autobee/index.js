@@ -1048,6 +1048,33 @@ const encoding32 = {
   }
 }
 
+// @autobee/migrated-head
+const encoding33 = {
+  preencode(state, m) {
+    encoding22.preencode(state, m.system)
+    state.end++ // flags are fixed size
+
+    if (m.view) encoding22.preencode(state, m.view)
+  },
+  encode(state, m) {
+    const flags = m.view ? 1 : 0
+
+    encoding22.encode(state, m.system)
+    c.uint8.encode(state, flags)
+
+    if (m.view) encoding22.encode(state, m.view)
+  },
+  decode(state) {
+    const r0 = encoding22.decode(state)
+    const flags = c.uint8.decode(state)
+
+    return {
+      system: r0,
+      view: (flags & 1) !== 0 ? encoding22.decode(state) : null
+    }
+  }
+}
+
 // @autobee/system-info-v3.heads, deferred due to recusive use
 const encoding18_3 = c.array(encoding22)
 // @autobee/system-info-v3.indexers, deferred due to recusive use
@@ -1146,6 +1173,8 @@ function getEncoding(name) {
       return encoding31
     case '@autobee/trusted-head':
       return encoding32
+    case '@autobee/migrated-head':
+      return encoding33
     default:
       throw new Error('Encoder not found ' + name)
   }
