@@ -401,7 +401,9 @@ module.exports = class Autobee extends ReadyResource {
     // @todo migration
     if (result.migration) {
       if (this._handlers.migrate) {
-        view = (await this._handlers.migrate(result.migration.views)) || EMPTY_HEAD
+        view =
+          (await this._handlers.migrate(result.migration.views, result.migration.system)) ||
+          EMPTY_HEAD
         this._catchupMigratedNodes = result.migration.catchup
         await this._storeMigratedView(view)
       }
@@ -1316,7 +1318,7 @@ module.exports = class Autobee extends ReadyResource {
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
-      const view = (await this._handlers.migrate(migrate)) || EMPTY_HEAD
+      const view = (await this._handlers.migrate(migrate, head)) || EMPTY_HEAD
       await this._storeMigratedView(view)
       this.bee.move(view)
       this._workingBee.move(view)
