@@ -132,7 +132,7 @@ module.exports = class Autobee extends ReadyResource {
     this.previousDrain = 0
 
     this._catchupMigratedNodes = null
-    this._migratedView = null
+    this._migratedHead = null
 
     this.ready().catch(noop)
   }
@@ -391,14 +391,11 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.system.boot(system)
 
-    // the migration baseline never moves, keep it loaded so an undo below the
-    // boundary can restore it even after restarts
-    const migrated = await this.local.getUserData('autobee/migrated-view')
-    const migratedView = migrated ? encoding.decodeBootRecord(migrated) : null
-    if (migratedView && migratedView.length) this._migratedView = migratedView
+    const migrated = await this.local.getUserData('autobee/migrated-head')
+    if (migrated) this._migratedHead = encoding.decodeMigratedHead(migrated)
 
     let view = this.system.view
-    if (!view) view = migratedView || EMPTY_HEAD
+    if (!view) view = (this._migratedHead && this._migratedHead.view) || EMPTY_HEAD
 
     // @todo migration
     if (result.migration) {
@@ -407,8 +404,13 @@ module.exports = class Autobee extends ReadyResource {
           (await this._handlers.migrate(result.migration.views, result.migration.system)) ||
           EMPTY_HEAD
         this._catchupMigratedNodes = result.migration.catchup
-        if (view.length) this._migratedView = view
-        await this._storeMigratedView(view)
+
+        this._migratedHead = {
+          system: result.migration.system,
+          view: view.length ? view : (this._migratedHead && this._migratedHead.view) || null
+        }
+
+        await this._storeMigratedHead()
       }
 
       // ff boot invalidated by migration
@@ -722,7 +724,7 @@ module.exports = class Autobee extends ReadyResource {
       value: m.node.value
     }
 
-    if (m.digest === null || m.checkpoint === null) return op
+    if (m.digest === null || m.checkpoint === null || !m.checkpoint.system) return op
 
     const fetches = []
 
@@ -738,9 +740,12 @@ module.exports = class Autobee extends ReadyResource {
     const { digest } = encoding.decodeRawOplog(digestNode)
     const { checkpoint } = encoding.decodeRawOplog(checkpointNode)
 
+    if (!checkpoint.system || !checkpoint.system.checkpoint) return op
+
     op.views = {
       system: {
         key: digest.key,
+        start: 0,
         length: checkpoint.system.checkpoint.length
       },
       flushes: seq
@@ -995,9 +1000,9 @@ module.exports = class Autobee extends ReadyResource {
       this.stats.undos++
       this.trusted.clear()
       t.view = await this.system.undo(t.undo)
-      // an undo landing on the migration boundary reads the legacy system info,
-      // which carries no view - restore the migrated view like boot does
-      if (!t.view.length && this._migratedView !== null) t.view = this._migratedView
+      if (!t.view.length && this._migratedHead && this._migratedHead.view) {
+        t.view = this._migratedHead.view
+      }
     }
 
     return t
@@ -1089,9 +1094,9 @@ module.exports = class Autobee extends ReadyResource {
     return Promise.all(proms)
   }
 
-  _storeMigratedView(view) {
-    const value = view.key ? encoding.encodeBootRecord(view) : null
-    return this.local.setUserData('autobee/migrated-view', value)
+  _storeMigratedHead() {
+    const value = this._migratedHead ? encoding.encodeMigratedHead(this._migratedHead) : null
+    return this.local.setUserData('autobee/migrated-head', value)
   }
 
   static decodeValue(buf, opts) {
@@ -1324,8 +1329,13 @@ module.exports = class Autobee extends ReadyResource {
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
       const view = (await this._handlers.migrate(migrate, head)) || EMPTY_HEAD
-      if (view.length) this._migratedView = view
-      await this._storeMigratedView(view)
+
+      this._migratedHead = {
+        system: head,
+        view: view.length ? view : (this._migratedHead && this._migratedHead.view) || null
+      }
+
+      await this._storeMigratedHead()
       this.bee.move(view)
       this._workingBee.move(view)
     } else {

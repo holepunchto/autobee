@@ -151,6 +151,23 @@ auto.register({
 })
 
 auto.register({
+  name: 'migrated-head',
+  compact: true,
+  fields: [
+    {
+      name: 'system',
+      type: '@autobee/link',
+      required: true
+    },
+    {
+      name: 'view',
+      type: '@autobee/link',
+      required: false
+    }
+  ]
+})
+
+auto.register({
   name: 'external-batch',
   compact: true,
   fields: [

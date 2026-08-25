@@ -836,6 +836,26 @@
           "version": 1
         }
       ]
+    },
+    {
+      "name": "migrated-head",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "system",
+          "required": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "view",
+          "required": false,
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
     }
   ],
   "namespaces": [
