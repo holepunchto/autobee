@@ -436,9 +436,8 @@ module.exports = class Autobee extends ReadyResource {
   async _bootAll() {
     if (!(await this._bootReady())) return
 
-    for await (const node of this.system.list()) {
-      if (node.isAnchor) continue
-      await this.writers.add(node.key)
+    for (const head of this.system.heads) {
+      await this.writers.add(head.key)
     }
     await this._bump()
   }
