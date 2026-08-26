@@ -78,13 +78,16 @@ module.exports = class Autobee extends ReadyResource {
     this.writers = null
     this.bumping = 0
 
-    const fastForward = handlers.fastForward || {}
+    // fastForward: false disables all fast-forwards - both wakeup and boot
+    const fastForward = handlers.fastForward === false ? null : handlers.fastForward || {}
+
+    this._ffEnabled = fastForward !== null
 
     // oplog head to boot from: migrates or fast-forwards depending on its version
-    this.bootFrom = fastForward.boot || null
+    this.bootFrom = (fastForward && fastForward.boot) || null
 
     // conservative (default on): only fast-forward onto a head someone can serve whole
-    this._conservativeFF = fastForward.conservative !== false
+    this._conservativeFF = !fastForward || fastForward.conservative !== false
 
     this.trusted = new TrustedPeers(handlers)
 
@@ -625,6 +628,8 @@ module.exports = class Autobee extends ReadyResource {
   async _flushWakeup() {
     const hints = await this._applyWakeupHints()
     if (!hints.size) return
+
+    if (!this._ffEnabled) return
 
     // a scheduled fast-forward is applied by the drain before we look again
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return
