@@ -49,11 +49,11 @@ test('acks - a rolled back optimistic link does not erase the entry', async func
 test('acks - a single writer acks an optimistic join', async function (t) {
   t.timeout(60000)
 
-  const root = await create(t, null, { ackRound: 30 })
+  const root = await create(t, null, { ackRound: 200 })
   const autos = [root]
 
   for (let i = 0; i < 9; i++) {
-    const auto = await create(t, root.key, { ackRound: 30 })
+    const auto = await create(t, root.key, { ackRound: 200 })
     await root.append(encode({ addWriter: auto.local.id }))
     autos.push(auto)
   }
@@ -61,7 +61,7 @@ test('acks - a single writer acks an optimistic join', async function (t) {
   const done = replicate(...autos)
   await sync(...autos)
 
-  const joiner = await create(t, root.key, { ackRound: 30 })
+  const joiner = await create(t, root.key, { ackRound: 200 })
   await joiner.append(encode({ addWriter: joiner.local.id, ackWriter: joiner.local.id }), {
     optimistic: true
   })
