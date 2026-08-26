@@ -38,7 +38,7 @@
   },
   "devDependencies": {
     "brittle": "^4.1.0",
-    "corestore": "^7.11.0",
+    "corestore": "^7.12.2",
     "hypercore-crypto": "^3.6.1",
     "lunte": "^1.6.0",
     "prettier": "^3.8.1",
