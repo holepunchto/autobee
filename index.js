@@ -930,7 +930,6 @@ module.exports = class Autobee extends ReadyResource {
   async _optimisticBatch(batch) {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
-    const rollbackAttestations = this.writers.attestations.length
 
     const t = await this.prepareBatch(batch)
     if (t.view) this._workingBee.move(t.view)
@@ -952,8 +951,6 @@ module.exports = class Autobee extends ReadyResource {
         this._workingBee.move(rollbackView)
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
-        // don't attest grants that were just undone
-        this.writers.attestations.length = rollbackAttestations
         return false
       }
     }
@@ -1033,15 +1030,13 @@ module.exports = class Autobee extends ReadyResource {
       this._host.applying = null
     }
 
-    const { changed, witnessed } = await this.system.flush(batch, this._workingBee)
+    const changed = await this.system.flush(batch, this._workingBee)
 
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
       this._localViewLength = this._workingBee.context.local.length - this._localViewStart
       this._localFlushes = this.system.flushes
     }
-
-    this.writers.attest(witnessed)
 
     for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
@@ -1106,24 +1101,12 @@ module.exports = class Autobee extends ReadyResource {
     const t = Math.max(this._now(), this.system.timestamp)
     const batch = []
 
-    // witnesses only ride upgrade windows. witness.weight is the value the backer's
-    // snapshot witnesses - verifiers recompute the same read and verify
     const rec = await this.system.get(this.local.key)
     let witness = null
     if (rec && rec.maxWeight > currentWeight(rec)) {
-      const sorted = this.writers.witnesses.sort(
-        (a, b) => b.attestation.weight - a.attestation.weight
-      )
-
-      for (const { key, length, attestation, manifest } of sorted) {
-        if (attestation.weight > rec.maxWeight) continue
-
-        const backer = await this.system.get(key)
-        if (!backer || backer.isRemoved || backer.length < length) continue
-
-        const { weight, signature } = attestation
-        witness = { weight, backer: { key, length, signature, manifest } }
-        break
+      const grant = await this.system.strongestGrant(this.local.key)
+      if (grant && grant.weight > currentWeight(rec)) {
+        witness = { weight: grant.weight, link: { key: grant.key, length: grant.length } }
       }
     }
 

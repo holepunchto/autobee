@@ -229,7 +229,24 @@ auto.register({
 })
 
 auto.register({
-  name: 'signed-backer',
+  name: 'witness',
+  fields: [
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'link',
+      type: '@autobee/link',
+      required: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'grant',
+  compact: true,
   fields: [
     {
       name: 'key',
@@ -242,50 +259,20 @@ auto.register({
       required: true
     },
     {
-      name: 'signature',
-      type: 'fixed64',
-      required: true
-    },
-    {
-      name: 'manifest',
-      type: 'buffer',
+      name: 'weight',
+      type: 'uint',
       required: true
     }
   ]
 })
 
 auto.register({
-  name: 'witness',
+  name: 'system-grants',
   fields: [
     {
-      name: 'weight',
-      type: 'uint',
-      required: true
-    },
-    {
-      name: 'backer',
-      type: '@autobee/signed-backer',
-      required: true
-    }
-  ]
-})
-
-auto.register({
-  name: 'attestation',
-  fields: [
-    {
-      name: 'key',
-      type: 'fixed32',
-      required: true
-    },
-    {
-      name: 'weight',
-      type: 'uint',
-      required: true
-    },
-    {
-      name: 'signature',
-      type: 'fixed64',
+      name: 'grants',
+      type: '@autobee/grant',
+      array: true,
       required: true
     }
   ]
@@ -346,11 +333,6 @@ auto.register({
     {
       name: 'witness',
       type: '@autobee/witness'
-    },
-    {
-      name: 'attestations',
-      type: '@autobee/attestation',
-      array: true
     },
     {
       name: 'trusted',
