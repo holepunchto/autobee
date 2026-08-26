@@ -943,6 +943,7 @@ module.exports = class Autobee extends ReadyResource {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
     const rollbackAttestations = this.writers.attestations.length
+    const rollbackAcks = this._acks.snapshot()
 
     const t = await this.prepareBatch(batch)
     if (t.view) this._workingBee.move(t.view)
@@ -966,6 +967,8 @@ module.exports = class Autobee extends ReadyResource {
         await this.system.reset()
         // don't attest grants that were just undone
         this.writers.attestations.length = rollbackAttestations
+        // settles and raises from the undone applies never happened
+        this._acks.restore(rollbackAcks)
         return false
       }
     }
