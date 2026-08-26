@@ -428,6 +428,12 @@
           "array": true,
           "type": "@autobee/link",
           "version": 1
+        },
+        {
+          "name": "members",
+          "required": false,
+          "type": "uint",
+          "version": 1
         }
       ]
     },

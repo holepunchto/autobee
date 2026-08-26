@@ -22,6 +22,7 @@ const { ActiveWriters } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
+const AckTracker = require('./lib/ack-tracker.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
@@ -115,8 +116,12 @@ module.exports = class Autobee extends ReadyResource {
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
-    this._ackRequired = false
-    this._ackedHeads = new Map()
+    this._acks = new AckTracker({
+      round: handlers.ackRound,
+      ontimeout: () => {
+        if (!this._interrupting) this.bumpSoon()
+      }
+    })
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
     this._notifyHandler = null
@@ -228,6 +233,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    this._acks.clear()
     if (this._bootWait !== null) this._bootWait.resolve()
     if (this._notifyHandler) this._notifyHandler.destroy()
     if (this._draining) {
@@ -517,8 +523,6 @@ module.exports = class Autobee extends ReadyResource {
       if (legacy) await this._bootFromSystem(legacy)
       else if (head) await this._bootFromHead(head, bootCondition)
     }
-
-    this._ackRequired = false
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
@@ -888,34 +892,19 @@ module.exports = class Autobee extends ReadyResource {
 
   // append a null value node to ack writer
   _appendAck() {
-    if (!this._ackRequired) return false
+    if (this._acks.size === 0) return false
     if (!this.writers.writable) return false
 
     if (this.writers.localWriter.pending !== null) return false
 
+    const delay = this._acks.delay(this.local.key, this._now(), this.system.members)
+    if (delay > 0) return false
+
     const links = this.system.getLinks(this.local.key)
     const t = Math.max(this._now(), this.system.timestamp)
 
-    let unlinked = false
-    for (const { key, length } of links) {
-      const hex = b4a.toString(key, 'hex')
-      const acked = this._ackedHeads.get(hex) || 0
-      if (length > acked) {
-        unlinked = true
-        break
-      }
-    }
-    if (!unlinked) {
-      this._ackRequired = false
-      return false
-    }
-
-    for (const { key, length } of links) {
-      this._ackedHeads.set(b4a.toString(key, 'hex'), length)
-    }
-
     this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null)
-    this._ackRequired = false
+    this._acks.clear()
     return true
   }
 
@@ -953,6 +942,7 @@ module.exports = class Autobee extends ReadyResource {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
     const rollbackAttestations = this.writers.attestations.length
+    const rollbackAcks = this._acks.snapshot()
 
     const t = await this.prepareBatch(batch)
     if (t.view) this._workingBee.move(t.view)
@@ -976,6 +966,8 @@ module.exports = class Autobee extends ReadyResource {
         await this.system.reset()
         // don't attest grants that were just undone
         this.writers.attestations.length = rollbackAttestations
+        // settles and raises from the undone applies never happened
+        this._acks.restore(rollbackAcks)
         return false
       }
     }
@@ -1317,13 +1309,18 @@ module.exports = class Autobee extends ReadyResource {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
-    const { head, tip, migrate } = this.fastForwardTo
+    const { head, tip, migrate, optimistic = [] } = this.fastForwardTo
 
     const from = this.system.bee.head()
     const to = head
 
     this.system.bee.move(head)
     await this.system.reset()
+
+    // the flushed state supersedes everything we owed, but any of its heads
+    // that are still-unlinked optimistic nodes become ours to ack
+    this._acks.clear()
+    for (const h of optimistic) this._acks.add(h.key, h.length, this._now())
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {

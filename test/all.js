@@ -7,6 +7,8 @@ async function runTests() {
 
   test.pause()
 
+  await import('./ack-tracker.js')
+  await import('./acks.js')
   await import('./basic.js')
   await import('./catchable-boot.js')
   await import('./batch.js')

@@ -14,7 +14,8 @@ test('boot failure is catchable via ready()', async function (t) {
   const auto = new Autobee(store, {
     apply,
     encrypted: true,
-    encryptionKey: Promise.resolve(null)
+    encryptionKey: Promise.resolve(null),
+    ackRound: 200
   })
   auto.on('error', () => {})
 
@@ -36,7 +37,8 @@ test('wakeup after failed boot does not throw', async function (t) {
   const auto = new Autobee(store, {
     apply,
     encrypted: true,
-    encryptionKey: Promise.resolve(null)
+    encryptionKey: Promise.resolve(null),
+    ackRound: 200
   })
   auto.on('error', () => {})
 

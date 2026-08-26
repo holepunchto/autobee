@@ -79,6 +79,7 @@ function makeAutobee(store, state, opts = {}) {
     legacyViews: [LEGACY_VIEW_NAME],
     encrypted: true,
     encryptionKey: SECRET_KEY,
+    ackRound: 200,
     ...opts
   })
   return auto
