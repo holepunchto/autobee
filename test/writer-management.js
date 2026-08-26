@@ -156,7 +156,7 @@ test('writer-management - writer permissions persist after restart', async funct
     const Autobee = require('../index.js')
     const { apply } = require('./helpers')
 
-    const auto1 = new Autobee(new Corestore(storage), { apply, encryptionKey })
+    const auto1 = new Autobee(new Corestore(storage), { apply, encryptionKey, ackRound: 200 })
     await auto1.ready()
 
     t.alike(auto1.key, auto1Key, 'auto1 key matches after restart')
@@ -550,7 +550,8 @@ test('writer-management - emits writer event when writer is attached', async fun
     encryptionKey,
     encrypted: !!encryptionKey,
     name: '#' + t.tick++,
-    apply
+    apply,
+    ackRound: 200
   })
   auto1.on('writer', (w) => writers.push(w))
   t.teardown(() => auto1.close())
@@ -562,7 +563,8 @@ test('writer-management - emits writer event when writer is attached', async fun
     encryptionKey,
     encrypted: !!encryptionKey,
     name: '#' + t.tick++,
-    apply
+    apply,
+    ackRound: 200
   })
   t.teardown(() => auto2.close())
   auto2.on('writer', (w) => writers2.push(w))

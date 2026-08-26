@@ -93,6 +93,7 @@ async function create(t, key, opts) {
     encrypted: !!encryptionKey,
     name: '#' + t.tick++,
     apply,
+    ackRound: 200,
     ...opts
   })
 

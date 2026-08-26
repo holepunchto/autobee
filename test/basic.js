@@ -111,7 +111,7 @@ test('basic - restart', async function (t) {
   }
 
   {
-    const auto = new Autobee(new Corestore(storage), { apply, encryptionKey })
+    const auto = new Autobee(new Corestore(storage), { apply, encryptionKey, ackRound: 200 })
     await auto.ready()
 
     const node = await auto.view.get(b4a.from('latest'))

@@ -117,8 +117,7 @@ module.exports = class Autobee extends ReadyResource {
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
     this._acks = new AckTracker({
-      target: handlers.ackTarget,
-      max: handlers.ackMax,
+      round: handlers.ackRound,
       ontimeout: () => {
         if (!this._interrupting) this.bumpSoon()
       }
