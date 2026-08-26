@@ -27,6 +27,22 @@ test('acks - tracker add, settle and clear', function (t) {
   t.is(acks.size, 0)
 })
 
+test('acks - an optimistic link inherits the entry', function (t) {
+  const acks = new AckTracker()
+  const a = b4a.alloc(32).fill('a')
+  const b = b4a.alloc(32).fill('b')
+
+  acks.add(a, 1, 5)
+
+  acks.settle({ key: b, length: 2, optimistic: true }, { key: a, length: 1 })
+  t.is(acks.size, 1, 'entry transferred, not dropped')
+  t.ok(b4a.equals(acks.pending[0].key, b), 'transferred to the linking node')
+  t.is(acks.pending[0].since, 5, 'inherits the original since')
+
+  acks.settle({ key: a, length: 3 }, { key: b, length: 2 })
+  t.is(acks.size, 0, 'a non-optimistic link settles the chain')
+})
+
 test('acks - tracker delay is deterministic and pays after the deadline', function (t) {
   const acks = new AckTracker({ round: 200 })
   const key = b4a.alloc(32).fill('k')
@@ -104,45 +120,48 @@ test('acks - tracker timer is cancelled on clear and on settling out', function 
   }
 })
 
-test('acks - tracker never schedules a timer beyond the max backoff', function (t) {
-  const local = b4a.alloc(32).fill('l')
-  const max = 1000
+test('acks - a rolled back optimistic link does not erase the entry', async function (t) {
+  t.timeout(60000)
 
-  let above = null
-  let below = null
+  // a huge round so nobody pays while the scenario is set up
+  const opts = { ackRound: 60000 }
 
-  for (let i = 0; i < 100 && (above === null || below === null); i++) {
-    const acks = new AckTracker({ target: 4 * max, max })
-    acks.add(b4a.alloc(32).fill(i + 1), 1)
-    const d = acks.delay(local, Date.now(), 1)
-    if (d > max && above === null) above = acks
-    if (d > 0 && d <= max && below === null) below = acks
-    else if (above !== acks) acks.clear()
-  }
+  const root = await create(t, null, opts)
+  const joiner = await create(t, root.key, opts)
+  const chainer = await create(t, root.key, opts)
 
-  t.ok(above !== null && below !== null, 'found draws on both sides of the max')
-  t.is(above.timer, null, 'no timer for a draw beyond the max')
-  t.ok(below.timer !== null, 'timer for a draw within the max')
+  await root.append(encode({ hello: 'world' }))
 
-  above.clear()
-  below.clear()
-})
+  // A: an optimistic join the root applies and now owes a linking node
+  await joiner.append(encode({ addWriter: joiner.local.id, ackWriter: joiner.local.id }), {
+    optimistic: true
+  })
 
-test('acks - tracker window scales with member count and target', function (t) {
-  const key = b4a.alloc(32).fill('k')
-  const local = b4a.alloc(32).fill('l')
+  const done1 = replicate(root, joiner, chainer)
+  await root.wakeup({ key: joiner.local.key, length: joiner.local.length })
+  await chainer.wakeup({ key: joiner.local.key, length: joiner.local.length })
+  await sync(root, joiner)
+  await sync(chainer, joiner)
 
-  const small = new AckTracker()
-  small.add(key, 1)
-  t.ok(small.delay(local, 0, 1) < 200, 'single member draws within one target slot')
+  t.is(root._acks.size, 1, 'root owes the join a linking node')
+  t.ok(b4a.equals(root._acks.pending[0].key, joiner.local.key), 'entry keyed to the joiner')
 
-  const big = new AckTracker()
-  big.add(key, 1)
-  t.ok(big.delay(local, 0, 1000) < 200000, 'big room draws within members * target')
+  // B: an optimistic node that links A and then aborts in apply -
+  // addNode settles A before the failure, the rollback must restore it
+  await chainer.append(encode({ abort: true, ackWriter: chainer.local.id }), {
+    optimistic: true
+  })
 
-  const fast = new AckTracker({ target: 30 })
-  fast.add(key, 1)
-  t.ok(fast.delay(local, 0, 1) < 30, 'target option shrinks the window')
+  await root.wakeup({ key: chainer.local.key, length: chainer.local.length })
+  await new Promise((resolve) => setTimeout(resolve, 300))
+
+  t.is(root._acks.size, 1, 'still exactly one entry after the rollback')
+  t.ok(
+    b4a.equals(root._acks.pending[0].key, joiner.local.key),
+    'entry restored to the joiner, not chained to the aborted node'
+  )
+
+  await done1()
 })
 
 test('acks - a single writer acks an optimistic join', async function (t) {

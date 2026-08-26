@@ -1309,7 +1309,7 @@ module.exports = class Autobee extends ReadyResource {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
-    const { head, tip, migrate } = this.fastForwardTo
+    const { head, tip, migrate, optimistic = [] } = this.fastForwardTo
 
     const from = this.system.bee.head()
     const to = head
@@ -1317,8 +1317,10 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    // the flushed state we jumped to already links everything we owed
+    // the flushed state supersedes everything we owed, but any of its heads
+    // that are still-unlinked optimistic nodes become ours to ack
     this._acks.clear()
+    for (const h of optimistic) this._acks.add(h.key, h.length, this._now())
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
