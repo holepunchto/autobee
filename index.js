@@ -1103,9 +1103,9 @@ module.exports = class Autobee extends ReadyResource {
 
     const rec = await this.system.get(this.local.key)
     let witness = null
-    if (rec && rec.maxWeight > currentWeight(rec)) {
-      const grant = await this.system.strongestGrant(this.local.key)
-      if (grant && grant.weight > currentWeight(rec)) {
+    if (rec && rec.maxWeight !== currentWeight(rec)) {
+      const grant = await this.system.grantForWeight(this.local.key, rec.maxWeight)
+      if (grant) {
         witness = { weight: grant.weight, link: { key: grant.key, length: grant.length } }
       }
     }

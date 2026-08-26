@@ -58,6 +58,10 @@ async function apply(nodes, view, host) {
       host.addWriter(data.addWriter, { weight: data.weight })
     }
 
+    if (data.demoteWriter) {
+      host.demoteWriter(data.demoteWriter, { weight: data.weight })
+    }
+
     if (data.removeWriter) {
       host.removeWriter(data.removeWriter)
     }
