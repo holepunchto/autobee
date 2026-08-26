@@ -220,6 +220,37 @@ test(
 )
 
 test(
+  'migration - 4) a fresh peer boots straight from a bare legacy system key',
+  { skip: skipFF },
+  async function (t) {
+    const bState = {}
+    const b = await openFixture(t, 'b', bState)
+
+    // what an old (pre-migration) invite carries: the legacy system key, no length
+    const systemKey = b._migratedHead.system.key
+
+    const joinerStore = new Corestore(await t.tmp())
+    const joinerState = {}
+    const joiner = makeAutobee(joinerStore, joinerState, {
+      fastForward: { boot: { key: systemKey } }
+    })
+    t.teardown(() => joiner.close())
+
+    const done = replicate(b, joiner)
+
+    await joiner.ready()
+    await sync(b, joiner)
+    await done()
+
+    t.ok(joinerState.calls, 'boot from the bare legacy key called the migrate handler')
+    t.is(joinerState.length, B_CONFIRMED)
+
+    t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
+    await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
+  }
+)
+
+test(
   'migration - 3) a online, c migrates and ffs onto a, then b online and c ffs onto b too',
   { skip: skipFF },
   async function (t) {
