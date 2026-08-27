@@ -22,6 +22,7 @@ const { ActiveWriters } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
+const migrations = require('./lib/migrations')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
@@ -718,7 +719,7 @@ module.exports = class Autobee extends ReadyResource {
     // legacy nodes always inflate, but only indexers carry views - callers
     // that need system info must check op.views
     if (op.version < 3) {
-      op = await this._inflateLegacyOplog(buf, core, target - 1, opts)
+      op = await migrations.inflateLegacyOplog(buf, core, target - 1, opts)
     }
 
     return {
@@ -726,49 +727,6 @@ module.exports = class Autobee extends ReadyResource {
       length: target,
       op
     }
-  }
-
-  async _inflateLegacyOplog(buf, core, seq, opts = null) {
-    const m = encoding.decodeRawOplog(buf)
-
-    const op = {
-      version: m.version,
-      timestamp: 0,
-      links: m.node.heads,
-      batch: { start: 0, end: m.node.batch - 1 },
-      views: null,
-      optimistic: !!m.optimistic,
-      value: m.node.value
-    }
-
-    if (m.digest === null || m.checkpoint === null || !m.checkpoint.system) return op
-
-    const fetches = []
-
-    fetches.push(m.digest.pointer ? core.get(seq - m.digest.pointer, opts) : buf)
-    fetches.push(
-      m.checkpoint.pointer ? core.get(seq - m.checkpoint.system.checkpointer, opts) : buf
-    )
-
-    const [digestNode, checkpointNode] = await Promise.all(fetches)
-    // a wait: false get we could not satisfy locally
-    if (digestNode === null || checkpointNode === null) return op
-
-    const { digest } = encoding.decodeRawOplog(digestNode)
-    const { checkpoint } = encoding.decodeRawOplog(checkpointNode)
-
-    if (!checkpoint.system || !checkpoint.system.checkpoint) return op
-
-    op.views = {
-      system: {
-        key: digest.key,
-        start: 0,
-        length: checkpoint.system.checkpoint.length
-      },
-      flushes: seq
-    }
-
-    return op
   }
 
   async _update(changes) {
