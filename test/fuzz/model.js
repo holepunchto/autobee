@@ -57,6 +57,7 @@ function createState(config, rng, harness, nextStorage, log, transport) {
 }
 
 const BYZ = process.env.FUZZ_NO_BYZ ? 0 : 1
+const DEM = process.env.FUZZ_NO_DEMOTE ? 0 : 2
 
 const actions = [
   { name: 'spawn', weight: 3, run: spawnCandidate },
@@ -78,9 +79,11 @@ const actions = [
   // fault injection: a single faulty CLAIMANT, three ways. there is no
   // buggy-backer action any more - the grant log is system-authored, so a
   // third party has nothing to forge. all three must floor deterministically
+  { name: 'demoteWriter', weight: DEM, run: demoteWriterAction },
   { name: 'buggyClaimInflate', weight: BYZ, run: buggyClaimInflate },
   { name: 'buggyClaimNakedLink', weight: BYZ, run: buggyClaimNakedLink },
-  { name: 'buggyClaimForeignGrant', weight: BYZ, run: buggyClaimForeignGrant }
+  { name: 'buggyClaimForeignGrant', weight: BYZ, run: buggyClaimForeignGrant },
+  { name: 'buggyRefuseDemotion', weight: BYZ, run: buggyRefuseDemotion }
 ]
 
 exports.actions = actions
@@ -254,6 +257,31 @@ async function removeWriterAction(state) {
   return true
 }
 
+async function demoteWriterAction(state) {
+  const writable = writableEntries(state)
+  if (writable.length < 2) return false
+
+  const targets = writable.filter((e) => {
+    const hex = keyHex(e.auto)
+    return hex !== state.genesisHex && state.granted.has(hex) && currentWeight(state, hex) > 0
+  })
+  if (!targets.length) return false
+
+  const target = state.rng.pick(targets)
+  const hex = keyHex(target.auto)
+  const demoters = writable.filter((e) => e !== target)
+  if (!demoters.length) return false
+
+  const demoter = state.rng.pick(demoters)
+  const weight = state.rng.int(0, Math.max(0, currentWeight(state, hex) - 1))
+
+  await demoter.auto.append(encode({ demoteWriter: target.auto.local.id, weight }))
+  state.weights.set(hex, weight)
+  state.dirty.add(keyHex(demoter.auto))
+  state.log(`${demoter.name} demotes ${target.name} -> ${weight}`)
+  return true
+}
+
 // ---- byzantine actions ----------------------------------------------------
 //
 // Under the grant-link scheme there is nothing a THIRD party can forge: the
@@ -367,6 +395,40 @@ async function buggyClaimForeignGrant(state) {
   }
 
   return false
+}
+
+async function buggyRefuseDemotion(state) {
+  const writable = writableEntries(state)
+  if (!writable.length) return false
+
+  const candidates = []
+  for (const e of writable) {
+    const rec = await e.auto.system.get(e.auto.local.key)
+    if (!rec) continue
+    const resolved = rec.maxWeight > 0 && rec.isGenesis ? rec.maxWeight : rec.weight
+    if (rec.maxWeight < resolved) candidates.push(e)
+  }
+  if (!candidates.length) return false
+
+  const claimant = state.rng.pick(candidates)
+  const auto = claimant.auto
+
+  state.seq++
+  const links = auto.system.getLinks(auto.local.key)
+  const ts = Math.max(auto._now(), auto.system.timestamp)
+  auto.writers.appendLocal(
+    encode({ msg: `m${state.seq}`, from: claimant.name }),
+    ts,
+    { start: 0, end: 0 },
+    links,
+    false,
+    null
+  )
+  await auto._bump()
+
+  state.dirty.add(keyHex(auto))
+  state.log(`${claimant.name} refuses to cite its pending demotion`)
+  return true
 }
 
 async function pairSync(state) {
