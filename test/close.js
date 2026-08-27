@@ -1,6 +1,6 @@
 const test = require('brittle')
 const c = require('compact-encoding')
-const migrations = require('../lib/migrations')
+const migrations = require('../lib/migrations.js')
 const crypto = require('hypercore-crypto')
 const { create, encode } = require('./helpers')
 const { Oplog } = require('../lib/encoding.js')
