@@ -362,7 +362,7 @@ test(
 
     t.absent(joinerState.calls, 'joiner fast-forwarded instead of migrating')
     t.absent(joiner._migratedHead, 'no migrated head, a plain fast-forward')
-    t.ok(preapplies >= 2, 'preapply reran after the fast-forward')
+    t.is(preapplies, 1, 'preapply runs exactly once')
 
     for (let i = 0; i < meta.totalMessages; i++) {
       t.is(await messageAt(joiner, i), meta.messages[i], `message ${i} matches`)
