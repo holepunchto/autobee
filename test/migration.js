@@ -337,10 +337,14 @@ test(
 
     const joinerStore = new Corestore(await t.tmp())
     const joinerState = {}
+    let preapplies = 0
     let joiner
     joiner = new Autobee(joinerStore, bootstrap, {
       apply,
       migrate: migrateInto(joinerStore, joinerState, () => joiner, bootstrap),
+      preapply: () => {
+        preapplies++
+      },
       legacyViews: [LEGACY_VIEW_NAME],
       encrypted: true,
       encryptionKey: SECRET_KEY,
@@ -358,6 +362,7 @@ test(
 
     t.absent(joinerState.calls, 'joiner fast-forwarded instead of migrating')
     t.absent(joiner._migratedHead, 'no migrated head, a plain fast-forward')
+    t.ok(preapplies >= 2, 'preapply reran after the fast-forward')
 
     for (let i = 0; i < meta.totalMessages; i++) {
       t.is(await messageAt(joiner, i), meta.messages[i], `message ${i} matches`)

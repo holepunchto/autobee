@@ -115,7 +115,8 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll = null
 
     this._now = handlers.now || Date.now // overridable for clock-drift tests
-    this._preApply = handlers.preapply || null
+    this._preapply = handlers.preapply || null
+    this._preApplied = false
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
@@ -508,16 +509,21 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('error', err)
   }
 
+  // nothing applies until the host has resolved whatever state apply depends
+  // on (e.g. legacy views recorded by a migration). reruns after a
+  // fast-forward, whose adopted view may supersede that state
+  async _runPreApply(force = false) {
+    if (this._preapply === null) return
+    if (this._preApplied && !force) return
+
+    this._preApplied = true
+    await this._preapply(this.view)
+  }
+
   async _drain() {
     if (this._updating) await this._updating
 
-    // one-shot user gate: nothing applies until the host has resolved
-    // whatever state apply depends on (e.g. legacy views from a migration)
-    if (this._preApply !== null) {
-      const preapply = this._preApply
-      this._preApply = null
-      await preapply()
-    }
+    await this._runPreApply()
 
     this.stats.drains++
 
@@ -1367,6 +1373,9 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._update(changes)
     await this._storeBoot()
+
+    // the adopted view may carry state the host resolves before anything applies
+    await this._runPreApply(true)
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
