@@ -22,7 +22,7 @@ const { ActiveWriters } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
-const migrations = require('./lib/migrations')
+const migrations = require('./lib/migrations.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
