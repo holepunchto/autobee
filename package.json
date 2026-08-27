@@ -43,6 +43,7 @@
     "lunte": "^1.6.0",
     "prettier": "^3.8.1",
     "prettier-config-holepunch": "^2.0.0",
-    "protomux-wakeup": "^2.9.0"
+    "protomux-wakeup": "^2.9.0",
+    "replication-simulator": "^3.0.0"
   }
 }
