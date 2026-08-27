@@ -46,9 +46,9 @@ function adaptNode(n) {
     links: (n.links || []).map((l) => ({ key: b4a.toString(l.key, 'hex'), length: l.length })),
     witness: n.witness
       ? {
-          backer: {
-            key: b4a.toString(n.witness.backer.key, 'hex'),
-            length: n.witness.backer.length
+          link: {
+            key: b4a.toString(n.witness.link.key, 'hex'),
+            length: n.witness.link.length
           }
         }
       : null,

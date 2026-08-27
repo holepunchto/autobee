@@ -81,12 +81,12 @@ test('multi-strata nesting: closures resolve recursively per class', function (t
   t.is(tree.tail.weight, 1, 'tail recursion starts at next class down')
 })
 
-test('witness backer is a causal dep', function (t) {
+test('witness link (the cited grant op) is a causal dep', function (t) {
   const flush = n('b', 1, { ts: 10, weight: 1 })
-  const heavy = n('w', 1, { ts: 5, weight: 2, witness: { backer: { key: 'b', length: 1 } } })
+  const heavy = n('w', 1, { ts: 5, weight: 2, witness: { link: { key: 'b', length: 1 } } })
 
   const out = ids(order([flush, heavy]))
-  t.alike(out, ['b:1', 'w:1'], 'backdated heavy still sorts above its backer')
+  t.alike(out, ['b:1', 'w:1'], 'backdated heavy still sorts above its grant')
 })
 
 test('input must be causally closed', function (t) {
@@ -265,8 +265,8 @@ function depsOf(node) {
   const d = []
   if (node.length > 1) d.push(node.key + ':' + (node.length - 1))
   for (const link of node.links) if (link.length) d.push(idOf(link))
-  if (node.witness && node.witness.backer && node.witness.backer.length) {
-    d.push(idOf(node.witness.backer))
+  if (node.witness && node.witness.link && node.witness.link.length) {
+    d.push(idOf(node.witness.link))
   }
   return d
 }

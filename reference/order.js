@@ -34,7 +34,7 @@
 //     key: string,            // writer id (eg hex)
 //     length: number,         // >= 1, position in the writer's chain
 //     links: [{key, length}], // causal deps (length 0 entries ignored)
-//     witness: { backer: {key, length} } | null,  // backer is a dep too
+//     witness: { link: {key, length} } | null,  // the cited grant op is a dep too
 //     ts: number,             // wire timestamp
 //     weight: number,         // RESOLVED sort weight (input, not computed)
 //     batch: { start, end } | null  // wire-batch bookkeeping, if any
@@ -189,8 +189,8 @@ function buildGraph(nodes) {
         if (!link.length) continue
         raw.push(idOf(link))
       }
-      if (m.witness && m.witness.backer && m.witness.backer.length) {
-        raw.push(idOf(m.witness.backer))
+      if (m.witness && m.witness.link && m.witness.link.length) {
+        raw.push(idOf(m.witness.link))
       }
     }
 

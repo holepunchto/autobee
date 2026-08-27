@@ -120,7 +120,7 @@ function adapt(dumped) {
     key: n.key,
     length: n.length,
     links: n.links,
-    witness: n.witness ? { backer: n.witness.backer } : null,
+    witness: n.witness ? { link: n.witness.link } : null,
     ts: n.ts,
     weight: n.weight
   }))
@@ -136,7 +136,7 @@ function short(id) {
 function describe(n) {
   if (!n) return '<none>'
   const links = n.links.map((l) => short(idOf(l))).join(',') || '-'
-  const wit = n.witness ? ` witness(backer=${short(idOf(n.witness.backer))})` : ''
+  const wit = n.witness ? ` witness(grant=${short(idOf(n.witness.link))})` : ''
   return `${short(idOf(n))} w=${n.weight} ts=${n.ts} links=[${links}]${wit}`
 }
 
