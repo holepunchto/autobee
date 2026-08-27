@@ -115,6 +115,7 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll = null
 
     this._now = handlers.now || Date.now // overridable for clock-drift tests
+    this._preApply = handlers.preapply || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
@@ -509,6 +510,14 @@ module.exports = class Autobee extends ReadyResource {
 
   async _drain() {
     if (this._updating) await this._updating
+
+    // one-shot user gate: nothing applies until the host has resolved
+    // whatever state apply depends on (e.g. legacy views from a migration)
+    if (this._preApply !== null) {
+      const preapply = this._preApply
+      this._preApply = null
+      await preapply()
+    }
 
     this.stats.drains++
 
