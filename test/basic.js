@@ -27,6 +27,41 @@ test('basic', async function (t) {
   t.alike(node.value, val)
 })
 
+test('basic - preapply gates the first apply', async function (t) {
+  let release = null
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+
+  let applied = false
+  let preapplied = null
+
+  const auto = await create(t, {
+    preapply: (view) => {
+      preapplied = view
+      return gate
+    },
+    apply: async (batch, view, host) => {
+      applied = true
+      return apply(batch, view, host)
+    }
+  })
+
+  const appended = auto.append(encode({ hello: 'world' }))
+
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  t.is(applied, false, 'nothing applies while preapply is pending')
+
+  release()
+  await appended
+
+  t.is(applied, true, 'apply ran once preapply resolved')
+  t.is(preapplied, auto.view, 'preapply received the view')
+
+  const node = await auto.view.get(b4a.from('latest'))
+  t.alike(node.value, encode({ hello: 'world' }))
+})
+
 test('basic - accept keyPair', async function (t) {
   const keyPair = crypto.keyPair()
 

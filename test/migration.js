@@ -33,7 +33,7 @@ async function apply(batch, view, base) {
   }
 }
 
-function migrateInto(store, state, getAuto) {
+function migrateInto(store, state, getAuto, baseKey = BASE_KEY) {
   return async function (views) {
     state.calls = (state.calls || 0) + 1
 
@@ -43,7 +43,7 @@ function migrateInto(store, state, getAuto) {
     const legacyCore = store.get({ key: legacy.key })
     await legacyCore.ready()
     await legacyCore.setEncryption(
-      AutobeeEncryption.getViewEncryption(BASE_KEY, SECRET_KEY, LEGACY_VIEW_NAME)
+      AutobeeEncryption.getViewEncryption(baseKey, SECRET_KEY, LEGACY_VIEW_NAME)
     )
 
     const auto = getAuto()
@@ -216,6 +216,157 @@ test(
 
     t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
     await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
+  }
+)
+
+test(
+  'migration - 4) a fresh peer boots straight from a bare legacy system key',
+  { skip: skipFF },
+  async function (t) {
+    const bState = {}
+    const b = await openFixture(t, 'b', bState)
+
+    // what an old (pre-migration) invite carries: the legacy system key, no length
+    const systemKey = b._migratedHead.system.key
+
+    const joinerStore = new Corestore(await t.tmp())
+    const joinerState = {}
+    const joiner = makeAutobee(joinerStore, joinerState, {
+      fastForward: { boot: { key: systemKey } }
+    })
+    t.teardown(() => joiner.close())
+
+    const done = replicate(b, joiner)
+
+    await joiner.ready()
+    await sync(b, joiner)
+    await done()
+
+    t.ok(joinerState.calls, 'boot from the bare legacy key called the migrate handler')
+    t.is(joinerState.length, B_CONFIRMED)
+
+    t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
+    await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
+  }
+)
+
+test(
+  'migration - 5) an old system key chases indexer rotations to the newest generation',
+  { skip: skipFF },
+  async function (t) {
+    const fixture = path.join(__dirname, 'fixtures/migration/autobase-rotation-v7.28.1-linux')
+    const meta = JSON.parse(await fs.readFile(path.join(fixture, 'meta.json')))
+
+    const serverDir = await t.tmp()
+    await fs.cp(path.join(fixture, 'a'), serverDir, { recursive: true })
+
+    const serverStore = new Corestore(serverDir, { allowBackup: true })
+    t.teardown(() => serverStore.close())
+
+    const bootstrap = b4a.from(meta.bootstrap, 'hex')
+
+    const joinerStore = new Corestore(await t.tmp())
+    const joinerState = {}
+    let joiner
+    joiner = new Autobee(joinerStore, bootstrap, {
+      apply,
+      migrate: migrateInto(joinerStore, joinerState, () => joiner, bootstrap),
+      legacyViews: [LEGACY_VIEW_NAME],
+      encrypted: true,
+      encryptionKey: SECRET_KEY,
+      // the original (generation 0) system key, two indexer rotations old
+      fastForward: { boot: { key: b4a.from(meta.gen0SystemKey, 'hex') } }
+    })
+    t.teardown(() => joiner.close())
+
+    const s1 = serverStore.replicate(true)
+    const s2 = joinerStore.replicate(false)
+    s1.pipe(s2).pipe(s1)
+    t.teardown(() => {
+      s1.destroy()
+      s2.destroy()
+    })
+
+    await joiner.ready()
+
+    while (!joinerState.calls) await new Promise((resolve) => setTimeout(resolve, 100))
+
+    t.is(joinerState.length, meta.finalViewLength)
+    t.alike(
+      joiner._migratedHead.system.key,
+      b4a.from(meta.finalSystemKey, 'hex'),
+      'migrated at the newest generation'
+    )
+
+    for (let i = 0; i < meta.totalMessages; i++) {
+      t.is(await messageAt(joiner, i), meta.messages[i], `message ${i} matches`)
+    }
+  }
+)
+
+test(
+  'migration - 6) after a writer moves to autobee an old key fast-forwards onto its autobee head',
+  { skip: skipFF },
+  async function (t) {
+    const fixture = path.join(__dirname, 'fixtures/migration/autobase-rotation-v7.28.1-linux')
+    const meta = JSON.parse(await fs.readFile(path.join(fixture, 'meta.json')))
+    const bootstrap = b4a.from(meta.bootstrap, 'hex')
+
+    // writer a migrates its legacy storage to autobee and keeps writing,
+    // burying its legacy oplog stamps under autobee-format nodes
+    const aDir = await t.tmp()
+    await fs.cp(path.join(fixture, 'a'), aDir, { recursive: true })
+
+    const aStore = new Corestore(aDir, { allowBackup: true })
+    const aState = {}
+    let a
+    a = new Autobee(aStore, bootstrap, {
+      apply,
+      migrate: migrateInto(aStore, aState, () => a, bootstrap),
+      legacyViews: [LEGACY_VIEW_NAME],
+      encrypted: true,
+      encryptionKey: SECRET_KEY
+    })
+    t.teardown(() => a.close())
+
+    await a.ready()
+    t.ok(aState.calls, 'a migrated locally')
+
+    await a.append(JSON.stringify({ noop: 1 }))
+    await a.append(JSON.stringify({ noop: 2 }))
+
+    const joinerStore = new Corestore(await t.tmp())
+    const joinerState = {}
+    let preapplies = 0
+    let joiner
+    joiner = new Autobee(joinerStore, bootstrap, {
+      apply,
+      migrate: migrateInto(joinerStore, joinerState, () => joiner, bootstrap),
+      preapply: () => {
+        preapplies++
+      },
+      legacyViews: [LEGACY_VIEW_NAME],
+      encrypted: true,
+      encryptionKey: SECRET_KEY,
+      // the original (generation 0) system key, two rotations and one
+      // autobee migration old
+      fastForward: { boot: { key: b4a.from(meta.gen0SystemKey, 'hex') } }
+    })
+    t.teardown(() => joiner.close())
+
+    const done = replicate(a, joiner)
+
+    await joiner.ready()
+    await sync(a, joiner)
+    await done()
+
+    t.absent(joinerState.calls, 'joiner fast-forwarded instead of migrating')
+    t.absent(joiner._migratedHead, 'no migrated head, a plain fast-forward')
+    t.is(preapplies, 1, 'preapply runs exactly once')
+
+    for (let i = 0; i < meta.totalMessages; i++) {
+      t.is(await messageAt(joiner, i), meta.messages[i], `message ${i} matches`)
+    }
   }
 )
 

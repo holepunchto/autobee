@@ -1,5 +1,6 @@
 const test = require('brittle')
 const c = require('compact-encoding')
+const migrations = require('../lib/migrations')
 const crypto = require('hypercore-crypto')
 const { create, encode } = require('./helpers')
 const { Oplog } = require('../lib/encoding.js')
@@ -75,7 +76,7 @@ test('legacy oplogs with no digest or checkpoint inflate without views', async f
     trace: null
   })
 
-  const op = await auto._inflateLegacyOplog(buf, null, 0)
+  const op = await migrations.inflateLegacyOplog(buf, null, 0)
 
   t.is(op.views, null, 'nothing to fast-forward from')
   t.alike(op.value, value, 'value is still readable')
