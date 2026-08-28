@@ -14,6 +14,7 @@ const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
+const { LEGACY_OPLOG_VERSION } = require('./lib/constants.js')
 const FastForward = require('./lib/fast-forward.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
@@ -527,12 +528,12 @@ module.exports = class Autobee extends ReadyResource {
     this.stats.drains++
 
     if (this.bootFrom) {
-      const { head = null, legacy = null, bootCondition = null } = this.bootFrom
+      const { head = null, legacy = null, bootCondition = null, wait = false } = this.bootFrom
 
       this.bootFrom = null
 
       if (legacy) await this._bootFromSystem(legacy)
-      else if (head) await this._bootFromHead(head, bootCondition)
+      else if (head) await this._bootFromHead(head, bootCondition, wait)
     }
 
     this._ackRequired = false
@@ -1195,9 +1196,9 @@ module.exports = class Autobee extends ReadyResource {
 
   // the boot head seeds the view every trust decision here is made against,
   // since our own view is still empty
-  async _bootFromHead(head, bootCondition) {
+  async _bootFromHead(head, bootCondition, wait = false) {
     // just a head: one attempt, we do not wait around if it cannot be read
-    if (bootCondition === null) {
+    if (bootCondition === null && !wait) {
       try {
         const ff = await FastForward.fromHead(this, head, null, {
           force: true,
@@ -1211,8 +1212,8 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    // a condition needs the view at head to check against, so park until we
-    // can read it and something acceptable turns up
+    // park until the head can be read and, if a condition is set, something
+    // acceptable turns up
     let opened = null
 
     try {
@@ -1220,10 +1221,28 @@ module.exports = class Autobee extends ReadyResource {
         this._bootWait = rrp()
 
         try {
-          if (opened === null) opened = await this._bootReference(head)
+          if (bootCondition === null) {
+            const ff = await FastForward.fromHead(this, head, null, {
+              force: true,
+              timeout: FastForward.DEFAULT_TIMEOUT
+            })
 
-          if (opened !== null && (await this._bootAttempt(head, bootCondition, opened.view))) {
-            return true
+            if (ff !== null && (await this._runFastForward(ff))) return true
+          } else {
+            if (opened === null) opened = await this._bootReference(head)
+
+            if (opened !== null) {
+              if (await this._bootAttempt(head, bootCondition, opened.view)) {
+                return true
+              }
+
+              // the reference may be stale - resolve it afresh next attempt
+              await opened.close()
+              opened = null
+            } else if (await this._bootLegacyHead(head)) {
+              // boot legacy head through the migration pathway
+              return true
+            }
           }
         } catch (err) {
           safetyCatch(err)
@@ -1253,6 +1272,20 @@ module.exports = class Autobee extends ReadyResource {
       timeout: FastForward.DEFAULT_TIMEOUT,
       condition: bootCondition,
       reference
+    })
+
+    return ff !== null && (await this._runFastForward(ff))
+  }
+
+  async _bootLegacyHead(head) {
+    const oplog = await FastForward.flushHead(this, head, {
+      timeout: FastForward.DEFAULT_TIMEOUT
+    })
+    if (oplog === null || oplog.op.version > LEGACY_OPLOG_VERSION) return false
+
+    const ff = await FastForward.fromHead(this, head, null, {
+      force: true,
+      timeout: FastForward.DEFAULT_TIMEOUT
     })
 
     return ff !== null && (await this._runFastForward(ff))
