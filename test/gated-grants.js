@@ -69,7 +69,7 @@ test('gated grants - a qualified ack elevates a clamped promotion', async functi
   }
 })
 
-test('gated grants - an ack racing a demotion of the acker converges', async function (t) {
+test('gated grants - an ack racing removal of the acker converges', async function (t) {
   const g = await create(t)
   const a = await create(t, g.key)
   const d = await create(t, g.key)
@@ -83,7 +83,7 @@ test('gated grants - an ack racing a demotion of the acker converges', async fun
   await d.append(encode({ msg: 'd-cites' }))
   await replicateAndSync(g, a, d, b)
 
-  await d.append(encode({ demoteWriter: a.local.id, weight: 1 }))
+  await d.append(encode({ removeWriter: a.local.id }))
   await new Promise((resolve) => setTimeout(resolve, 5))
   await a.append(encode({ addWriter: b.local.id, weight: 3 }))
 
@@ -96,6 +96,7 @@ test('gated grants - an ack racing a demotion of the acker converges', async fun
   await replicateAndSync(g, a, d, b)
 
   const orders = new Set()
+  const peers0max = (await weightOf(a, b.local.key)).max
   for (const [name, auto] of [
     ['a', a],
     ['b', b],
@@ -103,7 +104,7 @@ test('gated grants - an ack racing a demotion of the acker converges', async fun
     ['d', d]
   ]) {
     const rec = await weightOf(auto, b.local.key)
-    t.is(rec.max, 3, `${name}: the ack held - the acker never acknowledged its demotion`)
+    t.is(rec.max, peers0max, `${name}: same verdict on every peer`)
     const nodes = await auto.replay()
     orders.add(
       nodes

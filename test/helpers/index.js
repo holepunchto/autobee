@@ -58,10 +58,6 @@ async function apply(nodes, view, host) {
       host.addWriter(data.addWriter, { weight: data.weight })
     }
 
-    if (data.demoteWriter) {
-      host.demoteWriter(data.demoteWriter, { weight: data.weight })
-    }
-
     if (data.promoteAdmin) {
       const granter = await host.auto.system.get(node.key, { unflushed: true })
       if (granter && granter.maxWeight >= 3) {
