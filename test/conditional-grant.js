@@ -41,7 +41,9 @@ async function raceScenario(t, variant) {
   await d.append(encode({ demoteWriter: a.local.id, weight: 1 }))
   await new Promise((resolve) => setTimeout(resolve, 5))
 
-  if (variant === 'pinned') {
+  if (variant === 'carrier') {
+    await a.append(encode({ promoteAdminCarrier: b.local.id }))
+  } else if (variant === 'pinned') {
     const grant = await a.system.strongestGrant(a.local.key)
     await a.append(
       encode({
@@ -97,5 +99,55 @@ test('pinned grant condition converges under the identical race', async function
   for (const peer of [a, b, g, d]) {
     t.is(peer.max, 5, `${peer.name}: grant held everywhere`)
     t.is(peer.order, a.order, `${peer.name}: identical replay everywhere`)
+  }
+})
+
+// The recommended form: condition on the CARRIER node's resolved weight
+// (node.weight in apply). resolveWeight is already a pinned function of the
+// carrier's causal past, so the verdict is arrival-independent with no extra
+// wire format. The racing demotion cannot flip it - the granter has not cited
+// its demotion, so its carrier resolves admin on every peer
+test('carrier-weight grant condition converges under the identical race', async function (t) {
+  const [a, b, g, d] = await raceScenario(t, 'carrier')
+
+  for (const peer of [a, b, g, d]) {
+    t.is(peer.max, 5, `${peer.name}: grant held everywhere`)
+    t.is(peer.order, a.order, `${peer.name}: identical replay everywhere`)
+  }
+})
+
+// ...and revocation binds exactly when the granter's own chain acknowledges
+// the demotion: the citing append lowers every later carrier everywhere, so
+// the same grant uniformly fails. Voluntary, but never divergent
+test('carrier-weight condition uniformly refuses a granter that cited its demotion', async function (t) {
+  const g = await create(t, null, {})
+  const a = await create(t, g.key, {})
+  const b = await create(t, g.key, {})
+
+  await g.append(encode({ addWriter: a.local.id, weight: 3 }))
+  await g.append(encode({ addWriter: b.local.id, weight: 1 }))
+  await replicateAndSync(g, a, b)
+  await a.append(encode({ msg: 'a-cites' }))
+  await replicateAndSync(g, a, b)
+
+  await g.append(encode({ demoteWriter: a.local.id, weight: 1 }))
+  await replicateAndSync(g, a, b)
+
+  await a.append(encode({ msg: 'a-cites-demotion' }))
+  await replicateAndSync(g, a, b)
+
+  const recA = await a.system.get(a.local.key)
+  t.is(recA.weight, 1, 'granter acknowledged its demotion')
+
+  await a.append(encode({ promoteAdminCarrier: b.local.id }))
+  await replicateAndSync(g, a, b)
+
+  for (const [name, auto] of [
+    ['a', a],
+    ['b', b],
+    ['g', g]
+  ]) {
+    const rec = await auto.system.get(b.local.key)
+    t.is(rec.maxWeight, 1, `${name}: grant refused everywhere`)
   }
 })

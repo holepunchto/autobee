@@ -317,7 +317,9 @@ async function condPromoteRace(state) {
 
   await demoter.auto.append(encode({ demoteWriter: granter.auto.local.id, weight: 1 }))
 
-  if (pinned) {
+  if (process.env.FUZZ_COND_GRANT === 'carrier') {
+    await granter.auto.append(encode({ promoteAdminCarrier: target.auto.local.id }))
+  } else if (pinned) {
     const grant = await granter.auto.system.strongestGrant(granter.auto.local.key)
     if (!grant || grant.weight < 3) return false
     await granter.auto.append(

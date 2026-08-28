@@ -69,6 +69,12 @@ async function apply(nodes, view, host) {
       }
     }
 
+    if (data.promoteAdminCarrier) {
+      if (node.weight >= 3) {
+        host.addWriter(data.promoteAdminCarrier, { weight: 5 })
+      }
+    }
+
     if (data.promoteAdminPinned) {
       const link = { key: b4a.from(data.link.key, 'hex'), length: data.link.length }
       const granted = await host.auto.system.grantedWeight(node.key, link)
