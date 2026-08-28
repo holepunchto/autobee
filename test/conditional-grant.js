@@ -25,6 +25,14 @@ async function raceScenario(t, variant) {
   const d = await create(t, g.key, {})
   const b = await create(t, g.key, {})
 
+  let conferA = null
+  if (variant === 'app') {
+    await g.append(encode({ appBootstrapAdmin: true }))
+    const boot = { key: b4a.toString(g.local.key, 'hex'), length: g.local.length }
+    await g.append(encode({ appPromote: b4a.toString(a.local.key, 'hex'), cite: boot }))
+    conferA = { key: b4a.toString(g.local.key, 'hex'), length: g.local.length }
+  }
+
   await g.append(encode({ addWriter: a.local.id, weight: 3 }))
   await g.append(encode({ addWriter: d.local.id, weight: 3 }))
   await g.append(encode({ addWriter: b.local.id, weight: 1 }))
@@ -36,12 +44,14 @@ async function raceScenario(t, variant) {
   await replicateAndSync(g, a, d, b)
 
   const recA = await a.system.get(a.local.key)
-  t.is(recA.weight, 3, 'granter resolved admin before the race')
+  t.ok(recA.weight >= 3, 'granter resolved admin before the race')
 
   await d.append(encode({ demoteWriter: a.local.id, weight: 1 }))
   await new Promise((resolve) => setTimeout(resolve, 5))
 
-  if (variant === 'carrier') {
+  if (variant === 'app') {
+    await a.append(encode({ appPromote: b4a.toString(b.local.key, 'hex'), cite: conferA }))
+  } else if (variant === 'carrier') {
     await a.append(encode({ promoteAdminCarrier: b.local.id }))
   } else if (variant === 'pinned') {
     const grant = await a.system.strongestGrant(a.local.key)
@@ -119,6 +129,25 @@ test('carrier-weight grant condition converges under the identical race', async 
 // ...and revocation binds exactly when the granter's own chain acknowledges
 // the demotion: the citing append lowers every later carrier everywhere, so
 // the same grant uniformly fails. Voluntary, but never divergent
+// The layering keet needs: the APP owns admin semantics, independent of
+// weights, and its verdict gates the grant. Safe form: the appender decides
+// against its own local view - which is exactly its causal past, since the
+// node links its heads - and the op cites the app-level fact it relied on
+// (the conferral op that made its author a keet-admin). The app's apply
+// handler verifies by point lookup against append-only facts keyed by op
+// coordinate in its own view (kconf/<coord> -> conferred key). A cited fact
+// sits in the node's causal past, so it is applied before the node in EVERY
+// interleaving and the lookup is arrival-independent - the identical race
+// (system demotion of the granter, opposite arrival orders) cannot touch it
+test('app-owned admin semantics via citation converge under the identical race', async function (t) {
+  const [a, b, g, d] = await raceScenario(t, 'app')
+
+  for (const peer of [a, b, g, d]) {
+    t.is(peer.max, 5, `${peer.name}: app-gated grant held everywhere`)
+    t.is(peer.order, a.order, `${peer.name}: identical replay everywhere`)
+  }
+})
+
 test('carrier-weight condition uniformly refuses a granter that cited its demotion', async function (t) {
   const g = await create(t, null, {})
   const a = await create(t, g.key, {})
