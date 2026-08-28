@@ -1,6 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
-const { create, replicateAndSync, encode } = require('./helpers')
+const { create, replicate, replicateAndSync, sync, encode } = require('./helpers')
 
 // Scheme: a grant is capped at its carrying node's resolved weight, so
 // weight classes are self-governing - only a peer standing at w (or above)
@@ -138,4 +138,80 @@ test('gated grants - weight above the genesis root cannot be minted', async func
     t.is(rec.max, 3, `${name}: ceiling is the root standing, no minting above it`)
     t.is(rec.w, 3, `${name}: resolution respects the ceiling`)
   }
+})
+
+test('gated grants - a clamped grant records a pending promotion, the ack clears it', async function (t) {
+  const g = await create(t)
+  const m = await create(t, g.key)
+  const b = await create(t, g.key)
+
+  await g.append(encode({ addWriter: m.local.id, weight: 2 }))
+  await replicateAndSync(g, m, b)
+  await m.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await replicateAndSync(g, m, b)
+
+  for (const [name, auto] of [
+    ['g', g],
+    ['m', m],
+    ['b', b]
+  ]) {
+    t.is(await auto.system.pendingPromotion(b.local.key), 3, `${name}: pending promotion recorded`)
+  }
+
+  const listed = []
+  for await (const entry of g.system.listPendingPromotions()) listed.push(entry)
+  t.is(listed.length, 1, 'one pending promotion listed')
+  t.ok(b4a.equals(listed[0].key, b.local.key), 'listed for the proposed writer')
+  t.is(listed[0].weight, 3, 'listed at the requested weight')
+
+  await g.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await replicateAndSync(g, m, b)
+
+  for (const [name, auto] of [
+    ['g', g],
+    ['m', m],
+    ['b', b]
+  ]) {
+    t.is(await auto.system.pendingPromotion(b.local.key), 0, `${name}: pending cleared by the ack`)
+    const rec = await auto.system.get(b.local.key)
+    t.is(rec.maxWeight, 3, `${name}: ack conferred the weight`)
+  }
+})
+
+test('gated grants - pending promotions are visible from a fast-forwarded boot snapshot', async function (t) {
+  const g = await create(t, {
+    mostRecentTrusted: () => ({ key: g.local.key, length: g.local.length })
+  })
+  const m = await create(t, g.key)
+  const b = await create(t, g.key)
+
+  await g.append(encode({ addWriter: m.local.id, weight: 2 }))
+  await replicateAndSync(g, m, b)
+  await m.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await replicateAndSync(g, m, b)
+
+  for (let i = 0; i < 40; i++) await g.append(encode({ value: 'filler' + i }))
+
+  const observer = await create(t, g.key, {
+    isTrusted: () => true,
+    fastForward: {
+      boot: {
+        head: { key: g.local.key, length: g.local.length }
+      }
+    }
+  })
+
+  const done = replicate(g, observer)
+  await new Promise((resolve) => observer.once('move-to', resolve))
+  await sync(g, observer)
+  await done()
+
+  t.is(
+    await observer.system.pendingPromotion(b.local.key),
+    3,
+    'pending visible from state alone - no oplog replay needed to know who to ack'
+  )
+  const listed = []
+  for await (const entry of observer.system.listPendingPromotions()) listed.push(entry)
+  t.is(listed.length, 1, 'listable for post-fast-forward granting')
 })
