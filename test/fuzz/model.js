@@ -21,7 +21,11 @@ const b4a = require('b4a')
 // layer, so either is interchangeable underneath the same action set.
 function createState(config, rng, harness, nextStorage, log, transport) {
   return (async () => {
-    const genesis = await create(harness, { storage: nextStorage(), ...writerClock(config, rng) })
+    const genesis = await create(harness, {
+      storage: nextStorage(),
+      bootstrapWeight: config.maxWeight,
+      ...writerClock(config, rng)
+    })
     await transport.attach(genesis)
     await genesis.append(encode({ msg: 'genesis' }))
 
@@ -111,6 +115,7 @@ async function spawnCandidate(state) {
   const clock = writerClock(state.config, state.rng)
   const auto = await create(state.harness, state.genesisKey, {
     storage: state.nextStorage(),
+    bootstrapWeight: state.config.maxWeight,
     ...clock
   })
   await state.transport.attach(auto)
@@ -153,10 +158,13 @@ async function addWriterByPeer(state) {
   const weight = randWeightAtLeast(state, currentWeight(state, hex))
 
   await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
+  const effective = Math.min(weight, granterStanding(state, granter))
   state.granted.add(hex)
-  state.weights.set(hex, weight)
+  state.weights.set(hex, Math.max(currentWeight(state, hex), effective))
   state.dirty.add(keyHex(granter.auto))
-  state.log(`${granter.name} adds ${target.name} as writer, weight=${weight}`)
+  state.log(
+    `${granter.name} adds ${target.name} as writer, weight=${weight} (clamps to ${effective})`
+  )
   return true
 }
 
@@ -170,9 +178,10 @@ async function changeWeight(state) {
   const weight = randWeightAtLeast(state, currentWeight(state, hex))
 
   await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
-  state.weights.set(hex, weight)
+  const effective = Math.min(weight, granterStanding(state, granter))
+  state.weights.set(hex, Math.max(currentWeight(state, hex), effective))
   state.dirty.add(keyHex(granter.auto))
-  state.log(`${granter.name} changes ${target.name} weight -> ${weight}`)
+  state.log(`${granter.name} changes ${target.name} weight -> ${weight} (clamps to ${effective})`)
   return true
 }
 
@@ -186,7 +195,9 @@ async function optimisticSelfAdd(state) {
 
   await self.auto.append(encode({ addWriter: self.auto.local.id, weight }), { optimistic: true })
   state.granted.add(hex)
-  state.weights.set(hex, weight)
+  // gated grants: a self-add's carrier resolves 0, so it confers no weight -
+  // the writer joins writable at 0 and waits for a qualified grant
+  state.weights.set(hex, Math.max(currentWeight(state, hex), 0))
   state.pendingOptimistic.add(hex)
   state.dirty.add(hex)
   state.log(`${self.name} optimistically adds itself, weight=${weight}`)
@@ -218,9 +229,11 @@ async function concurrentConflictingGrant(state) {
   await granter2.auto.append(encode({ addWriter: target.auto.local.id, weight: weight2 }))
 
   state.granted.add(hex)
+  const eff1 = Math.min(weight1, granterStanding(state, granter1))
+  const eff2 = Math.min(weight2, granterStanding(state, granter2))
   // whichever grant "wins" in the replicated system, it'll be at least this -
   // future grants must not undercut whichever of the two takes effect
-  state.weights.set(hex, Math.max(weight1, weight2))
+  state.weights.set(hex, Math.max(currentWeight(state, hex), eff1, eff2))
   state.dirty.add(keyHex(granter1.auto))
   state.dirty.add(keyHex(granter2.auto))
   state.log(
@@ -339,7 +352,7 @@ async function condPromoteRace(state) {
   await target.auto.append(encode({ msg: `m${state.seq}`, from: target.name }))
 
   state.granted.add(keyHex(target.auto))
-  state.weights.set(keyHex(target.auto), 5)
+  state.weights.set(keyHex(target.auto), Math.min(5, granterStanding(state, granter)))
   state.weights.set(keyHex(granter.auto), 1)
   state.dirty.add(keyHex(granter.auto))
   state.dirty.add(keyHex(demoter.auto))
@@ -575,6 +588,12 @@ function pickGrantedTarget(state) {
   if (!eligible.length) return null
   const hex = state.rng.pick(eligible)
   return state.pool.find((e) => keyHex(e.auto) === hex) || null
+}
+
+function granterStanding(state, entry) {
+  const hex = keyHex(entry.auto)
+  if (hex === state.genesisHex) return state.config.maxWeight
+  return currentWeight(state, hex)
 }
 
 function currentWeight(state, hex) {

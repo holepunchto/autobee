@@ -136,6 +136,7 @@ async function create(t, key, opts) {
     encryptionKey,
     encrypted: !!encryptionKey,
     name: '#' + t.tick++,
+    bootstrapWeight: 3,
     apply,
     ...opts
   })

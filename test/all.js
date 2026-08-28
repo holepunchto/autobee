@@ -15,6 +15,7 @@ async function runTests() {
   await import('./concurrent-writes.js')
   await import('./demotion.js')
   await import('./conditional-grant.js')
+  await import('./gated-grants.js')
   await import('./encryption.js')
   await import('./fast-forward.js')
   await import('./links.js')

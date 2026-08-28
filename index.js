@@ -37,9 +37,16 @@ module.exports = class Autobee extends ReadyResource {
       key = null
     }
 
-    const { name = null, encrypted, encryptionKey, viewName = 'view' } = handlers
+    const {
+      name = null,
+      encrypted,
+      encryptionKey,
+      viewName = 'view',
+      bootstrapWeight = 2
+    } = handlers
 
     this.encrypted = encrypted === true || !!encryptionKey
+    this.bootstrapWeight = bootstrapWeight
 
     this.getSystemEncryption = this._getEncryptionProvider.bind(this, '_system')
     this.getViewEncryption = this._getEncryptionProvider.bind(this, viewName)
@@ -996,7 +1003,7 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       if (b4a.equals(batch[0].key, this.key) && batch[0].length === 1) {
-        await this._host.addWriter(batch[0].key)
+        await this._host.addWriter(batch[0].key, { weight: this.bootstrapWeight })
       }
 
       await this._applyBatch(batch, batch[0].optimistic)

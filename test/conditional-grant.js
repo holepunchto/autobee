@@ -14,10 +14,17 @@ const { create, replicateAndSync, encode } = require('./helpers')
 // fixed point and converges under the identical race.
 //
 // The apply handlers live in ./helpers: promoteAdmin (live read) and
-// promoteAdminPinned (cited grant). Both promote to weight 5 - above the
+// promoteAdminPinned (cited grant). Both request weight 5 - above the
 // admins' own class - because that is the bistable geometry: the promoted
 // citation can pull the promote op above a same-or-lower-class demote in one
 // order, while the timestamp tiebreak puts the demote first in the other.
+//
+// ON THIS BRANCH grants are carrier-gated (a grant clamps to its carrying
+// node's resolved weight), so the request clamps to 3 and the bistable
+// geometry is UNREACHABLE: nothing a grant confers can out-class the ops
+// that decide its own verdict. The live variant therefore converges here -
+// see the demotion branch for the ungated split-brain demonstration. That
+// does not make live reads safe in general; the prohibition stands.
 
 async function raceScenario(t, variant) {
   const g = await create(t, null, {})
@@ -93,21 +100,24 @@ async function raceScenario(t, variant) {
   return out
 }
 
-test('live-state grant condition splits the brain under opposite arrival orders', async function (t) {
+test('live-state grant condition can no longer split the brain under carrier-gated grants', async function (t) {
   const [a, b, g, d] = await raceScenario(t, 'live')
 
-  t.is(a.max, 5, 'promote-first arrival: grant held, target is admin')
-  t.is(a.order, b.order, 'promote-side peers agree with each other')
-  t.is(g.max, 1, 'demote-first arrival: grant failed, target floored')
-  t.is(g.order, d.order, 'demote-side peers agree with each other')
-  t.not(a.order, g.order, 'the two sides disagree on the SAME final DAG - stable split-brain')
+  for (const peer of [a, b, g, d]) {
+    t.is(
+      peer.max,
+      1,
+      `${peer.name}: verdict uniform - the earlier demote wins the same-class tiebreak everywhere`
+    )
+    t.is(peer.order, a.order, `${peer.name}: identical replay everywhere`)
+  }
 })
 
 test('pinned grant condition converges under the identical race', async function (t) {
   const [a, b, g, d] = await raceScenario(t, 'pinned')
 
   for (const peer of [a, b, g, d]) {
-    t.is(peer.max, 5, `${peer.name}: grant held everywhere`)
+    t.is(peer.max, 3, `${peer.name}: grant held everywhere (clamped to the carrier)`)
     t.is(peer.order, a.order, `${peer.name}: identical replay everywhere`)
   }
 })
@@ -121,7 +131,7 @@ test('carrier-weight grant condition converges under the identical race', async 
   const [a, b, g, d] = await raceScenario(t, 'carrier')
 
   for (const peer of [a, b, g, d]) {
-    t.is(peer.max, 5, `${peer.name}: grant held everywhere`)
+    t.is(peer.max, 3, `${peer.name}: grant held everywhere (clamped to the carrier)`)
     t.is(peer.order, a.order, `${peer.name}: identical replay everywhere`)
   }
 })
@@ -143,7 +153,7 @@ test('app-owned admin semantics via citation converge under the identical race',
   const [a, b, g, d] = await raceScenario(t, 'app')
 
   for (const peer of [a, b, g, d]) {
-    t.is(peer.max, 5, `${peer.name}: app-gated grant held everywhere`)
+    t.is(peer.max, 3, `${peer.name}: app-gated grant held everywhere (clamped to the carrier)`)
     t.is(peer.order, a.order, `${peer.name}: identical replay everywhere`)
   }
 })
