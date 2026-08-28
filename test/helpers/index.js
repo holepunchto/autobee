@@ -62,6 +62,21 @@ async function apply(nodes, view, host) {
       host.demoteWriter(data.demoteWriter, { weight: data.weight })
     }
 
+    if (data.promoteAdmin) {
+      const granter = await host.auto.system.get(node.key, { unflushed: true })
+      if (granter && granter.maxWeight >= 3) {
+        host.addWriter(data.promoteAdmin, { weight: 5 })
+      }
+    }
+
+    if (data.promoteAdminPinned) {
+      const link = { key: b4a.from(data.link.key, 'hex'), length: data.link.length }
+      const granted = await host.auto.system.grantedWeight(node.key, link)
+      if (granted >= 3) {
+        host.addWriter(data.promoteAdminPinned, { weight: 5 })
+      }
+    }
+
     if (data.removeWriter) {
       host.removeWriter(data.removeWriter)
     }

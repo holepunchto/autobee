@@ -1,0 +1,101 @@
+const test = require('brittle')
+const b4a = require('b4a')
+const { create, replicateAndSync, encode } = require('./helpers')
+
+// Evidence for a design rule, in both directions. An application-level grant
+// condition ("only an admin may promote") evaluated against LIVE apply state
+// makes the verdict a function of where concurrent ops happen to sort; the
+// promoted writer's citation feeds that verdict back into sort weight, giving
+// two self-consistent (order, verdict) fixed points. Which one a peer settles
+// in depends on ARRIVAL order, so two peers holding the identical DAG disagree
+// stably - split-brain with no local signal. The same condition scoped to the
+// promote op's causal past (cite the grant that made the author an admin,
+// verified by point lookup against the system-authored grant log) has one
+// fixed point and converges under the identical race.
+//
+// The apply handlers live in ./helpers: promoteAdmin (live read) and
+// promoteAdminPinned (cited grant). Both promote to weight 5 - above the
+// admins' own class - because that is the bistable geometry: the promoted
+// citation can pull the promote op above a same-or-lower-class demote in one
+// order, while the timestamp tiebreak puts the demote first in the other.
+
+async function raceScenario(t, variant) {
+  const g = await create(t, null, {})
+  const a = await create(t, g.key, {})
+  const d = await create(t, g.key, {})
+  const b = await create(t, g.key, {})
+
+  await g.append(encode({ addWriter: a.local.id, weight: 3 }))
+  await g.append(encode({ addWriter: d.local.id, weight: 3 }))
+  await g.append(encode({ addWriter: b.local.id, weight: 1 }))
+  await replicateAndSync(g, a, d, b)
+
+  await a.append(encode({ msg: 'a-cites' }))
+  await d.append(encode({ msg: 'd-cites' }))
+  await b.append(encode({ msg: 'b-cites' }))
+  await replicateAndSync(g, a, d, b)
+
+  const recA = await a.system.get(a.local.key)
+  t.is(recA.weight, 3, 'granter resolved admin before the race')
+
+  await d.append(encode({ demoteWriter: a.local.id, weight: 1 }))
+  await new Promise((resolve) => setTimeout(resolve, 5))
+
+  if (variant === 'pinned') {
+    const grant = await a.system.strongestGrant(a.local.key)
+    await a.append(
+      encode({
+        promoteAdminPinned: b.local.id,
+        link: { key: b4a.toString(grant.key, 'hex'), length: grant.length }
+      })
+    )
+  } else {
+    await a.append(encode({ promoteAdmin: b.local.id }))
+  }
+
+  await replicateAndSync(a, b)
+  await b.append(encode({ msg: 'claim' }))
+  await replicateAndSync(a, b)
+
+  await replicateAndSync(g, d)
+  await replicateAndSync(g, a, d, b)
+  await replicateAndSync(g, a, d, b)
+
+  const out = []
+  for (const [name, auto] of [
+    ['a', a],
+    ['b', b],
+    ['g', g],
+    ['d', d]
+  ]) {
+    const rec = await auto.system.get(b.local.key)
+    const nodes = await auto.replay()
+    out.push({
+      name,
+      max: rec ? rec.maxWeight : null,
+      order: nodes
+        .map((n) => `${b4a.toString(n.key, 'hex').slice(0, 8)}:${n.length}:w${n.weight}`)
+        .join(' ')
+    })
+  }
+  return out
+}
+
+test('live-state grant condition splits the brain under opposite arrival orders', async function (t) {
+  const [a, b, g, d] = await raceScenario(t, 'live')
+
+  t.is(a.max, 5, 'promote-first arrival: grant held, target is admin')
+  t.is(a.order, b.order, 'promote-side peers agree with each other')
+  t.is(g.max, 1, 'demote-first arrival: grant failed, target floored')
+  t.is(g.order, d.order, 'demote-side peers agree with each other')
+  t.not(a.order, g.order, 'the two sides disagree on the SAME final DAG - stable split-brain')
+})
+
+test('pinned grant condition converges under the identical race', async function (t) {
+  const [a, b, g, d] = await raceScenario(t, 'pinned')
+
+  for (const peer of [a, b, g, d]) {
+    t.is(peer.max, 5, `${peer.name}: grant held everywhere`)
+    t.is(peer.order, a.order, `${peer.name}: identical replay everywhere`)
+  }
+})

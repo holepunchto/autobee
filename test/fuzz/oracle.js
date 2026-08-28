@@ -271,7 +271,7 @@ function compareReplayPeers(a, b) {
 // inflated pin means an unbacked claim elevated somewhere - an immediate
 // failure even if every peer agrees on it
 function checkInflatedWeights(replays, maxWeight) {
-  const cap = Math.max(maxWeight, 2)
+  const cap = Math.max(maxWeight, 2) + (process.env.FUZZ_COND_GRANT ? 2 : 0)
   const failures = []
   for (const replay of replays) {
     for (const n of replay.nodes) {

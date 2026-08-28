@@ -58,6 +58,7 @@ function createState(config, rng, harness, nextStorage, log, transport) {
 
 const BYZ = process.env.FUZZ_NO_BYZ ? 0 : 1
 const DEM = process.env.FUZZ_NO_DEMOTE ? 0 : 2
+const COND = process.env.FUZZ_COND_GRANT ? 4 : 0
 
 const actions = [
   { name: 'spawn', weight: 3, run: spawnCandidate },
@@ -83,7 +84,21 @@ const actions = [
   { name: 'buggyClaimInflate', weight: BYZ, run: buggyClaimInflate },
   { name: 'buggyClaimNakedLink', weight: BYZ, run: buggyClaimNakedLink },
   { name: 'buggyClaimForeignGrant', weight: BYZ, run: buggyClaimForeignGrant },
-  { name: 'buggyRefuseDemotion', weight: BYZ, run: buggyRefuseDemotion }
+  { name: 'buggyRefuseDemotion', weight: BYZ, run: buggyRefuseDemotion },
+  // EXPERIMENT (FUZZ_COND_GRANT=live|pinned): an application-level rule -
+  // the demote is appended FIRST so its timestamp precedes the promote's:
+  // that makes demote-before-promote the floored order's natural tiebreak,
+  // which is the bistable geometry (see test/conditional-grant.js) -
+  // "only an admin may promote to admin" - whose verdict is evaluated inside
+  // apply. The live variant reads the granter's standing from apply state at
+  // the op's position in the current order, so a promote racing a demotion of
+  // the granter resolves by interleaving; the promoted writer then cites the
+  // conditional grant, feeding the verdict back into sort weight. Prediction:
+  // two stable fixed points -> arrival-dependent split-brain the peer-vs-peer
+  // oracle must catch. The pinned variant scopes the same rule to the promote
+  // op's causal past (cite the grant that made its author an admin; verify by
+  // point lookup), which must stay convergent under the same races
+  { name: 'condPromoteRace', weight: COND, run: condPromoteRace }
 ]
 
 exports.actions = actions
@@ -279,6 +294,58 @@ async function demoteWriterAction(state) {
   state.weights.set(hex, weight)
   state.dirty.add(keyHex(demoter.auto))
   state.log(`${demoter.name} demotes ${target.name} -> ${weight}`)
+  return true
+}
+
+async function condPromoteRace(state) {
+  const pinned = process.env.FUZZ_COND_GRANT === 'pinned'
+  const writable = writableEntries(state)
+  if (writable.length < 3) return false
+
+  const admins = []
+  for (const e of writable) {
+    const rec = await e.auto.system.get(e.auto.local.key)
+    if (rec && rec.maxWeight >= 3) admins.push(e)
+  }
+  if (admins.length < 2) return false
+
+  const granter = state.rng.pick(admins)
+  const demoter = state.rng.pick(admins.filter((e) => e !== granter))
+  const targets = writable.filter((e) => e !== granter && e !== demoter)
+  if (!targets.length) return false
+  const target = state.rng.pick(targets)
+
+  await demoter.auto.append(encode({ demoteWriter: granter.auto.local.id, weight: 1 }))
+
+  if (pinned) {
+    const grant = await granter.auto.system.strongestGrant(granter.auto.local.key)
+    if (!grant || grant.weight < 3) return false
+    await granter.auto.append(
+      encode({
+        promoteAdminPinned: target.auto.local.id,
+        link: { key: keyHexOf(grant.key), length: grant.length }
+      })
+    )
+  } else {
+    await granter.auto.append(encode({ promoteAdmin: target.auto.local.id }))
+  }
+
+  await state.transport.pairSync(granter.auto, target.auto, {
+    timeoutMs: state.config.syncTimeoutMs
+  })
+  state.seq++
+  await target.auto.append(encode({ msg: `m${state.seq}`, from: target.name }))
+
+  state.granted.add(keyHex(target.auto))
+  state.weights.set(keyHex(target.auto), 5)
+  state.weights.set(keyHex(granter.auto), 1)
+  state.dirty.add(keyHex(granter.auto))
+  state.dirty.add(keyHex(demoter.auto))
+  state.dirty.add(keyHex(target.auto))
+  state.log(
+    `${granter.name} conditionally promotes ${target.name} (${pinned ? 'pinned' : 'live'}), ` +
+      `racing ${demoter.name} demoting ${granter.name}`
+  )
   return true
 }
 
