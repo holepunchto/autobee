@@ -875,21 +875,24 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // a pending promotion is approved internally: any writer whose own
-  // resolved standing covers the requested weight appends a null op carrying
-  // an approvals entry, which apply indexes as a grant (clamped to the
+  // resolved standing covers the requested weight carries an approvals entry
+  // on its next flushed node, which apply indexes as a grant (clamped to the
   // carrier, so an unqualified approval confers nothing). the user only ever
-  // touches the original addWriter - the rest is engine plumbing
-  async _appendApprovals() {
-    if (!this.system.pendingChanged && !this._approvalCheck) return false
-    if (!this.writers.writable) return false
-    if (this.writers.localWriter.pending !== null) return false
-
-    this.system.pendingChanged = false
-    this._approvalCheck = false
+  // touches the original addWriter - the rest is engine plumbing. approvals
+  // piggyback the next user append where one happens (collected at append
+  // time - a flush-time stamp would be invisible to the LOCAL apply pass,
+  // which consumes the pending node object before flush encodes it); the
+  // null op below covers the idle case
+  async _collectApprovals() {
+    if (!this.system.pendingChanged && !this._approvalCheck) return null
+    if (!this.writers.writable) return null
 
     const rec = await this.system.get(this.local.key)
     const standing = currentWeight(rec)
-    if (standing <= 0) return false
+    if (standing <= 0) return null
+
+    this.system.pendingChanged = false
+    this._approvalCheck = false
 
     const approvals = []
     for await (const p of this.system.listPendingPromotions()) {
@@ -900,11 +903,21 @@ module.exports = class Autobee extends ReadyResource {
       if (!target || target.isRemoved || target.maxWeight >= p.weight) continue
       approvals.push({ key: p.key, weight: p.weight })
     }
-    if (!approvals.length) return false
+    if (!approvals.length) return null
 
     for (const a of approvals) {
       this._approvedPending.set(b4a.toString(a.key, 'hex'), a.weight)
     }
+
+    return approvals
+  }
+
+  async _appendApprovals() {
+    if (!this.writers.writable) return false
+    if (this.writers.localWriter.pending !== null) return false
+
+    const approvals = await this._collectApprovals()
+    if (!approvals) return false
 
     const links = this.system.getLinks(this.local.key)
     const t = Math.max(this._now(), this.system.timestamp)
@@ -1168,6 +1181,8 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
+    const approvals = optimistic ? null : await this._collectApprovals()
+
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
       const buffer = typeof value === 'string' ? b4a.from(value) : value
@@ -1178,7 +1193,8 @@ module.exports = class Autobee extends ReadyResource {
         { start: i, end: values.length - 1 - i },
         lnk,
         optimistic,
-        i === 0 ? witness : null
+        i === 0 ? witness : null,
+        i === 0 ? approvals : null
       )
       batch.push(node)
     }

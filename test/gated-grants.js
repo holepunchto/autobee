@@ -159,6 +159,53 @@ test('gated grants - weight above the genesis root cannot be minted', async func
   }
 })
 
+// approvals are collected at APPEND time, never stamped at flush: the local
+// apply pass consumes the pending node object before flush encodes it, so a
+// flush-time field would be applied by every remote but never by the
+// approver itself - this test pins the approver/remote agreement that
+// property guarantees, and that the wire field is where the entry says it is
+test('gated grants - the approver indexes its own approval like every remote', async function (t) {
+  const encoding = require('../lib/encoding.js')
+  const g = await create(t)
+  const m = await create(t, g.key)
+  const b = await create(t, g.key)
+
+  await g.append(encode({ addWriter: m.local.id, weight: 2 }))
+  await replicateAndSync(g, m, b)
+  await m.append(encode({ addWriter: b.local.id, weight: 3 }))
+
+  const links = g.system.getLinks(g.local.key)
+  g.writers.appendLocal(
+    encode({ msg: 'carrier' }),
+    Date.now(),
+    { start: 0, end: 0 },
+    links,
+    false,
+    null
+  )
+
+  await replicateAndSync(g, m, b)
+  await replicateAndSync(g, m, b)
+
+  const grants = await g.system.grants(b.local.key)
+  const approval = grants.find((x) => x.weight === 3)
+  t.ok(approval, 'approval landed')
+  t.ok(b4a.equals(approval.key, g.local.key), 'authored by the qualified peer')
+
+  const node = encoding.decodeOplog(await g.local.get(approval.length - 1))
+  t.is(node.approvals.length, 1, 'the entry coordinate carries the wire field')
+  t.ok(b4a.equals(node.approvals[0].key, b.local.key), 'for the proposed writer')
+
+  for (const [name, auto] of [
+    ['g', g],
+    ['m', m],
+    ['b', b]
+  ]) {
+    const rec = await auto.system.get(b.local.key)
+    t.is(rec.maxWeight, 3, `${name}: approver and remotes agree on the approved state`)
+    t.is(await auto.system.pendingPromotion(b.local.key), 0, `${name}: pending cleared everywhere`)
+  }
+})
 test('gated grants - grant entries prune once the writer resolves', async function (t) {
   const g = await create(t)
   const b = await create(t, g.key)
