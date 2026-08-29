@@ -289,7 +289,12 @@ test(
 
     await joiner.ready()
 
-    while (!joinerState.calls) await new Promise((resolve) => setTimeout(resolve, 100))
+    // the chase can invoke migrate on intermediate candidates that carry no
+    // legacy view (state.calls ticks, state.length does not) - wait for a
+    // COMPLETED migration, not the first attempt
+    while (!joinerState.length || !joiner._migratedHead) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
 
     t.is(joinerState.length, meta.finalViewLength)
     t.alike(
