@@ -13,9 +13,12 @@ const { create, replicateAndSync, encode } = require('./helpers')
 // variant here must converge.
 //
 // The apply handlers live in ./helpers: promoteAdmin (live register read),
-// promoteAdminPinned (cited grant), promoteAdminCarrier (node.weight), and
-// appPromote (app-owned conferral facts). All request weight 5, which the
-// gate clamps to the promoting carrier.
+// promoteAdminCarrier (node.weight), and appPromote (app-owned conferral
+// facts). All request weight 5, which the gate clamps to the promoting
+// carrier. There is deliberately no variant citing the SYSTEM grant log:
+// prune-on-resolve consumes those entries once the beneficiary resolves, so
+// they are single-purpose (witness verification) - app-level citations must
+// cite app-recorded facts, which is what appPromote does.
 
 async function collect(pool, key) {
   const out = []
@@ -105,16 +108,8 @@ async function promoteScenario(t, variant) {
 
   if (variant === 'app') {
     await a.append(encode({ appPromote: b4a.toString(b.local.key, 'hex'), cite: conferA }))
-  } else if (variant === 'carrier') {
-    await a.append(encode({ promoteAdminCarrier: b.local.id }))
   } else {
-    const grant = await a.system.strongestGrant(a.local.key)
-    await a.append(
-      encode({
-        promoteAdminPinned: b.local.id,
-        link: { key: b4a.toString(grant.key, 'hex'), length: grant.length }
-      })
-    )
+    await a.append(encode({ promoteAdminCarrier: b.local.id }))
   }
 
   await replicateAndSync(a, b)
@@ -134,14 +129,6 @@ async function promoteScenario(t, variant) {
     b.local.key
   )
 }
-
-test('pinned grant condition converges under split arrival', async function (t) {
-  const peers = await promoteScenario(t, 'pinned')
-  for (const peer of peers) {
-    t.is(peer.max, 3, `${peer.name}: grant held everywhere (clamped to the carrier)`)
-    t.is(peer.order, peers[0].order, `${peer.name}: identical replay everywhere`)
-  }
-})
 
 test('carrier-weight grant condition converges under split arrival', async function (t) {
   const peers = await promoteScenario(t, 'carrier')

@@ -81,6 +81,16 @@ test('witness - either of two concurrent equal grants justifies a claim', async 
   const grants = await b.system.grants(b.local.key)
   t.is(grants.length, 2, 'both grant ops are logged')
 
+  for (const [name, auto] of [
+    ['a', a],
+    ['b', b],
+    ['c', c]
+  ]) {
+    for (const g of grants) {
+      t.is(await auto.system.grantedWeight(b.local.key, g), 2, `${name}: grant is verifiable`)
+    }
+  }
+
   await b.append(encode({ msg: 'from b' }))
   await replicateAndSync(a, b, c)
 
@@ -91,10 +101,7 @@ test('witness - either of two concurrent equal grants justifies a claim', async 
   ]) {
     const mine = nodesOf(await auto.replay(), b.local.key)
     t.is(mine[mine.length - 1].weight, 2, `${name}: elevated to 2`)
-
-    for (const g of grants) {
-      t.is(await auto.system.grantedWeight(b.local.key, g), 2, `${name}: grant is verifiable`)
-    }
+    t.is((await auto.system.grants(b.local.key)).length, 0, `${name}: consumed grants pruned`)
   }
 })
 

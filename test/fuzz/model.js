@@ -86,7 +86,7 @@ const actions = [
   { name: 'buggyClaimInflate', weight: BYZ, run: buggyClaimInflate },
   { name: 'buggyClaimNakedLink', weight: BYZ, run: buggyClaimNakedLink },
   { name: 'buggyClaimForeignGrant', weight: BYZ, run: buggyClaimForeignGrant },
-  // EXPERIMENT (FUZZ_COND_GRANT=live|pinned|carrier): an application-level
+  // EXPERIMENT (FUZZ_COND_GRANT=live|carrier): an application-level
   // rule - "only an admin may promote to admin" - whose verdict is evaluated
   // inside apply, three ways (live register read / cited grant / carrier
   // weight). Under gated grants all three must converge - see
@@ -270,7 +270,6 @@ async function removeWriterAction(state) {
 }
 
 async function condPromoteRace(state) {
-  const pinned = process.env.FUZZ_COND_GRANT === 'pinned'
   const writable = writableEntries(state)
   if (writable.length < 3) return false
 
@@ -288,15 +287,6 @@ async function condPromoteRace(state) {
 
   if (process.env.FUZZ_COND_GRANT === 'carrier') {
     await granter.auto.append(encode({ promoteAdminCarrier: target.auto.local.id }))
-  } else if (pinned) {
-    const grant = await granter.auto.system.strongestGrant(granter.auto.local.key)
-    if (!grant || grant.weight < 3) return false
-    await granter.auto.append(
-      encode({
-        promoteAdminPinned: target.auto.local.id,
-        link: { key: keyHexOf(grant.key), length: grant.length }
-      })
-    )
   } else {
     await granter.auto.append(encode({ promoteAdmin: target.auto.local.id }))
   }
@@ -311,7 +301,9 @@ async function condPromoteRace(state) {
   state.weights.set(keyHex(target.auto), Math.min(5, granterStanding(state, granter)))
   state.dirty.add(keyHex(granter.auto))
   state.dirty.add(keyHex(target.auto))
-  state.log(`${granter.name} conditionally promotes ${target.name} (${pinned ? 'pinned' : 'live'})`)
+  state.log(
+    `${granter.name} conditionally promotes ${target.name} (${process.env.FUZZ_COND_GRANT})`
+  )
   return true
 }
 

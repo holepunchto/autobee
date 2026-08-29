@@ -284,18 +284,6 @@ auto.register({
 })
 
 auto.register({
-  name: 'system-grants',
-  fields: [
-    {
-      name: 'grants',
-      type: '@autobee/grant',
-      array: true,
-      required: true
-    }
-  ]
-})
-
-auto.register({
   name: 'trusted-head',
   fields: [
     {
