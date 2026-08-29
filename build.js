@@ -245,6 +245,23 @@ auto.register({
 })
 
 auto.register({
+  name: 'approval',
+  compact: true,
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'grant',
   compact: true,
   fields: [
@@ -337,6 +354,11 @@ auto.register({
     {
       name: 'trusted',
       type: '@autobee/trusted-head',
+      array: true
+    },
+    {
+      name: 'approvals',
+      type: '@autobee/approval',
       array: true
     }
   ]

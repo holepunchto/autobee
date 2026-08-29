@@ -148,13 +148,10 @@ async function addWriterByPeer(state) {
   const weight = randWeightAtLeast(state, currentWeight(state, hex))
 
   await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
-  const effective = Math.min(weight, granterStanding(state, granter))
   state.granted.add(hex)
-  state.weights.set(hex, Math.max(currentWeight(state, hex), effective))
+  state.weights.set(hex, Math.max(currentWeight(state, hex), weight))
   state.dirty.add(keyHex(granter.auto))
-  state.log(
-    `${granter.name} adds ${target.name} as writer, weight=${weight} (clamps to ${effective})`
-  )
+  state.log(`${granter.name} adds ${target.name} as writer, weight=${weight}`)
   return true
 }
 
@@ -168,10 +165,9 @@ async function changeWeight(state) {
   const weight = randWeightAtLeast(state, currentWeight(state, hex))
 
   await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
-  const effective = Math.min(weight, granterStanding(state, granter))
-  state.weights.set(hex, Math.max(currentWeight(state, hex), effective))
+  state.weights.set(hex, Math.max(currentWeight(state, hex), weight))
   state.dirty.add(keyHex(granter.auto))
-  state.log(`${granter.name} changes ${target.name} weight -> ${weight} (clamps to ${effective})`)
+  state.log(`${granter.name} changes ${target.name} weight -> ${weight}`)
   return true
 }
 
@@ -219,11 +215,9 @@ async function concurrentConflictingGrant(state) {
   await granter2.auto.append(encode({ addWriter: target.auto.local.id, weight: weight2 }))
 
   state.granted.add(hex)
-  const eff1 = Math.min(weight1, granterStanding(state, granter1))
-  const eff2 = Math.min(weight2, granterStanding(state, granter2))
   // whichever grant "wins" in the replicated system, it'll be at least this -
   // future grants must not undercut whichever of the two takes effect
-  state.weights.set(hex, Math.max(currentWeight(state, hex), eff1, eff2))
+  state.weights.set(hex, Math.max(currentWeight(state, hex), weight1, weight2))
   state.dirty.add(keyHex(granter1.auto))
   state.dirty.add(keyHex(granter2.auto))
   state.log(

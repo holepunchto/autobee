@@ -130,6 +130,8 @@ module.exports = class Autobee extends ReadyResource {
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
     this._ackRequired = false
+    this._approvalCheck = true
+    this._approvedPending = new Map()
     this._ackedHeads = new Map()
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
@@ -573,7 +575,8 @@ module.exports = class Autobee extends ReadyResource {
             continue
           }
 
-          if (!this._appendAck()) break
+          const approved = await this._appendApprovals()
+          if (!this._appendAck() && !approved) break
           this._needsUpdate = true
         }
 
@@ -871,6 +874,44 @@ module.exports = class Autobee extends ReadyResource {
     for (const core of opened) await core.close()
   }
 
+  // a pending promotion is approved internally: any writer whose own
+  // resolved standing covers the requested weight appends a null op carrying
+  // an approvals entry, which apply indexes as a grant (clamped to the
+  // carrier, so an unqualified approval confers nothing). the user only ever
+  // touches the original addWriter - the rest is engine plumbing
+  async _appendApprovals() {
+    if (!this.system.pendingChanged && !this._approvalCheck) return false
+    if (!this.writers.writable) return false
+    if (this.writers.localWriter.pending !== null) return false
+
+    this.system.pendingChanged = false
+    this._approvalCheck = false
+
+    const rec = await this.system.get(this.local.key)
+    const standing = currentWeight(rec)
+    if (standing <= 0) return false
+
+    const approvals = []
+    for await (const p of this.system.listPendingPromotions()) {
+      if (p.weight > standing) continue
+      const hex = b4a.toString(p.key, 'hex')
+      if ((this._approvedPending.get(hex) || 0) >= p.weight) continue
+      const target = await this.system.get(p.key)
+      if (!target || target.isRemoved || target.maxWeight >= p.weight) continue
+      approvals.push({ key: p.key, weight: p.weight })
+    }
+    if (!approvals.length) return false
+
+    for (const a of approvals) {
+      this._approvedPending.set(b4a.toString(a.key, 'hex'), a.weight)
+    }
+
+    const links = this.system.getLinks(this.local.key)
+    const t = Math.max(this._now(), this.system.timestamp)
+    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null, approvals)
+    return true
+  }
+
   // append a null value node to ack writer
   _appendAck() {
     if (!this._ackRequired) return false
@@ -1025,6 +1066,16 @@ module.exports = class Autobee extends ReadyResource {
     const userBatch = []
     for (const node of batch) {
       this.system.addNode(node)
+
+      if (node.approvals) {
+        for (const a of node.approvals) {
+          await this.system.addWriter(a.key, {
+            weight: a.weight,
+            coord: { key: node.key, length: node.length },
+            carrier: node.weight
+          })
+        }
+      }
 
       // compat: autobase nodes may be null (legacy null decodes to 0-length buffer)
       if (node.value && node.value.length) userBatch.push(node)
@@ -1337,6 +1388,7 @@ module.exports = class Autobee extends ReadyResource {
       this._workingBee.move(this.system.view)
     }
 
+    this._approvalCheck = true
     this.fastForwardTo = null
 
     // process any wakeup while fast-forward itself was in flight

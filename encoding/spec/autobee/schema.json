@@ -779,6 +779,12 @@
           "array": true,
           "type": "@autobee/trusted-head",
           "version": 1
+        },
+        {
+          "name": "approvals",
+          "array": true,
+          "type": "@autobee/approval",
+          "version": 1
         }
       ]
     },
@@ -830,6 +836,26 @@
           "name": "namespace",
           "required": false,
           "type": "fixed32",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "approval",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
           "version": 1
         }
       ]

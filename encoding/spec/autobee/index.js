@@ -896,15 +896,28 @@ const encoding31_7 = c.array(c.frame(encoding30))
 // @autobee/oplog-message-v3
 const encoding31 = {
   preencode(state, m) {
+    let flags =
+      (m.batch ? 1 : 0) |
+      (m.views ? 2 : 0) |
+      (m.optimistic ? 8 : 0) |
+      (m.value ? 16 : 0) |
+      (m.witness ? 32 : 0) |
+      (m.trusted ? 64 : 0) |
+      (m.approvals ? 128 : 0)
+    if (m.views) {
+      flags |= m.views.view ? 4 : 0
+    }
+
     c.uint.preencode(state, m.timestamp)
     encoding31_1.preencode(state, m.links)
-    state.end++ // max flag is 64 so always one byte
+    c.uint.preencode(state, flags)
 
     if (m.batch) encoding25.preencode(state, m.batch)
     if (m.views) encoding26_inline.preencode(state, m.views)
     if (m.value) c.buffer.preencode(state, m.value)
     if (m.witness) encoding31_6.preencode(state, m.witness)
     if (m.trusted) encoding31_7.preencode(state, m.trusted)
+    if (m.approvals) encoding31_8.preencode(state, m.approvals)
   },
   encode(state, m) {
     let flags =
@@ -913,7 +926,8 @@ const encoding31 = {
       (m.optimistic ? 8 : 0) |
       (m.value ? 16 : 0) |
       (m.witness ? 32 : 0) |
-      (m.trusted ? 64 : 0)
+      (m.trusted ? 64 : 0) |
+      (m.approvals ? 128 : 0)
     if (m.views) {
       flags |= m.views.view ? 4 : 0
     }
@@ -927,6 +941,7 @@ const encoding31 = {
     if (m.value) c.buffer.encode(state, m.value)
     if (m.witness) encoding31_6.encode(state, m.witness)
     if (m.trusted) encoding31_7.encode(state, m.trusted)
+    if (m.approvals) encoding31_8.encode(state, m.approvals)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -943,7 +958,8 @@ const encoding31 = {
       optimistic: (flags & 8) !== 0,
       value: (flags & 16) !== 0 ? c.buffer.decode(state) : null,
       witness: (flags & 32) !== 0 ? encoding31_6.decode(state) : null,
-      trusted: (flags & 64) !== 0 ? encoding31_7.decode(state) : null
+      trusted: (flags & 64) !== 0 ? encoding31_7.decode(state) : null,
+      approvals: (flags & 128) !== 0 ? encoding31_8.decode(state) : null
     }
   }
 }
@@ -1047,12 +1063,35 @@ const encoding33 = {
   }
 }
 
+// @autobee/approval
+const encoding34 = {
+  preencode(state, m) {
+    c.fixed32.preencode(state, m.key)
+    c.uint.preencode(state, m.weight)
+  },
+  encode(state, m) {
+    c.fixed32.encode(state, m.key)
+    c.uint.encode(state, m.weight)
+  },
+  decode(state) {
+    const r0 = c.fixed32.decode(state)
+    const r1 = c.uint.decode(state)
+
+    return {
+      key: r0,
+      weight: r1
+    }
+  }
+}
+
 // @autobee/system-info-v3.heads, deferred due to recusive use
 const encoding18_3 = c.array(encoding22)
 // @autobee/system-info-v3.indexers, deferred due to recusive use
 const encoding18_4 = encoding18_3
 // @autobee/oplog-message-v3.links, deferred due to recusive use
 const encoding31_1 = encoding18_3
+// @autobee/oplog-message-v3.approvals, deferred due to recusive use
+const encoding31_8 = c.array(encoding34)
 
 function setVersion(v) {
   version = v
@@ -1145,6 +1184,8 @@ function getEncoding(name) {
       return encoding32
     case '@autobee/manifest-data':
       return encoding33
+    case '@autobee/approval':
+      return encoding34
     default:
       throw new Error('Encoder not found ' + name)
   }

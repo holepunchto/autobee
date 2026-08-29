@@ -17,7 +17,7 @@ async function weightOf(auto, key) {
   return rec ? { max: rec.maxWeight, w: rec.weight } : null
 }
 
-test('gated grants - a grant clamps to the granter carrier weight', async function (t) {
+test('gated grants - a grant clamps until a qualified peer sees it', async function (t) {
   const g = await create(t)
   const m = await create(t, g.key)
   const b = await create(t, g.key)
@@ -28,8 +28,23 @@ test('gated grants - a grant clamps to the granter carrier weight', async functi
   await replicateAndSync(g, m, b)
 
   await m.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await replicateAndSync(m, b)
+  await b.append(encode({ msg: 'b-cites-the-clamp' }))
+  await replicateAndSync(m, b)
+
+  for (const [name, auto] of [
+    ['m', m],
+    ['b', b]
+  ]) {
+    const rec = await weightOf(auto, b.local.key)
+    t.is(rec.max, 2, `${name}: capability clamped to the granter standing`)
+    t.is(rec.w, 2, `${name}: citation resolves the clamped weight`)
+    t.is(await auto.system.pendingPromotion(b.local.key), 3, `${name}: the surplus is pending`)
+  }
+
   await replicateAndSync(g, m, b)
-  await b.append(encode({ msg: 'b-cites' }))
+  await replicateAndSync(g, m, b)
+  await b.append(encode({ msg: 'b-cites-the-approval' }))
   await replicateAndSync(g, m, b)
 
   for (const [name, auto] of [
@@ -38,12 +53,13 @@ test('gated grants - a grant clamps to the granter carrier weight', async functi
     ['b', b]
   ]) {
     const rec = await weightOf(auto, b.local.key)
-    t.is(rec.max, 2, `${name}: capability clamped to the granter standing`)
-    t.is(rec.w, 2, `${name}: citation resolves the clamped weight`)
+    t.is(rec.max, 3, `${name}: a qualified peer approved the pending promotion internally`)
+    t.is(rec.w, 3, `${name}: citation resolves the approved weight`)
+    t.is(await auto.system.pendingPromotion(b.local.key), 0, `${name}: pending cleared`)
   }
 })
 
-test('gated grants - a qualified ack elevates a clamped promotion', async function (t) {
+test('gated grants - the approval op is citable like any grant', async function (t) {
   const g = await create(t)
   const m = await create(t, g.key)
   const b = await create(t, g.key)
@@ -52,20 +68,22 @@ test('gated grants - a qualified ack elevates a clamped promotion', async functi
   await replicateAndSync(g, m, b)
   await m.append(encode({ addWriter: b.local.id, weight: 3 }))
   await replicateAndSync(g, m, b)
-
-  await g.append(encode({ addWriter: b.local.id, weight: 3 }))
-  await replicateAndSync(g, m, b)
-  await b.append(encode({ msg: 'b-cites-the-ack' }))
   await replicateAndSync(g, m, b)
 
+  const grants = await b.system.grants(b.local.key)
+  const approved = grants.find((x) => x.weight === 3)
+  t.ok(approved, 'the internal approval landed in the grant log')
+  t.ok(b4a.equals(approved.key, g.local.key), 'anchored at the qualified approver op')
+
+  await b.append(encode({ msg: 'claim' }))
+  await replicateAndSync(g, m, b)
   for (const [name, auto] of [
     ['g', g],
     ['m', m],
     ['b', b]
   ]) {
     const rec = await weightOf(auto, b.local.key)
-    t.is(rec.max, 3, `${name}: the qualified ack conferred the full weight`)
-    t.is(rec.w, 3, `${name}: citation resolves the acked weight`)
+    t.is(rec.w, 3, `${name}: witness citing the approval resolves everywhere`)
   }
 })
 
@@ -141,14 +159,15 @@ test('gated grants - weight above the genesis root cannot be minted', async func
   }
 })
 
-test('gated grants - a clamped grant records a pending promotion, the ack clears it', async function (t) {
+test('gated grants - an unfulfillable pending promotion persists and is listable', async function (t) {
   const g = await create(t)
   const m = await create(t, g.key)
   const b = await create(t, g.key)
 
   await g.append(encode({ addWriter: m.local.id, weight: 2 }))
   await replicateAndSync(g, m, b)
-  await m.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await m.append(encode({ addWriter: b.local.id, weight: 5 }))
+  await replicateAndSync(g, m, b)
   await replicateAndSync(g, m, b)
 
   for (const [name, auto] of [
@@ -156,27 +175,18 @@ test('gated grants - a clamped grant records a pending promotion, the ack clears
     ['m', m],
     ['b', b]
   ]) {
-    t.is(await auto.system.pendingPromotion(b.local.key), 3, `${name}: pending promotion recorded`)
+    t.is(
+      await auto.system.pendingPromotion(b.local.key),
+      5,
+      `${name}: nobody stands at 5, the request outlives every approval pass`
+    )
   }
 
   const listed = []
   for await (const entry of g.system.listPendingPromotions()) listed.push(entry)
   t.is(listed.length, 1, 'one pending promotion listed')
   t.ok(b4a.equals(listed[0].key, b.local.key), 'listed for the proposed writer')
-  t.is(listed[0].weight, 3, 'listed at the requested weight')
-
-  await g.append(encode({ addWriter: b.local.id, weight: 3 }))
-  await replicateAndSync(g, m, b)
-
-  for (const [name, auto] of [
-    ['g', g],
-    ['m', m],
-    ['b', b]
-  ]) {
-    t.is(await auto.system.pendingPromotion(b.local.key), 0, `${name}: pending cleared by the ack`)
-    const rec = await auto.system.get(b.local.key)
-    t.is(rec.maxWeight, 3, `${name}: ack conferred the weight`)
-  }
+  t.is(listed[0].weight, 5, 'listed at the requested weight')
 })
 
 test('gated grants - pending promotions are visible from a fast-forwarded boot snapshot', async function (t) {
@@ -188,7 +198,7 @@ test('gated grants - pending promotions are visible from a fast-forwarded boot s
 
   await g.append(encode({ addWriter: m.local.id, weight: 2 }))
   await replicateAndSync(g, m, b)
-  await m.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await m.append(encode({ addWriter: b.local.id, weight: 5 }))
   await replicateAndSync(g, m, b)
 
   for (let i = 0; i < 40; i++) await g.append(encode({ value: 'filler' + i }))
@@ -209,8 +219,8 @@ test('gated grants - pending promotions are visible from a fast-forwarded boot s
 
   t.is(
     await observer.system.pendingPromotion(b.local.key),
-    3,
-    'pending visible from state alone - no oplog replay needed to know who to ack'
+    5,
+    'pending visible from state alone - no oplog replay needed to know who to approve'
   )
   const listed = []
   for await (const entry of observer.system.listPendingPromotions()) listed.push(entry)
