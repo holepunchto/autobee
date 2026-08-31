@@ -11,9 +11,6 @@ const { Oplog } = require('../lib/encoding.js')
 const c = require('compact-encoding')
 const { replicate, sync } = require('./helpers')
 
-// only Bare is gated, it has no bare `path`/`fs/promises` to copy the fixture.
-// the stores are portable, `allowBackup` below turns off the CORESTORE device
-// file that would otherwise pin them to the machine that made them
 const IS_BARE = typeof global.Bare !== 'undefined'
 const skip = IS_BARE
 
@@ -414,11 +411,6 @@ test(
   }
 )
 
-// --- legacy oplog batch reconstruction -------------------------------------
-// hand-rolled v2 blocks, so these also cover the walk under Bare
-
-// counters[i] is block i's v2 `node.batch`: blocks of its batch left including
-// itself, so a batch of 3 is written 3, 2, 1. null means the peer lacks it
 function legacyCore(counters) {
   const blocks = counters.map((batch, i) => {
     if (batch === null) return null
@@ -452,7 +444,6 @@ function lengths(entry) {
 }
 
 test('migration - legacy head reconstructs the whole batch', async function (t) {
-  // block 0 is its own batch, blocks 1..3 are one batch of three
   const core = legacyCore([1, 3, 2, 1])
   const entry = await batchAt(core, 4)
 
@@ -496,7 +487,6 @@ test('migration - two adjacent legacy batches stay separate', async function (t)
 })
 
 test('migration - an inconsistent legacy counter ends the walk', async function (t) {
-  // block 0's counter puts its head at block 4, so it is not ours
   const core = legacyCore([5, 1])
   const entry = await batchAt(core, 2)
 
@@ -504,7 +494,6 @@ test('migration - an inconsistent legacy counter ends the walk', async function 
 })
 
 test('migration - an unreadable block leaves the legacy node unresolved', async function (t) {
-  // replay() reads wait: false, so an undownloaded block comes back null
   const core = legacyCore([1, null, 2, 1])
   t.is(await batchAt(core, 4, { wait: false }), null, 'missing batch member')
 
@@ -546,9 +535,6 @@ test('migration - a current head still uses the start it carries', async functio
   t.alike(core.reads, [2, 0, 1], 'members are read in one fan-out, no boundary probe')
 })
 
-// lib/migrations.js walks the same way on the boot path that re-applies a
-// legacy autobase's unindexed tail - those nodes go straight to _processBatch
-
 function legacyStore(counters) {
   const core = legacyCore(counters)
   core.ready = () => Promise.resolve()
@@ -580,7 +566,6 @@ test('migration - catchup does not pull in the previous batch', async function (
 })
 
 test('migration - catchup stops on an inconsistent legacy counter', async function (t) {
-  // block 0's counter puts its head at block 4, so it is not ours
   const batch = await writerBatch([5, 1], 2)
   t.alike(
     batch.map((n) => n.length),
