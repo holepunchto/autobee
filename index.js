@@ -1043,12 +1043,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.writers.attest(witnessed)
 
-    for (const { key, added, isAnchor } of changed) {
-      if (isAnchor) {
-        // no Writer/ActiveWriters tracking, but still wake anything linked to it
-        this.writers.triggers.trigger(b4a.toString(key, 'hex'), 1)
-        continue
-      }
+    for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }
