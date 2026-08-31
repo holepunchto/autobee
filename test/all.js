@@ -7,6 +7,7 @@ async function runTests() {
 
   test.pause()
 
+  await import('./anchor-ordering.js')
   await import('./basic.js')
   await import('./catchable-boot.js')
   await import('./batch.js')
