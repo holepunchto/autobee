@@ -5,10 +5,17 @@ const Hyperbee = require('hyperbee2')
 const { AutobeeEncryption } = require('autobee-encryption')
 
 const Autobee = require('../index.js')
+const topo = require('../lib/topo.js')
+const migrations = require('../lib/migrations.js')
+const { Oplog } = require('../lib/encoding.js')
+const c = require('compact-encoding')
 const { replicate, sync } = require('./helpers')
 
+// only Bare is gated, it has no bare `path`/`fs/promises` to copy the fixture.
+// the stores are portable, `allowBackup` below turns off the CORESTORE device
+// file that would otherwise pin them to the machine that made them
 const IS_BARE = typeof global.Bare !== 'undefined'
-const skip = IS_BARE || require('os').platform() !== 'linux'
+const skip = IS_BARE
 
 const path = skip ? null : require('path')
 const fs = skip ? null : require('fs/promises')
@@ -17,6 +24,8 @@ const FIXTURE = skip ? null : path.join(__dirname, 'fixtures/migration/autobase-
 const BASE_KEY = b4a.from('7f22e8f8460095e563eb47a71843a6be852bd8c800d27904eef26068149b921a', 'hex')
 const SECRET_KEY = b4a.alloc(32).fill('secret')
 const LEGACY_VIEW_NAME = 'log'
+
+const LEGACY_KEY = b4a.alloc(32).fill('legacy')
 
 const A_CONFIRMED = 200
 const B_CONFIRMED = 200
@@ -404,3 +413,182 @@ test(
     await sameContent(t, c, b, B_CONFIRMED, 'c vs b')
   }
 )
+
+// --- legacy oplog batch reconstruction -------------------------------------
+// hand-rolled v2 blocks, so these also cover the walk under Bare
+
+// counters[i] is block i's v2 `node.batch`: blocks of its batch left including
+// itself, so a batch of 3 is written 3, 2, 1. null means the peer lacks it
+function legacyCore(counters) {
+  const blocks = counters.map((batch, i) => {
+    if (batch === null) return null
+    return c.encode(Oplog, {
+      version: 2,
+      node: { heads: [], batch, value: b4a.from('v' + i) },
+      checkpoint: null,
+      digest: null,
+      optimistic: false,
+      trace: null
+    })
+  })
+
+  return {
+    key: LEGACY_KEY,
+    reads: [],
+    get(seq, opts) {
+      this.reads.push(seq)
+      if (seq < 0 || seq >= blocks.length) return Promise.resolve(null)
+      return Promise.resolve(blocks[seq])
+    }
+  }
+}
+
+function batchAt(core, length, opts = null) {
+  return topo.getOplogBatch(null, core, length, 7, 0, opts)
+}
+
+function lengths(entry) {
+  return entry.batch.map((n) => (n === null ? null : n.length))
+}
+
+test('migration - legacy head reconstructs the whole batch', async function (t) {
+  // block 0 is its own batch, blocks 1..3 are one batch of three
+  const core = legacyCore([1, 3, 2, 1])
+  const entry = await batchAt(core, 4)
+
+  t.alike(lengths(entry), [2, 3, 4], 'all three blocks of the batch are returned')
+  t.alike(
+    entry.batch.map((n) => n.value),
+    [b4a.from('v1'), b4a.from('v2'), b4a.from('v3')],
+    'batch is in oplog order, head last'
+  )
+  t.is(entry.batch[0].weight, 7, 'members carry the head pinned weight')
+})
+
+test('migration - legacy batch of one does not pull in the previous batch', async function (t) {
+  const core = legacyCore([1, 1])
+  const entry = await batchAt(core, 2)
+
+  t.alike(lengths(entry), [2], 'only the head')
+  t.alike(core.reads, [1, 0], 'one block past the head is probed to find the boundary')
+})
+
+test('migration - legacy batch spanning the whole core', async function (t) {
+  const core = legacyCore([3, 2, 1])
+  const entry = await batchAt(core, 3)
+
+  t.alike(lengths(entry), [1, 2, 3], 'walk stops at block 0')
+})
+
+test('migration - legacy head at seq 0', async function (t) {
+  const core = legacyCore([1])
+  const entry = await batchAt(core, 1)
+
+  t.alike(lengths(entry), [1], 'single block core')
+  t.alike(core.reads, [0], 'nothing below the head is probed')
+})
+
+test('migration - two adjacent legacy batches stay separate', async function (t) {
+  const core = legacyCore([2, 1, 3, 2, 1])
+
+  t.alike(lengths(await batchAt(core, 2)), [1, 2], 'first batch')
+  t.alike(lengths(await batchAt(core, 5)), [3, 4, 5], 'second batch')
+})
+
+test('migration - an inconsistent legacy counter ends the walk', async function (t) {
+  // block 0's counter puts its head at block 4, so it is not ours
+  const core = legacyCore([5, 1])
+  const entry = await batchAt(core, 2)
+
+  t.alike(lengths(entry), [2], 'only the head')
+})
+
+test('migration - an unreadable block leaves the legacy node unresolved', async function (t) {
+  // replay() reads wait: false, so an undownloaded block comes back null
+  const core = legacyCore([1, null, 2, 1])
+  t.is(await batchAt(core, 4, { wait: false }), null, 'missing batch member')
+
+  const boundary = legacyCore([null, 1])
+  t.is(await batchAt(boundary, 2, { wait: false }), null, 'missing boundary probe')
+})
+
+test('migration - an unreadable legacy head is unresolved', async function (t) {
+  const core = legacyCore([1, null])
+  t.is(await batchAt(core, 2, { wait: false }), null)
+})
+
+test('migration - a current head still uses the start it carries', async function (t) {
+  const core = {
+    key: LEGACY_KEY,
+    reads: [],
+    get(seq) {
+      this.reads.push(seq)
+      return Promise.resolve(
+        c.encode(Oplog, {
+          version: 3,
+          timestamp: 0,
+          links: [],
+          batch: seq === 2 ? { start: 2, end: 0 } : { start: 0, end: 2 - seq },
+          views: null,
+          optimistic: false,
+          value: b4a.from('v' + seq),
+          witness: null,
+          attestations: null,
+          trusted: null
+        })
+      )
+    }
+  }
+
+  const entry = await batchAt(core, 3)
+
+  t.alike(lengths(entry), [1, 2, 3], 'v3 head describes its own batch')
+  t.alike(core.reads, [2, 0, 1], 'members are read in one fan-out, no boundary probe')
+})
+
+// lib/migrations.js walks the same way on the boot path that re-applies a
+// legacy autobase's unindexed tail - those nodes go straight to _processBatch
+
+function legacyStore(counters) {
+  const core = legacyCore(counters)
+  core.ready = () => Promise.resolve()
+  return { get: () => core, core }
+}
+
+function writerBatch(counters, length) {
+  const store = legacyStore(counters)
+  return migrations.getWriterBatch(store, { key: LEGACY_KEY, length }, null, null)
+}
+
+test('migration - catchup rebuilds a whole legacy batch', async function (t) {
+  const batch = await writerBatch([1, 3, 2, 1], 4)
+
+  t.alike(
+    batch.map((n) => n.length),
+    [2, 3, 4],
+    'all three blocks are re-applied, not just the head'
+  )
+})
+
+test('migration - catchup does not pull in the previous batch', async function (t) {
+  const batch = await writerBatch([1, 1], 2)
+  t.alike(
+    batch.map((n) => n.length),
+    [2],
+    'only the head'
+  )
+})
+
+test('migration - catchup stops on an inconsistent legacy counter', async function (t) {
+  // block 0's counter puts its head at block 4, so it is not ours
+  const batch = await writerBatch([5, 1], 2)
+  t.alike(
+    batch.map((n) => n.length),
+    [2],
+    'only the head'
+  )
+})
+
+test('migration - catchup requires the head to be local', async function (t) {
+  await t.exception(writerBatch([1, null], 2), /exist locally/)
+})
