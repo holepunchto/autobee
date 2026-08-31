@@ -434,6 +434,7 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
+    await this._workingBee.core.ready()
     this._workingBee.move(view)
     this.bee.move(view)
 
