@@ -2,7 +2,7 @@ const test = require('brittle')
 const b4a = require('b4a')
 
 const Autobee = require('../index.js')
-const { create, replicateAndSync, encode, decode } = require('./helpers')
+const { create, replicateAndSync, encode, decode, encryptionKey } = require('./helpers')
 
 test('anchor - optimistic node linking an anchor sorts after the anchored node', async function (t) {
   let anchor = null
@@ -59,7 +59,8 @@ test('anchor - optimistic node linking an anchor sorts after the anchored node',
   const block = Autobee.encodeValue(encode({ resolve: true }), {
     optimistic: true,
     timestamp: 0,
-    links: [anchor]
+    links: [anchor],
+    encrypted: !!encryptionKey
   })
 
   const core = b.store.get({ name: 'anchor-ordering-response' })
