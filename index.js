@@ -177,6 +177,7 @@ module.exports = class Autobee extends ReadyResource {
     this._bootingAll.catch(safetyCatch)
 
     await this.bee.ready()
+    await this._workingBee.ready()
     await this._bootingState
 
     this._localSystemStart = this.system.bee.context.local.length
