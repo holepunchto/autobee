@@ -132,6 +132,7 @@ module.exports = class Autobee extends ReadyResource {
     this._ackRequired = false
     this._approvalCheck = true
     this._approvedPending = new Map()
+    this._prefetchingApprovals = false
     this._ackedHeads = new Map()
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
@@ -883,6 +884,25 @@ module.exports = class Autobee extends ReadyResource {
   // time - a flush-time stamp would be invisible to the LOCAL apply pass,
   // which consumes the pending node object before flush encodes it); the
   // null op below covers the idle case
+  // warm every read the next _collectApprovals will do, the moment a pending
+  // promotion is seen during apply - on a sparse post-fast-forward system bee
+  // these are real block downloads, so by append time everything is local
+  async _prefetchApprovals() {
+    if (this._prefetchingApprovals) return
+    this._prefetchingApprovals = true
+    try {
+      const rec = await this.system.get(this.local.key)
+      const standing = currentWeight(rec)
+      for (let weight = standing; weight >= 1; weight--) {
+        for (const key of await this.system.pendingAtWeight(weight)) {
+          await this.system.get(key)
+        }
+      }
+    } finally {
+      this._prefetchingApprovals = false
+    }
+  }
+
   async _collectApprovals() {
     if (!this.system.pendingChanged && !this._approvalCheck) return null
     if (!this.writers.writable) return null
@@ -895,13 +915,14 @@ module.exports = class Autobee extends ReadyResource {
     this._approvalCheck = false
 
     const approvals = []
-    for await (const p of this.system.listPendingPromotions()) {
-      if (p.weight > standing) continue
-      const hex = b4a.toString(p.key, 'hex')
-      if ((this._approvedPending.get(hex) || 0) >= p.weight) continue
-      const target = await this.system.get(p.key)
-      if (!target || target.isRemoved || target.maxWeight >= p.weight) continue
-      approvals.push({ key: p.key, weight: p.weight })
+    for (let weight = standing; weight >= 1; weight--) {
+      for (const key of await this.system.pendingAtWeight(weight)) {
+        const hex = b4a.toString(key, 'hex')
+        if ((this._approvedPending.get(hex) || 0) >= weight) continue
+        const target = await this.system.get(key)
+        if (!target || target.isRemoved || target.maxWeight >= weight) continue
+        approvals.push({ key, weight })
+      }
     }
     if (!approvals.length) return null
 
@@ -1102,6 +1123,8 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const changed = await this.system.flush(batch, this._workingBee)
+
+    if (this.system.pendingChanged) this._prefetchApprovals().catch(safetyCatch)
 
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
