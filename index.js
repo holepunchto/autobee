@@ -892,10 +892,9 @@ module.exports = class Autobee extends ReadyResource {
       const prefetch = []
       const rec = await this.system.get(this.local.key, { activeRequests })
       const standing = currentWeight(rec)
-      for (let weight = standing; weight >= 1; weight--) {
-        for (const key of await this.system.pendingAtWeight(weight, { activeRequests })) {
-          prefetch.push(this.system.get(key, { activeRequests }).catch(safetyCatch))
-        }
+      for await (const p of this.system.listPendingPromotions({ activeRequests })) {
+        if (p.weight > standing) continue
+        prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
       }
       await Promise.allSettled(prefetch)
     } finally {
@@ -918,10 +917,9 @@ module.exports = class Autobee extends ReadyResource {
     const approvals = []
     const approving = []
 
-    for (let weight = standing; weight >= 1; weight--) {
-      for (const key of await this.system.pendingAtWeight(weight, { activeRequests })) {
-        approving.push(fetchApproval.call(this, key, weight, approvals))
-      }
+    for await (const p of this.system.listPendingPromotions({ activeRequests })) {
+      if (p.weight > standing) continue
+      approving.push(fetchApproval.call(this, p.key, p.weight, approvals))
     }
     if (!approving.length) return null
 
