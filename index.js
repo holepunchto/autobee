@@ -853,15 +853,18 @@ module.exports = class Autobee extends ReadyResource {
 
   async _bumpMigratedWriters() {
     const opened = new Set()
+    let updated = false
 
     for (const batch of this._catchupMigratedNodes) {
       await this._processBatch(batch)
+      updated = true
       for (const node of batch) {
         if (node.from) opened.add(node.from)
       }
     }
 
     for (const core of opened) await core.close()
+    return updated
   }
 
   // append a null value node to ack writer
@@ -899,8 +902,9 @@ module.exports = class Autobee extends ReadyResource {
 
   async _bumpPendingWriters() {
     if (this._catchupMigratedNodes !== null) {
-      await this._bumpMigratedWriters()
+      const updated = await this._bumpMigratedWriters()
       this._catchupMigratedNodes = null
+      if (updated) return true
     }
 
     // apply the best next node to keep the prefix stable
