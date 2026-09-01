@@ -132,6 +132,7 @@ module.exports = class Autobee extends ReadyResource {
     this._ackRequired = false
     this._approvalCheck = true
     this._approvedPending = new Map()
+    this._approvalRequests = []
     this._prefetchingApprovals = false
     this._ackedHeads = new Map()
     this._updateLocalCore = null
@@ -246,6 +247,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    Hypercore.destroyRequests(this._approvalRequests, null)
     if (this._bootWait !== null) this._bootWait.resolve()
     if (this._notifyHandler) this._notifyHandler.destroy()
     if (this._draining) {
@@ -580,10 +582,6 @@ module.exports = class Autobee extends ReadyResource {
           this._needsUpdate = true
         }
 
-        // approvals run once, at the end, so the collect captures every
-        // pending the whole drain produced - flushLocal gives the appended
-        // node its apply turn. acks cannot move here: applying one ack can
-        // owe the next (the optimistic cascade), which only the loop closes
         if (!this._interrupting && (await this._appendApprovals())) {
           this._needsUpdate = true
         }
@@ -882,28 +880,19 @@ module.exports = class Autobee extends ReadyResource {
     for (const core of opened) await core.close()
   }
 
-  // a pending promotion is approved internally: any writer whose own
-  // resolved standing covers the requested weight carries an approvals entry
-  // on its next flushed node, which apply indexes as a grant (clamped to the
-  // carrier, so an unqualified approval confers nothing). the user only ever
-  // touches the original addWriter - the rest is engine plumbing. approvals
-  // piggyback the next user append where one happens (collected at append
-  // time - a flush-time stamp would be invisible to the LOCAL apply pass,
-  // which consumes the pending node object before flush encodes it); the
-  // null op below covers the idle case
-  // warm every read the next _collectApprovals will do, the moment a pending
-  // promotion is seen during apply - on a sparse post-fast-forward system bee
-  // these are real block downloads, so by append time everything is local
   async _prefetchApprovals() {
     if (this._prefetchingApprovals) return
     this._prefetchingApprovals = true
+
+    const activeRequests = this._approvalRequests
+
     try {
       const prefetch = []
-      const rec = await this.system.get(this.local.key)
+      const rec = await this.system.get(this.local.key, { activeRequests })
       const standing = currentWeight(rec)
       for (let weight = standing; weight >= 1; weight--) {
-        for (const key of await this.system.pendingAtWeight(weight)) {
-          prefetch.push(this.system.get(key).catch(safetyCatch))
+        for (const key of await this.system.pendingAtWeight(weight, { activeRequests })) {
+          prefetch.push(this.system.get(key, { activeRequests }).catch(safetyCatch))
         }
       }
       await Promise.allSettled(prefetch)
@@ -916,7 +905,8 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.system.pendingChanged && !this._approvalCheck) return null
     if (!this.writers.writable) return null
 
-    const rec = await this.system.get(this.local.key)
+    const activeRequests = this._approvalRequests
+    const rec = await this.system.get(this.local.key, { activeRequests })
     const standing = currentWeight(rec)
     if (standing <= 0) return null
 
@@ -927,13 +917,19 @@ module.exports = class Autobee extends ReadyResource {
     const approving = []
 
     for (let weight = standing; weight >= 1; weight--) {
-      for (const key of await this.system.pendingAtWeight(weight)) {
+      for (const key of await this.system.pendingAtWeight(weight, { activeRequests })) {
         approving.push(fetchApproval.call(this, key, weight, approvals))
       }
     }
     if (!approving.length) return null
 
-    await Promise.all(approving)
+    try {
+      await Promise.all(approving)
+    } catch (err) {
+      if (this._interrupting) return null
+      throw err
+    }
+
     if (!approvals.length) return null
 
     for (const a of approvals) {
@@ -945,7 +941,7 @@ module.exports = class Autobee extends ReadyResource {
     async function fetchApproval(key, weight, approvals) {
       const hex = b4a.toString(key, 'hex')
       if ((this._approvedPending.get(hex) || 0) >= weight) return
-      const target = await this.system.get(key)
+      const target = await this.system.get(key, { activeRequests })
       if (!target || target.isRemoved || target.maxWeight >= weight) return
       approvals.push({ key, weight })
     }
