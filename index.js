@@ -723,13 +723,15 @@ module.exports = class Autobee extends ReadyResource {
   async readOplog(core, length, opts = null) {
     await core.ready()
 
+    const { conservative = false, timeout } = opts === null ? {} : opts
+
     const target = length >= 0 ? length : core.length
     if (target === 0) return null
 
     // conservative: only proceed when a connected peer can serve the head whole
-    if (opts && opts.conservative && core.remoteContiguousLength < target) return null
+    if (conservative && core.remoteContiguousLength < target) return null
 
-    const buf = await core.get(target - 1, opts)
+    const buf = await core.get(target - 1, { timeout })
     if (buf === null) return null
 
     let op = encoding.decodeOplog(buf)
@@ -737,7 +739,7 @@ module.exports = class Autobee extends ReadyResource {
     // legacy nodes always inflate, but only indexers carry views - callers
     // that need system info must check op.views
     if (op.version < 3) {
-      op = await migrations.inflateLegacyOplog(buf, core, target - 1, opts)
+      op = await migrations.inflateLegacyOplog(buf, core, target - 1, timeout)
     }
 
     return {
