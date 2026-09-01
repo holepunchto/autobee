@@ -454,6 +454,9 @@ const encoding16 = {
 
 const encoding17 = external0.SystemWriterV0
 
+// @autobee/system-info-v3.pending
+const encoding18_5 = encoding10_1
+
 // @autobee/system-info-v3
 const encoding18 = {
   preencode(state, m) {
@@ -461,12 +464,13 @@ const encoding18 = {
     c.uint.preencode(state, m.flushes)
     encoding22.preencode(state, m.view)
     encoding18_3.preencode(state, m.heads)
-    state.end++ // max flag is 1 so always one byte
+    state.end++ // max flag is 2 so always one byte
 
     if (m.indexers) encoding18_4.preencode(state, m.indexers)
+    if (m.pending) encoding18_5.preencode(state, m.pending)
   },
   encode(state, m) {
-    const flags = m.indexers ? 1 : 0
+    const flags = (m.indexers ? 1 : 0) | (m.pending ? 2 : 0)
 
     c.uint.encode(state, m.timestamp)
     c.uint.encode(state, m.flushes)
@@ -475,6 +479,7 @@ const encoding18 = {
     c.uint.encode(state, flags)
 
     if (m.indexers) encoding18_4.encode(state, m.indexers)
+    if (m.pending) encoding18_5.encode(state, m.pending)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -490,7 +495,8 @@ const encoding18 = {
       flushes: r1,
       view: r2,
       heads: r3,
-      indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null
+      indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null,
+      pending: (flags & 2) !== 0 ? encoding18_5.decode(state) : null
     }
   }
 }

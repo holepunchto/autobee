@@ -131,6 +131,7 @@ module.exports = class Autobee extends ReadyResource {
     this._needsUpdate = false
     this._ackRequired = false
     this._approvalCheck = true
+    this._approvalsCheckedAt = []
     this._approvedPending = new Map()
     this._approvalRequests = []
     this._prefetchingApprovals = false
@@ -892,6 +893,7 @@ module.exports = class Autobee extends ReadyResource {
       const prefetch = []
       const rec = await this.system.get(this.local.key, { activeRequests })
       const standing = currentWeight(rec)
+      if (standing <= 0 || !this._pendingWork()) return
       for await (const p of this.system.listPendingPromotions({ activeRequests })) {
         if (Math.min(standing, p.weight) <= 0) continue
         prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
@@ -901,6 +903,16 @@ module.exports = class Autobee extends ReadyResource {
     } finally {
       this._prefetchingApprovals = false
     }
+  }
+
+  // a request above our standing is still work (we anchor the partial), so
+  // the scan is not capped at standing - only the check-off below is
+  _pendingWork() {
+    const digest = this.system.pendingDigest
+    for (let w = 1; w <= digest.length; w++) {
+      if (digest[w - 1] > (this._approvalsCheckedAt[w - 1] || 0)) return true
+    }
+    return false
   }
 
   async _collectApprovals() {
@@ -915,14 +927,26 @@ module.exports = class Autobee extends ReadyResource {
     this.system.pendingChanged = false
     this._approvalCheck = false
 
+    if (!this._pendingWork()) return null
+    const digest = this.system.pendingDigest.slice(0, standing)
+
     const approvals = []
     const approving = []
 
     for await (const p of this.system.listPendingPromotions({ activeRequests })) {
       const amount = Math.min(standing, p.weight)
       if (amount <= 0) continue
+      if (p.flushes <= (this._approvalsCheckedAt[p.weight - 1] || 0)) continue
       approving.push(fetchApproval.call(this, p.key, amount, approvals))
     }
+
+    for (let w = 1; w <= digest.length; w++) {
+      while (this._approvalsCheckedAt.length < w) this._approvalsCheckedAt.push(0)
+      if (digest[w - 1] > this._approvalsCheckedAt[w - 1]) {
+        this._approvalsCheckedAt[w - 1] = digest[w - 1]
+      }
+    }
+
     if (!approving.length) return null
 
     try {
