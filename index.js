@@ -576,8 +576,15 @@ module.exports = class Autobee extends ReadyResource {
             continue
           }
 
-          const approved = await this._appendApprovals()
-          if (!this._appendAck() && !approved) break
+          if (!this._appendAck()) break
+          this._needsUpdate = true
+        }
+
+        // approvals run once, at the end, so the collect captures every
+        // pending the whole drain produced - flushLocal gives the appended
+        // node its apply turn. acks cannot move here: applying one ack can
+        // owe the next (the optimistic cascade), which only the loop closes
+        if (!this._interrupting && (await this._appendApprovals())) {
           this._needsUpdate = true
         }
 
@@ -891,13 +898,15 @@ module.exports = class Autobee extends ReadyResource {
     if (this._prefetchingApprovals) return
     this._prefetchingApprovals = true
     try {
+      const prefetch = []
       const rec = await this.system.get(this.local.key)
       const standing = currentWeight(rec)
       for (let weight = standing; weight >= 1; weight--) {
         for (const key of await this.system.pendingAtWeight(weight)) {
-          await this.system.get(key)
+          prefetch.push(this.system.get(key).catch(safetyCatch))
         }
       }
+      await Promise.allSettled(prefetch)
     } finally {
       this._prefetchingApprovals = false
     }
@@ -915,15 +924,16 @@ module.exports = class Autobee extends ReadyResource {
     this._approvalCheck = false
 
     const approvals = []
+    const approving = []
+
     for (let weight = standing; weight >= 1; weight--) {
       for (const key of await this.system.pendingAtWeight(weight)) {
-        const hex = b4a.toString(key, 'hex')
-        if ((this._approvedPending.get(hex) || 0) >= weight) continue
-        const target = await this.system.get(key)
-        if (!target || target.isRemoved || target.maxWeight >= weight) continue
-        approvals.push({ key, weight })
+        approving.push(fetchApproval.call(this, key, weight, approvals))
       }
     }
+    if (!approving.length) return null
+
+    await Promise.all(approving)
     if (!approvals.length) return null
 
     for (const a of approvals) {
@@ -931,11 +941,18 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     return approvals
+
+    async function fetchApproval(key, weight, approvals) {
+      const hex = b4a.toString(key, 'hex')
+      if ((this._approvedPending.get(hex) || 0) >= weight) return
+      const target = await this.system.get(key)
+      if (!target || target.isRemoved || target.maxWeight >= weight) return
+      approvals.push({ key, weight })
+    }
   }
 
   async _appendApprovals() {
     if (!this.writers.writable) return false
-    if (this.writers.localWriter.pending !== null) return false
 
     const approvals = await this._collectApprovals()
     if (!approvals) return false
@@ -1226,6 +1243,15 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
+    // pull everything appliable into apply before writing: flushLocal only
+    // flushes PROCESSED nodes, and a node appended after the drain loop
+    // exits (an approval, or an ack stranded by a fast-forward break) would
+    // otherwise sit unprocessed in the local queue with no drain guaranteed
+    // to follow
+    while (!this._interrupting && (await this._bumpPendingWriters())) {
+      this._needsUpdate = true
+    }
+
     await this.writers.flushLocal({
       flushes: this._localFlushes,
       system: {
