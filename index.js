@@ -996,14 +996,14 @@ module.exports = class Autobee extends ReadyResource {
     return true
   }
 
-  async _bumpPendingWriters() {
-    if (this._catchupMigratedNodes !== null) {
+  async _bumpPendingWriters({ local = false } = {}) {
+    if (!local && this._catchupMigratedNodes !== null) {
       await this._bumpMigratedWriters()
       this._catchupMigratedNodes = null
     }
 
     // apply the best next node to keep the prefix stable
-    const next = await this.writers.nextPendingNode()
+    const next = await this.writers.nextPendingNode({ local })
     if (next === null) return false
 
     const { writer: w, batch } = next
@@ -1243,12 +1243,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
-    // pull everything appliable into apply before writing: flushLocal only
-    // flushes PROCESSED nodes, and a node appended after the drain loop
-    // exits (an approval, or an ack stranded by a fast-forward break) would
-    // otherwise sit unprocessed in the local queue with no drain guaranteed
-    // to follow
-    while (!this._interrupting && (await this._bumpPendingWriters())) {
+    // pull any available local nodes in before flushing
+    while (!this._interrupting && (await this._bumpPendingWriters({ local: true }))) {
       this._needsUpdate = true
     }
 
