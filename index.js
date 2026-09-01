@@ -901,6 +901,8 @@ module.exports = class Autobee extends ReadyResource {
     if (this._catchupMigratedNodes !== null) {
       await this._bumpMigratedWriters()
       this._catchupMigratedNodes = null
+      // the replayed catchup must be published like any other bump
+      return true
     }
 
     // apply the best next node to keep the prefix stable
