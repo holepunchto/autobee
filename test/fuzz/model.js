@@ -254,7 +254,22 @@ async function removeWriterAction(state) {
   })
   if (!removable.length) return false
 
-  const target = state.rng.pick(removable)
+  // prefer removing a writer whose approvals anchor someone's standing, so
+  // chain verification through a removed approver stays under fire
+  const anchorAuthors = []
+  for (const e of removable) {
+    for (const other of state.pool) {
+      if (other === e) continue
+      const hint = await e.auto.system.grantHint(other.auto.local.key)
+      if (hint && b4a.equals(hint.key, e.auto.local.key)) {
+        anchorAuthors.push(e)
+        break
+      }
+    }
+  }
+
+  const pickFrom = anchorAuthors.length ? anchorAuthors : removable
+  const target = state.rng.pick(pickFrom)
   const hex = keyHex(target.auto)
 
   const removers = writable.filter((e) => e !== target)
@@ -265,7 +280,9 @@ async function removeWriterAction(state) {
   state.retired.add(hex)
   state.granted.delete(hex)
   state.dirty.add(keyHex(remover.auto))
-  state.log(`${remover.name} removes ${target.name}`)
+  state.log(
+    `${remover.name} removes ${target.name}${anchorAuthors.includes(target) ? ' (an anchor author)' : ''}`
+  )
   return true
 }
 

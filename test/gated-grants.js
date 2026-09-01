@@ -324,3 +324,75 @@ test('gated grants - pending promotions are visible from a fast-forwarded boot s
   for await (const entry of observer.system.listPendingPromotions()) listed.push(entry)
   t.is(listed.length, 1, 'listable for post-fast-forward granting')
 })
+
+test('gated grants - a removed approver anchor stays verifiable', async function (t) {
+  const g = await create(t)
+  const a = await create(t, g.key)
+  const b = await create(t, g.key)
+
+  await g.append(encode({ addWriter: a.local.id, weight: 3 }))
+  await replicateAndSync(g, a, b)
+  await a.append(encode({ msg: 'a-cites' }))
+  await replicateAndSync(g, a, b)
+
+  await a.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await replicateAndSync(g, a, b)
+  await replicateAndSync(g, a, b)
+
+  const hint = await b.system.grantHint(b.local.key)
+  t.ok(b4a.equals(hint.key, a.local.key), 'anchored by a')
+
+  await g.append(encode({ removeWriter: a.local.id }))
+  await replicateAndSync(g, a, b)
+
+  await b.append(encode({ msg: 'claim' }))
+  await replicateAndSync(g, b)
+
+  for (const [name, auto] of [
+    ['g', g],
+    ['b', b]
+  ]) {
+    const rec = await auto.system.get(b.local.key)
+    t.is(rec.weight, 3, `${name}: citation through the removed approver chain verifies`)
+  }
+})
+
+// a removal racing the anchor does NOT doom a referenced claim: the citation
+// is a hard dep, so the anchor gains referrals and applies past the removal
+// length - the hammer stops unreferenced future work, not cited history
+test('gated grants - a claim citing an anchor that raced the removal still lands', async function (t) {
+  const g = await create(t)
+  const a = await create(t, g.key)
+  const b = await create(t, g.key)
+
+  await g.append(encode({ addWriter: a.local.id, weight: 3 }))
+  await g.append(encode({ addWriter: b.local.id, weight: 1 }))
+  await replicateAndSync(g, a, b)
+  await a.append(encode({ msg: 'a-cites' }))
+  await replicateAndSync(g, a, b)
+  await b.append(encode({ msg: 'b-cites' }))
+  await replicateAndSync(g, a, b)
+
+  await a.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await replicateAndSync(a, b)
+  await replicateAndSync(a, b)
+  await b.append(encode({ msg: 'doomed claim' }))
+  await replicateAndSync(a, b)
+
+  await g.append(encode({ removeWriter: a.local.id }))
+  await replicateAndSync(g, a, b)
+  await replicateAndSync(g, a, b)
+
+  const orders = new Set()
+  for (const [name, auto] of [
+    ['g', g],
+    ['a', a],
+    ['b', b]
+  ]) {
+    const rec = await auto.system.get(b.local.key)
+    t.is(rec.weight, 3, `${name}: the referenced anchor applied past the removal`)
+    const nodes = await auto.replay()
+    orders.add(nodes.map((n) => `${b4a.toString(n.key, 'hex').slice(0, 8)}:${n.length}`).join(' '))
+  }
+  t.is(orders.size, 1, 'every peer converges on the same order')
+})
