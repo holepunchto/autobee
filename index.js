@@ -1182,7 +1182,7 @@ module.exports = class Autobee extends ReadyResource {
   // legacy: ungated boot straight onto a system head
   async _bootFromSystem(system) {
     try {
-      const ff = new FastForward(this, system, null, { timeout: FastForward.DEFAULT_TIMEOUT })
+      const ff = new FastForward(this, system, { timeout: FastForward.DEFAULT_TIMEOUT })
       return await this._runFastForward(ff)
     } catch (err) {
       safetyCatch(err)
@@ -1322,7 +1322,7 @@ module.exports = class Autobee extends ReadyResource {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
-    const { head, tip, migrate } = this.fastForwardTo
+    const { head, migrate } = this.fastForwardTo
 
     const from = this.system.bee.head()
     const to = head
@@ -1362,28 +1362,6 @@ module.exports = class Autobee extends ReadyResource {
     this.stats.fastForwards++
     this.emit('move-to', to, from)
     this.ff.resolve({ to, from })
-
-    // tip is null during boot
-    if (!tip) return
-
-    try {
-      await this._reapply(tip)
-    } catch (err) {
-      throw err
-    }
-  }
-
-  async _reapply({ system, verified }) {
-    const changes = this._hasUpdate ? new UpdateChanges(this) : null
-    if (changes) changes.track()
-
-    const sys = this.system.bee.checkout(system)
-    const t = await topo.rollback(this, sys, verified)
-    await sys.close()
-
-    if (t !== null) await this.applyBacklog(t.tip)
-
-    return this._update(changes)
   }
 
   replay() {
