@@ -797,7 +797,7 @@ const encoding26_inline = {
   }
 }
 
-// @autobee/witness
+// @autobee/witness-data
 const encoding27 = {
   preencode(state, m) {
     c.uint.preencode(state, m.weight)
@@ -818,47 +818,53 @@ const encoding27 = {
   }
 }
 
-// @autobee/grant
+// @autobee/witness.data
+const encoding28_1 = c.frame(encoding27)
+
+// @autobee/witness
 const encoding28 = {
   preencode(state, m) {
+    c.uint.preencode(state, m.pointer)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.data) encoding28_1.preencode(state, m.data)
+  },
+  encode(state, m) {
+    const flags = m.data ? 1 : 0
+
+    c.uint.encode(state, m.pointer)
+    c.uint.encode(state, flags)
+
+    if (m.data) encoding28_1.encode(state, m.data)
+  },
+  decode(state) {
+    const r0 = c.uint.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      pointer: r0,
+      data: (flags & 1) !== 0 ? encoding28_1.decode(state) : null
+    }
+  }
+}
+
+// @autobee/approval
+const encoding29 = {
+  preencode(state, m) {
     c.fixed32.preencode(state, m.key)
-    c.uint.preencode(state, m.length)
     c.uint.preencode(state, m.weight)
   },
   encode(state, m) {
     c.fixed32.encode(state, m.key)
-    c.uint.encode(state, m.length)
     c.uint.encode(state, m.weight)
   },
   decode(state) {
     const r0 = c.fixed32.decode(state)
     const r1 = c.uint.decode(state)
-    const r2 = c.uint.decode(state)
 
     return {
       key: r0,
-      length: r1,
-      weight: r2
-    }
-  }
-}
-
-// @autobee/system-grants.grants
-const encoding29_0 = c.array(encoding28)
-
-// @autobee/system-grants
-const encoding29 = {
-  preencode(state, m) {
-    encoding29_0.preencode(state, m.grants)
-  },
-  encode(state, m) {
-    encoding29_0.encode(state, m.grants)
-  },
-  decode(state) {
-    const r0 = encoding29_0.decode(state)
-
-    return {
-      grants: r0
+      weight: r1
     }
   }
 }
@@ -889,9 +895,11 @@ const encoding30 = {
 }
 
 // @autobee/oplog-message-v3.witness
-const encoding31_6 = c.frame(encoding27)
+const encoding31_6 = c.frame(encoding28)
 // @autobee/oplog-message-v3.trusted
 const encoding31_7 = c.array(c.frame(encoding30))
+// @autobee/oplog-message-v3.approvals
+const encoding31_8 = c.array(encoding29)
 
 // @autobee/oplog-message-v3
 const encoding31 = {
@@ -1063,35 +1071,12 @@ const encoding33 = {
   }
 }
 
-// @autobee/approval
-const encoding34 = {
-  preencode(state, m) {
-    c.fixed32.preencode(state, m.key)
-    c.uint.preencode(state, m.weight)
-  },
-  encode(state, m) {
-    c.fixed32.encode(state, m.key)
-    c.uint.encode(state, m.weight)
-  },
-  decode(state) {
-    const r0 = c.fixed32.decode(state)
-    const r1 = c.uint.decode(state)
-
-    return {
-      key: r0,
-      weight: r1
-    }
-  }
-}
-
 // @autobee/system-info-v3.heads, deferred due to recusive use
 const encoding18_3 = c.array(encoding22)
 // @autobee/system-info-v3.indexers, deferred due to recusive use
 const encoding18_4 = encoding18_3
 // @autobee/oplog-message-v3.links, deferred due to recusive use
 const encoding31_1 = encoding18_3
-// @autobee/oplog-message-v3.approvals, deferred due to recusive use
-const encoding31_8 = c.array(encoding34)
 
 function setVersion(v) {
   version = v
@@ -1170,11 +1155,11 @@ function getEncoding(name) {
       return encoding25
     case '@autobee/views':
       return encoding26
-    case '@autobee/witness':
+    case '@autobee/witness-data':
       return encoding27
-    case '@autobee/grant':
+    case '@autobee/witness':
       return encoding28
-    case '@autobee/system-grants':
+    case '@autobee/approval':
       return encoding29
     case '@autobee/trusted-head':
       return encoding30
@@ -1184,8 +1169,6 @@ function getEncoding(name) {
       return encoding32
     case '@autobee/manifest-data':
       return encoding33
-    case '@autobee/approval':
-      return encoding34
     default:
       throw new Error('Encoder not found ' + name)
   }

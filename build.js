@@ -229,7 +229,7 @@ auto.register({
 })
 
 auto.register({
-  name: 'witness',
+  name: 'witness-data',
   fields: [
     {
       name: 'weight',
@@ -245,34 +245,28 @@ auto.register({
 })
 
 auto.register({
+  name: 'witness',
+  fields: [
+    {
+      name: 'pointer',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'data',
+      type: '@autobee/witness-data',
+      required: false
+    }
+  ]
+})
+
+auto.register({
   name: 'approval',
   compact: true,
   fields: [
     {
       name: 'key',
       type: 'fixed32',
-      required: true
-    },
-    {
-      name: 'weight',
-      type: 'uint',
-      required: true
-    }
-  ]
-})
-
-auto.register({
-  name: 'grant',
-  compact: true,
-  fields: [
-    {
-      name: 'key',
-      type: 'fixed32',
-      required: true
-    },
-    {
-      name: 'length',
-      type: 'uint',
       required: true
     },
     {

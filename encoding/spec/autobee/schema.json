@@ -643,7 +643,7 @@
       ]
     },
     {
-      "name": "witness",
+      "name": "witness-data",
       "namespace": "autobee",
       "compact": false,
       "flagsPosition": -1,
@@ -663,7 +663,27 @@
       ]
     },
     {
-      "name": "grant",
+      "name": "witness",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "pointer",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "data",
+          "required": false,
+          "type": "@autobee/witness-data",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "approval",
       "namespace": "autobee",
       "compact": true,
       "flagsPosition": -1,
@@ -675,30 +695,9 @@
           "version": 1
         },
         {
-          "name": "length",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
           "name": "weight",
           "required": true,
           "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "system-grants",
-      "namespace": "autobee",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "grants",
-          "required": true,
-          "array": true,
-          "type": "@autobee/grant",
           "version": 1
         }
       ]
@@ -836,26 +835,6 @@
           "name": "namespace",
           "required": false,
           "type": "fixed32",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "approval",
-      "namespace": "autobee",
-      "compact": true,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "key",
-          "required": true,
-          "type": "fixed32",
-          "version": 1
-        },
-        {
-          "name": "weight",
-          "required": true,
-          "type": "uint",
           "version": 1
         }
       ]

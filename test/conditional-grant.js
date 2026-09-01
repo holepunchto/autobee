@@ -87,10 +87,12 @@ async function promoteScenario(t, variant) {
 
   let conferA = null
   if (variant === 'app') {
+    const bootAt = g.local.length + 1
     await g.append(encode({ appBootstrapAdmin: true }))
-    const boot = { key: b4a.toString(g.local.key, 'hex'), length: g.local.length }
+    const boot = { key: b4a.toString(g.local.key, 'hex'), length: bootAt }
+    const conferAt = g.local.length + 1
     await g.append(encode({ appPromote: b4a.toString(a.local.key, 'hex'), cite: boot }))
-    conferA = { key: b4a.toString(g.local.key, 'hex'), length: g.local.length }
+    conferA = { key: b4a.toString(g.local.key, 'hex'), length: conferAt }
   }
 
   await g.append(encode({ addWriter: a.local.id, weight: 3 }))

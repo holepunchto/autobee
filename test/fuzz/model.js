@@ -344,7 +344,7 @@ async function embedWitness(state, claimant, witness, how) {
     { start: 0, end: 0 },
     links,
     false,
-    witness
+    { pointer: 0, data: witness }
   )
   await auto._bump()
 
@@ -360,7 +360,7 @@ async function buggyClaimInflate(state) {
   if (!writable.length) return false
 
   const claimant = state.rng.pick(writable)
-  const grant = await claimant.auto.system.strongestGrant(claimant.auto.local.key)
+  const grant = await claimant.auto.system.grantHint(claimant.auto.local.key)
   if (!grant) return false
 
   const weight = unbackableWeight(state)
@@ -383,11 +383,12 @@ async function buggyClaimNakedLink(state) {
   const heads = auto.system.getLinks(auto.local.key)
   if (!heads.length) return false
 
+  const hint = await auto.system.grantHint(auto.local.key)
+
   for (const head of heads) {
     const link = { key: head.key, length: head.length }
-    // make sure the fixture really is a non-grant, otherwise it is testing
-    // nothing (a head can happen to be the op that granted us)
-    if ((await auto.system.grantedWeight(auto.local.key, link)) !== 0) continue
+    // a head can happen to be the op that anchored us - skip, that tests nothing
+    if (hint && hint.length === link.length && b4a.equals(hint.key, link.key)) continue
 
     const weight = state.rng.int(1, state.config.maxWeight)
     return embedWitness(state, claimant, { weight, link }, `naked link, claim=${weight}`)
@@ -408,7 +409,7 @@ async function buggyClaimForeignGrant(state) {
   const others = state.pool.filter((e) => e !== claimant)
   while (others.length) {
     const other = others.splice(state.rng.int(0, others.length - 1), 1)[0]
-    const grant = await auto.system.strongestGrant(other.auto.local.key)
+    const grant = await auto.system.grantHint(other.auto.local.key)
     if (!grant) continue
 
     return embedWitness(

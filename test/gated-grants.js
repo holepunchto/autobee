@@ -70,9 +70,8 @@ test('gated grants - the approval op is citable like any grant', async function 
   await replicateAndSync(g, m, b)
   await replicateAndSync(g, m, b)
 
-  const grants = await b.system.grants(b.local.key)
-  const approved = grants.find((x) => x.weight === 3)
-  t.ok(approved, 'the internal approval landed in the grant log')
+  const approved = await b.system.grantHint(b.local.key)
+  t.ok(approved && approved.weight === 3, 'the internal approval landed as the grant hint')
   t.ok(b4a.equals(approved.key, g.local.key), 'anchored at the qualified approver op')
 
   await b.append(encode({ msg: 'claim' }))
@@ -187,9 +186,8 @@ test('gated grants - the approver indexes its own approval like every remote', a
   await replicateAndSync(g, m, b)
   await replicateAndSync(g, m, b)
 
-  const grants = await g.system.grants(b.local.key)
-  const approval = grants.find((x) => x.weight === 3)
-  t.ok(approval, 'approval landed')
+  const approval = await g.system.grantHint(b.local.key)
+  t.ok(approval && approval.weight === 3, 'approval landed')
   t.ok(b4a.equals(approval.key, g.local.key), 'authored by the qualified peer')
 
   const node = encoding.decodeOplog(await g.local.get(approval.length - 1))
@@ -206,13 +204,19 @@ test('gated grants - the approver indexes its own approval like every remote', a
     t.is(await auto.system.pendingPromotion(b.local.key), 0, `${name}: pending cleared everywhere`)
   }
 })
-test('gated grants - grant entries prune once the writer resolves', async function (t) {
+test('gated grants - the hint stays one entry per writer across grants', async function (t) {
   const g = await create(t)
   const b = await create(t, g.key)
 
+  await g.append(encode({ addWriter: b.local.id, weight: 2 }))
+  await replicateAndSync(g, b)
+  await replicateAndSync(g, b)
+  const first = await g.system.grantHint(b.local.key)
+  t.is(first.weight, 2, 'anchored at 2')
+
   await g.append(encode({ addWriter: b.local.id, weight: 3 }))
   await replicateAndSync(g, b)
-  t.is((await g.system.grants(b.local.key)).length, 1, 'grant entry live before the claim')
+  await replicateAndSync(g, b)
 
   await b.append(encode({ msg: 'claim' }))
   await replicateAndSync(g, b)
@@ -222,12 +226,13 @@ test('gated grants - grant entries prune once the writer resolves', async functi
     ['b', b]
   ]) {
     const rec = await weightOf(auto, b.local.key)
-    t.is(rec.w, 3, `${name}: resolution held`)
-    t.is((await auto.system.grants(b.local.key)).length, 0, `${name}: consumed entries pruned`)
+    t.is(rec.w, 3, `${name}: resolution followed the strongest anchor`)
+    const hint = await auto.system.grantHint(b.local.key)
+    t.is(hint.weight, 3, `${name}: single hint entry, strongest wins`)
   }
 })
 
-test('gated grants - grant entries and pending prune on removal', async function (t) {
+test('gated grants - hint and pending prune on removal', async function (t) {
   const g = await create(t)
   const m = await create(t, g.key)
   const b = await create(t, g.key)
@@ -237,7 +242,7 @@ test('gated grants - grant entries and pending prune on removal', async function
   await m.append(encode({ addWriter: b.local.id, weight: 5 }))
   await replicateAndSync(g, m, b)
 
-  t.ok((await g.system.grants(b.local.key)).length > 0, 'entry live before removal')
+  t.ok(await g.system.grantHint(b.local.key), 'hint live before removal')
   t.is(await g.system.pendingPromotion(b.local.key), 5, 'pending live before removal')
 
   await g.append(encode({ removeWriter: b.local.id }))
@@ -247,7 +252,7 @@ test('gated grants - grant entries and pending prune on removal', async function
     ['g', g],
     ['m', m]
   ]) {
-    t.is((await auto.system.grants(b.local.key)).length, 0, `${name}: entries pruned on removal`)
+    t.is(await auto.system.grantHint(b.local.key), null, `${name}: hint pruned on removal`)
     t.is(await auto.system.pendingPromotion(b.local.key), 0, `${name}: pending pruned on removal`)
   }
 })

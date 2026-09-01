@@ -893,8 +893,9 @@ module.exports = class Autobee extends ReadyResource {
       const rec = await this.system.get(this.local.key, { activeRequests })
       const standing = currentWeight(rec)
       for await (const p of this.system.listPendingPromotions({ activeRequests })) {
-        if (p.weight > standing) continue
+        if (Math.min(standing, p.weight) <= 0) continue
         prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
+        prefetch.push(this.system.grantHint(p.key, { activeRequests }).catch(safetyCatch))
       }
       await Promise.allSettled(prefetch)
     } finally {
@@ -918,8 +919,9 @@ module.exports = class Autobee extends ReadyResource {
     const approving = []
 
     for await (const p of this.system.listPendingPromotions({ activeRequests })) {
-      if (p.weight > standing) continue
-      approving.push(fetchApproval.call(this, p.key, p.weight, approvals))
+      const amount = Math.min(standing, p.weight)
+      if (amount <= 0) continue
+      approving.push(fetchApproval.call(this, p.key, amount, approvals))
     }
     if (!approving.length) return null
 
@@ -941,8 +943,12 @@ module.exports = class Autobee extends ReadyResource {
     async function fetchApproval(key, weight, approvals) {
       const hex = b4a.toString(key, 'hex')
       if ((this._approvedPending.get(hex) || 0) >= weight) return
-      const target = await this.system.get(key, { activeRequests })
-      if (!target || target.isRemoved || target.maxWeight >= weight) return
+      const [target, hint] = await Promise.all([
+        this.system.get(key, { activeRequests }),
+        this.system.grantHint(key, { activeRequests })
+      ])
+      if (!target || target.isRemoved) return
+      if (hint && hint.weight >= weight) return
       approvals.push({ key, weight })
     }
   }
@@ -953,10 +959,38 @@ module.exports = class Autobee extends ReadyResource {
     const approvals = await this._collectApprovals()
     if (!approvals) return false
 
+    const witness = await this._witnessRef()
     const links = this.system.getLinks(this.local.key)
     const t = Math.max(this._now(), this.system.timestamp)
-    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null, approvals)
+    const node = this.writers.appendLocal(
+      null,
+      t,
+      { start: 0, end: 0 },
+      links,
+      false,
+      witness,
+      approvals
+    )
     return true
+  }
+
+  // approval carriers prove their standing: pointer back to our last witness,
+  // else re-cite the hint inline. genesis proves by key, no witness needed
+  async _witnessRef() {
+    if (b4a.equals(this.local.key, this.key)) return null
+
+    const w = this.writers.localWriter
+    await w.loadWitnessPointer()
+    if (w.witnessPointer >= 0) {
+      return { pointer: w.witnessPointer + 1, data: null }
+    }
+
+    const hint = await this.system.grantHint(this.local.key)
+    if (hint === null) return null
+    return {
+      pointer: 0,
+      data: { weight: hint.weight, link: { key: hint.key, length: hint.length } }
+    }
   }
 
   // append a null value node to ack writer
@@ -1119,7 +1153,8 @@ module.exports = class Autobee extends ReadyResource {
           await this.system.addWriter(a.key, {
             weight: a.weight,
             coord: { key: node.key, length: node.length },
-            carrier: node.weight
+            carrier: node.weight,
+            anchor: true
           })
         }
       }
@@ -1210,14 +1245,18 @@ module.exports = class Autobee extends ReadyResource {
 
     const rec = await this.system.get(this.local.key)
     let witness = null
-    if (rec && rec.maxWeight > currentWeight(rec)) {
-      const grant = await this.system.grantForWeight(this.local.key, rec.maxWeight)
-      if (grant) {
-        witness = { weight: grant.weight, link: { key: grant.key, length: grant.length } }
+    if (rec) {
+      const hint = await this.system.grantHint(this.local.key)
+      if (hint && hint.weight > currentWeight(rec)) {
+        witness = {
+          pointer: 0,
+          data: { weight: hint.weight, link: { key: hint.key, length: hint.length } }
+        }
       }
     }
 
     const approvals = optimistic ? null : await this._collectApprovals()
+    if (approvals && !witness) witness = await this._witnessRef()
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]

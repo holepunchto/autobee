@@ -5,7 +5,8 @@ const { create, replicateAndSync, encode } = require('./helpers')
 async function forceWitness(auto, value, witness) {
   const links = auto.system.getLinks(auto.local.key)
   const ts = Math.max(auto._now(), auto.system.timestamp)
-  auto.writers.appendLocal(encode(value), ts, { start: 0, end: 0 }, links, false, witness)
+  const ref = { pointer: 0, data: witness }
+  auto.writers.appendLocal(encode(value), ts, { start: 0, end: 0 }, links, false, ref)
   await auto._bump()
 }
 
@@ -78,18 +79,7 @@ test('witness - either of two concurrent equal grants justifies a claim', async 
   await c.append(encode({ addWriter: b.local.id, weight: 2 }))
   await replicateAndSync(a, b, c)
 
-  const grants = await b.system.grants(b.local.key)
-  t.is(grants.length, 2, 'both grant ops are logged')
-
-  for (const [name, auto] of [
-    ['a', a],
-    ['b', b],
-    ['c', c]
-  ]) {
-    for (const g of grants) {
-      t.is(await auto.system.grantedWeight(b.local.key, g), 2, `${name}: grant is verifiable`)
-    }
-  }
+  await replicateAndSync(a, b, c)
 
   await b.append(encode({ msg: 'from b' }))
   await replicateAndSync(a, b, c)
@@ -99,9 +89,10 @@ test('witness - either of two concurrent equal grants justifies a claim', async 
     ['b', b],
     ['c', c]
   ]) {
+    const hint = await auto.system.grantHint(b.local.key)
+    t.is(hint.weight, 2, `${name}: an anchor covers the concurrent grants`)
     const mine = nodesOf(await auto.replay(), b.local.key)
     t.is(mine[mine.length - 1].weight, 2, `${name}: elevated to 2`)
-    t.is((await auto.system.grants(b.local.key)).length, 0, `${name}: consumed grants pruned`)
   }
 })
 
@@ -114,7 +105,7 @@ test('witness - claim above the cited grant floors on every peer', async functio
   await a.append(encode({ addWriter: c.local.id, weight: 2 }))
   await replicateAndSync(a, b, c)
 
-  const grant = await b.system.strongestGrant(b.local.key)
+  const grant = await b.system.grantHint(b.local.key)
   t.is(grant.weight, 1, 'b was granted 1')
 
   await forceWitness(
@@ -156,7 +147,6 @@ test('witness - naked link (not a grant) floors on every peer', async function (
 
   const cInfo = await b.system.get(c.local.key)
   const link = { key: c.local.key, length: cInfo.length }
-  t.is(await b.system.grantedWeight(b.local.key, link), 0, 'cited node is not a grant to b')
 
   await forceWitness(b, { msg: 'naked' }, { weight: 2, link })
   await replicateAndSync(a, b, c)
@@ -184,9 +174,8 @@ test('witness - a grant to another writer does not justify our claim', async fun
   await a.append(encode({ addWriter: c.local.id, weight: 3 }))
   await replicateAndSync(a, b, c)
 
-  const cGrant = await b.system.strongestGrant(c.local.key)
+  const cGrant = await b.system.grantHint(c.local.key)
   t.is(cGrant.weight, 3, 'c was granted 3')
-  t.is(await b.system.grantedWeight(b.local.key, cGrant), 0, "c's grant is not a grant to b")
 
   await forceWitness(
     b,

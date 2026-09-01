@@ -44,14 +44,16 @@ function adaptNode(n) {
     key: b4a.toString(n.key, 'hex'),
     length: n.length,
     links: (n.links || []).map((l) => ({ key: b4a.toString(l.key, 'hex'), length: l.length })),
-    witness: n.witness
-      ? {
-          link: {
-            key: b4a.toString(n.witness.link.key, 'hex'),
-            length: n.witness.link.length
+    // pointer-form witnesses carry no claim and no new dep
+    witness:
+      n.witness && n.witness.data
+        ? {
+            link: {
+              key: b4a.toString(n.witness.data.link.key, 'hex'),
+              length: n.witness.data.link.length
+            }
           }
-        }
-      : null,
+        : null,
     ts: n.timestamp,
     weight: n.weight,
     // wire-batch bookkeeping: the engine orders BATCHES (cmp is always on
