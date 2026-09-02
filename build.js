@@ -41,6 +41,11 @@ auto.register({
       name: 'indexers',
       type: '@autobee/link',
       array: true // just for compat
+    },
+    {
+      name: 'pending',
+      type: 'bool',
+      array: true
     }
   ]
 })
@@ -119,6 +124,50 @@ auto.register({
 })
 
 auto.register({
+  name: 'system-writer-v5',
+  fields: [
+    {
+      name: 'isRemoved',
+      type: 'bool',
+      required: true
+    },
+    {
+      name: 'isOplog',
+      type: 'bool',
+      required: true
+    },
+    {
+      // genesis or anchor
+      name: 'isGenesis',
+      type: 'bool',
+      required: true
+    },
+    {
+      // resolved sort weight of the writer's last applied node
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      // granted capability - written only by apply ops
+      name: 'maxWeight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'length',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'timestamp',
+      type: 'uint',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'system-writer',
   versions: [
     {
@@ -129,6 +178,10 @@ auto.register({
     {
       version: 4,
       type: '@autobee/system-writer-v4'
+    },
+    {
+      version: 5,
+      type: '@autobee/system-writer-v5'
     }
   ]
 })
@@ -292,6 +345,40 @@ auto.register({
 })
 
 auto.register({
+  name: 'grant-witness',
+  compact: true,
+  fields: [
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'link',
+      type: '@autobee/link',
+      required: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'approval',
+  compact: true,
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'trusted-head',
   fields: [
     {
@@ -361,6 +448,53 @@ auto.register({
 })
 
 auto.register({
+  name: 'oplog-message-v4',
+  fields: [
+    {
+      name: 'timestamp',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'links',
+      type: '@autobee/link',
+      array: true,
+      required: true
+    },
+    {
+      name: 'batch',
+      type: '@autobee/batch'
+    },
+    {
+      name: 'views',
+      type: '@autobee/views'
+    },
+    {
+      name: 'trusted',
+      type: '@autobee/link',
+      array: true
+    },
+    {
+      name: 'witness',
+      type: '@autobee/grant-witness'
+    },
+    {
+      name: 'approvals',
+      type: '@autobee/approval',
+      array: true
+    },
+    {
+      name: 'optimistic',
+      type: 'bool'
+    },
+    {
+      name: 'value',
+      type: 'buffer'
+    }
+  ]
+})
+
+auto.register({
   name: 'oplog',
   versions: [
     {
@@ -377,7 +511,12 @@ auto.register({
     },
     {
       version: 3,
-      type: '@autobee/oplog-message-v3'
+      type: '@autobee/oplog-message-v3',
+      map: 'oplogLegacyMap'
+    },
+    {
+      version: 4,
+      type: '@autobee/oplog-message-v4'
     }
   ]
 })

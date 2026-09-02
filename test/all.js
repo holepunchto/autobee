@@ -13,6 +13,8 @@ async function runTests() {
   await import('./batch.js')
   await import('./close.js')
   await import('./concurrent-writes.js')
+  await import('./conditional-grant.js')
+  await import('./gated-grants.js')
   await import('./encryption.js')
   await import('./fast-forward.js')
   await import('./links.js')
@@ -23,6 +25,7 @@ async function runTests() {
   await import('./view-consistency.js')
   await import('./view-range.js')
   await import('./wakeup.js')
+  await import('./wire-compat.js')
   await import('./witness.js')
   await import('./writer-management.js')
 

@@ -21,7 +21,11 @@ const b4a = require('b4a')
 // layer, so either is interchangeable underneath the same action set.
 function createState(config, rng, harness, nextStorage, log, transport) {
   return (async () => {
-    const genesis = await create(harness, { storage: nextStorage(), ...writerClock(config, rng) })
+    const genesis = await create(harness, {
+      storage: nextStorage(),
+      bootstrapWeight: config.maxWeight,
+      ...writerClock(config, rng)
+    })
     await transport.attach(genesis)
     await genesis.append(encode({ msg: 'genesis' }))
 
@@ -56,6 +60,9 @@ function createState(config, rng, harness, nextStorage, log, transport) {
   })()
 }
 
+const BYZ = process.env.FUZZ_NO_BYZ ? 0 : 1
+const COND = process.env.FUZZ_COND_GRANT ? 4 : 0
+
 const actions = [
   { name: 'spawn', weight: 3, run: spawnCandidate },
   { name: 'appendNormal', weight: 6, run: appendNormal },
@@ -73,16 +80,21 @@ const actions = [
   // rounds have to merge much staler branches (deeper reorgs, harder
   // recompute-on-reapply) than a fixed sync cadence alone produces
   { name: 'pairSync', weight: 2, run: pairSync },
-  // fault injection - each models ONE faulty writer acting alone (byzantine
-  // as bug, not necessarily malice). when a buggy backer's attestation later
-  // reaches a buggy claimant they compose into the independent two-fault
-  // case organically. planted claim values are always unbackable (above
-  // every grantable weight) so flooring is permanent and deterministic - a
-  // plausible planted value plus a later matching grant is the documented
-  // residual corner (genuine collusion), out of scope until a collusion
-  // action lands with oracle support for its expected divergence
-  { name: 'buggyBackerAttest', weight: 1, run: buggyBackerAttest },
-  { name: 'buggyClaimantEmbed', weight: 1, run: buggyClaimantEmbed }
+  // fault injection: a single faulty CLAIMANT, four ways. approvals are wire
+  // data, so a writer can hand-craft one for itself - forging above your own
+  // standing and citing it is a single-fault attack. all four must floor
+  // deterministically
+  { name: 'buggyClaimInflate', weight: BYZ, run: buggyClaimInflate },
+  { name: 'buggyClaimNakedLink', weight: BYZ, run: buggyClaimNakedLink },
+  { name: 'buggyClaimForeignGrant', weight: BYZ, run: buggyClaimForeignGrant },
+  { name: 'buggyForgeApproval', weight: BYZ, run: buggyForgeApproval },
+  // EXPERIMENT (FUZZ_COND_GRANT=live|carrier): an application-level
+  // rule - "only an admin may promote to admin" - whose verdict is evaluated
+  // inside apply, three ways (live register read / cited grant / carrier
+  // weight). Under gated grants all three must converge - see
+  // test/conditional-grant.js, and the demotion branch for the ungated
+  // split-brain demonstration
+  { name: 'condPromoteRace', weight: COND, run: condPromoteRace }
 ]
 
 exports.actions = actions
@@ -95,6 +107,7 @@ async function spawnCandidate(state) {
   const clock = writerClock(state.config, state.rng)
   const auto = await create(state.harness, state.genesisKey, {
     storage: state.nextStorage(),
+    bootstrapWeight: state.config.maxWeight,
     ...clock
   })
   await state.transport.attach(auto)
@@ -138,7 +151,7 @@ async function addWriterByPeer(state) {
 
   await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
   state.granted.add(hex)
-  state.weights.set(hex, weight)
+  state.weights.set(hex, Math.max(currentWeight(state, hex), weight))
   state.dirty.add(keyHex(granter.auto))
   state.log(`${granter.name} adds ${target.name} as writer, weight=${weight}`)
   return true
@@ -154,7 +167,7 @@ async function changeWeight(state) {
   const weight = randWeightAtLeast(state, currentWeight(state, hex))
 
   await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
-  state.weights.set(hex, weight)
+  state.weights.set(hex, Math.max(currentWeight(state, hex), weight))
   state.dirty.add(keyHex(granter.auto))
   state.log(`${granter.name} changes ${target.name} weight -> ${weight}`)
   return true
@@ -170,7 +183,9 @@ async function optimisticSelfAdd(state) {
 
   await self.auto.append(encode({ addWriter: self.auto.local.id, weight }), { optimistic: true })
   state.granted.add(hex)
-  state.weights.set(hex, weight)
+  // gated grants: a self-add's carrier resolves 0, so it confers no weight -
+  // the writer joins writable at 0 and waits for a qualified grant
+  state.weights.set(hex, Math.max(currentWeight(state, hex), 0))
   state.pendingOptimistic.add(hex)
   state.dirty.add(hex)
   state.log(`${self.name} optimistically adds itself, weight=${weight}`)
@@ -204,7 +219,7 @@ async function concurrentConflictingGrant(state) {
   state.granted.add(hex)
   // whichever grant "wins" in the replicated system, it'll be at least this -
   // future grants must not undercut whichever of the two takes effect
-  state.weights.set(hex, Math.max(weight1, weight2))
+  state.weights.set(hex, Math.max(currentWeight(state, hex), weight1, weight2))
   state.dirty.add(keyHex(granter1.auto))
   state.dirty.add(keyHex(granter2.auto))
   state.log(
@@ -221,6 +236,15 @@ async function removeWriterAction(state) {
   const writable = writableEntries(state)
   if (writable.length < 3) return false
 
+  // only once the pool can no longer grow: a writer spawned AFTER a removal
+  // can never obtain the removed writer's oplog blocks, so it can never apply
+  // the nodes that writer contributed before it went - it parks forever and no
+  // sync round converges. that is the known removed-writer/late-joiner hazard,
+  // not something the ordering scheme can fix
+  if (!process.env.FUZZ_ALLOW_UNSAFE_REMOVE && state.pool.length < state.config.maxWriters) {
+    return false
+  }
+
   const removable = writable.filter((e) => {
     const hex = keyHex(e.auto)
     return (
@@ -232,7 +256,22 @@ async function removeWriterAction(state) {
   })
   if (!removable.length) return false
 
-  const target = state.rng.pick(removable)
+  // prefer removing a writer whose approvals anchor someone's standing, so
+  // chain verification through a removed approver stays under fire
+  const anchorAuthors = []
+  for (const e of removable) {
+    for (const other of state.pool) {
+      if (other === e) continue
+      const hint = await e.auto.system.grantHint(other.auto.local.key)
+      if (hint && b4a.equals(hint.key, e.auto.local.key)) {
+        anchorAuthors.push(e)
+        break
+      }
+    }
+  }
+
+  const pickFrom = anchorAuthors.length ? anchorAuthors : removable
+  const target = state.rng.pick(pickFrom)
   const hex = keyHex(target.auto)
 
   const removers = writable.filter((e) => e !== target)
@@ -243,111 +282,76 @@ async function removeWriterAction(state) {
   state.retired.add(hex)
   state.granted.delete(hex)
   state.dirty.add(keyHex(remover.auto))
-  state.log(`${remover.name} removes ${target.name}`)
+  state.log(
+    `${remover.name} removes ${target.name}${anchorAuthors.includes(target) ? ' (an anchor author)' : ''}`
+  )
+  return true
+}
+
+async function condPromoteRace(state) {
+  const writable = writableEntries(state)
+  if (writable.length < 3) return false
+
+  const admins = []
+  for (const e of writable) {
+    const rec = await e.auto.system.get(e.auto.local.key)
+    if (rec && rec.maxWeight >= 3) admins.push(e)
+  }
+  if (admins.length < 2) return false
+
+  const granter = state.rng.pick(admins)
+  const targets = writable.filter((e) => e !== granter)
+  if (!targets.length) return false
+  const target = state.rng.pick(targets)
+
+  if (process.env.FUZZ_COND_GRANT === 'carrier') {
+    await granter.auto.append(encode({ promoteAdminCarrier: target.auto.local.id }))
+  } else {
+    await granter.auto.append(encode({ promoteAdmin: target.auto.local.id }))
+  }
+
+  await state.transport.pairSync(granter.auto, target.auto, {
+    timeoutMs: state.config.syncTimeoutMs
+  })
+  state.seq++
+  await target.auto.append(encode({ msg: `m${state.seq}`, from: target.name }))
+
+  state.granted.add(keyHex(target.auto))
+  state.weights.set(keyHex(target.auto), Math.min(5, granterStanding(state, granter)))
+  state.dirty.add(keyHex(granter.auto))
+  state.dirty.add(keyHex(target.auto))
+  state.log(
+    `${granter.name} conditionally promotes ${target.name} (${process.env.FUZZ_COND_GRANT})`
+  )
   return true
 }
 
 // ---- byzantine actions ----------------------------------------------------
+//
+// Under the grant-link scheme there is nothing a THIRD party can forge: the
+// grant log is system-authored, so no writer (and no coalition) can make a
+// grant appear that the contract did not apply. That collapses the whole
+// byzantine surface onto the claimant, which is what these actions cover -
+// every one of them must floor, and floor identically on every peer.
 
-// a backer whose attest computation is broken: queues an attestation for a
-// value no grant can ever support, signed for real at its next flush and
-// shipped on an ordinary carrier append. an honest victim harvests it but
-// must skip it at selection (claim above its own applied grant) - one buggy
-// backer acting alone must not affect anything
-async function buggyBackerAttest(state) {
-  const writable = writableEntries(state)
-  if (!writable.length || state.pool.length < 2) return false
-
-  const backer = state.rng.pick(writable)
-  const victims = state.pool.filter((e) => e !== backer && !state.retired.has(keyHex(e.auto)))
-  if (!victims.length) return false
-  const victim = state.rng.pick(victims)
-
-  const weight = unbackableWeight(state)
-  backer.auto.writers.attestations.push({ key: victim.auto.local.key, weight })
-
-  // carrier append so the bogus attestation ships now, not whenever the
-  // backer happens to write next
-  state.seq++
-  await backer.auto.append(encode({ msg: `m${state.seq}`, from: backer.name }))
-  state.dirty.add(keyHex(backer.auto))
-  state.log(`${backer.name} buggily attests ${victim.name} at unbackable weight=${weight}`)
-  return true
-}
-
-// a claimant whose witness selection is broken: force-embeds a witness
-// append() would never produce, via appendLocal. two flavours:
-//  - unfiltered: its best harvested attestation with the claim<=own-grant
-//    selection filter disabled. an honest harvested claim stays a valid
-//    (pinned) elevation; a buggy backer's unbackable one must floor at the
-//    strict grant gate - identically on every peer
-//  - forged: a grantable-range claim citing a real applied backer position
-//    but carrying a garbage signature - must floor at verification, which
-//    is pure bytes, so epoch-independent everywhere
-// either way the citation is a position already applied in the claimant's
-// own view: citing an unapplied position just parks this writer's chain at
-// the ingest gate forever (a self-inflicted liveness stall, not an ordering
-// surface, and it would wedge sync rounds)
-async function buggyClaimantEmbed(state) {
-  const writable = writableEntries(state)
-  if (!writable.length) return false
-
-  const claimant = state.rng.pick(writable)
+// force-embed a witness that append() would never construct. the citation is
+// always a position already applied in the claimant's own view: citing an
+// unapplied position just parks its own chain at the ingest gate (a
+// self-inflicted liveness stall, not an ordering surface, and it would wedge
+// the sync rounds this harness depends on)
+async function embedWitness(state, claimant, witness, how) {
   const auto = claimant.auto
 
-  let witness = null
-  let how = null
+  // the citation becomes a hard causal dep, so it must point at data that
+  // stays fetchable: a removed or retired writer's core may be gc'd and no
+  // longer replicated, which wedges the drain forever. that is the fixture
+  // asking for the impossible, not a property of the scheme
+  const linkHex = keyHexOf(witness.link.key)
+  if (state.retired.has(linkHex)) return false
 
-  if (state.rng.bool(0.5)) {
-    const sorted = [...auto.writers.witnesses].sort(
-      (x, y) => y.attestation.weight - x.attestation.weight
-    )
-    for (const { key, length, attestation, manifest } of sorted) {
-      const info = await auto.system.get(key)
-      if (!info || info.length < length) continue
-
-      witness = {
-        weight: attestation.weight,
-        backer: { key, length, signature: attestation.signature, manifest }
-      }
-      how = `unfiltered harvest, weight=${attestation.weight}`
-      break
-    }
-  }
-
-  if (!witness) {
-    const others = state.pool.filter((e) => e !== claimant)
-    while (others.length) {
-      const other = others.splice(state.rng.int(0, others.length - 1), 1)[0]
-      const info = await auto.system.get(other.auto.local.key)
-      if (!info || info.length === 0) continue
-
-      // mostly a real manifest with a garbage signature (floors at the
-      // signature check); sometimes garbage manifest bytes too (floors at
-      // the manifest<->key binding). both verdicts are pure functions of
-      // the node bytes, so both floor identically everywhere
-      const garbageManifest = state.rng.bool(0.3)
-      const manifest = garbageManifest
-        ? GARBAGE_MANIFEST
-        : other.auto.local.getManifest({ raw: true })
-      if (!manifest) continue
-
-      const weight = state.rng.int(1, state.config.maxWeight)
-      witness = {
-        weight,
-        backer: {
-          key: other.auto.local.key,
-          length: info.length,
-          signature: GARBAGE_SIGNATURE,
-          manifest
-        }
-      }
-      how = `forged ${garbageManifest ? 'manifest' : 'signature'}, weight=${weight}`
-      break
-    }
-  }
-
-  if (!witness) return false
+  const linkRec = await auto.system.get(witness.link.key)
+  if (!linkRec || linkRec.isRemoved) return false
+  if (!(await auto.system.has(witness.link))) return false
 
   state.seq++
   const links = auto.system.getLinks(auto.local.key)
@@ -365,6 +369,123 @@ async function buggyClaimantEmbed(state) {
 
   state.dirty.add(keyHex(auto))
   state.log(`${claimant.name} buggily embeds witness (${how})`)
+  return true
+}
+
+// claim more than the cited grant actually conferred - the strict grant gate
+// in resolveWeight must reject it
+async function buggyClaimInflate(state) {
+  const writable = writableEntries(state)
+  if (!writable.length) return false
+
+  const claimant = state.rng.pick(writable)
+  const grant = await claimant.auto.system.grantHint(claimant.auto.local.key)
+  if (!grant) return false
+
+  const weight = unbackableWeight(state)
+  return embedWitness(
+    state,
+    claimant,
+    { weight, link: { key: grant.key, length: grant.length } },
+    `inflated claim ${weight} over a grant of ${grant.weight}`
+  )
+}
+
+// cite a node that is not a grant to us at all
+async function buggyClaimNakedLink(state) {
+  const writable = writableEntries(state)
+  if (!writable.length) return false
+
+  const claimant = state.rng.pick(writable)
+  const auto = claimant.auto
+
+  const heads = auto.system.getLinks(auto.local.key)
+  if (!heads.length) return false
+
+  const hint = await auto.system.grantHint(auto.local.key)
+
+  for (const head of heads) {
+    const link = { key: head.key, length: head.length }
+    // a head can happen to be the op that anchored us - skip, that tests nothing
+    if (hint && hint.length === link.length && b4a.equals(hint.key, link.key)) continue
+
+    const weight = state.rng.int(1, state.config.maxWeight)
+    return embedWitness(state, claimant, { weight, link }, `naked link, claim=${weight}`)
+  }
+
+  return false
+}
+
+// cite a grant that was made to somebody else - the log is keyed by grantee,
+// so a foreign grant is simply not found for us
+async function buggyClaimForeignGrant(state) {
+  const writable = writableEntries(state)
+  if (writable.length < 2) return false
+
+  const claimant = state.rng.pick(writable)
+  const auto = claimant.auto
+
+  const others = state.pool.filter((e) => e !== claimant)
+  while (others.length) {
+    const other = others.splice(state.rng.int(0, others.length - 1), 1)[0]
+    const grant = await auto.system.grantHint(other.auto.local.key)
+    if (!grant) continue
+
+    return embedWitness(
+      state,
+      claimant,
+      { weight: grant.weight, link: { key: grant.key, length: grant.length } },
+      `foreign grant of ${other.name}, claim=${grant.weight}`
+    )
+  }
+
+  return false
+}
+
+// forge a self-approval above our own standing, then cite it
+async function buggyForgeApproval(state) {
+  const writable = writableEntries(state)
+  if (!writable.length) return false
+
+  const forger = state.rng.pick(writable)
+  const auto = forger.auto
+
+  const rec = await auto.system.get(auto.local.key)
+  const standing = recWeight(rec)
+
+  const weight = Math.min(state.config.maxWeight, standing + 1)
+  if (weight <= standing) return false
+
+  const at = auto.writers.localWriter.appendLength
+
+  state.seq++
+  auto.writers.appendLocal(
+    encode({ msg: `m${state.seq}`, from: forger.name }),
+    Math.max(auto._now(), auto.system.timestamp),
+    { start: 0, end: 0 },
+    auto.system.getLinks(auto.local.key),
+    false,
+    null,
+    [{ key: auto.local.key, weight }]
+  )
+  await auto._bump()
+
+  state.seq++
+  auto.writers.appendLocal(
+    encode({ msg: `m${state.seq}`, from: forger.name }),
+    Math.max(auto._now(), auto.system.timestamp),
+    { start: 0, end: 0 },
+    auto.system.getLinks(auto.local.key),
+    false,
+    { weight, link: { key: auto.local.key, length: at } },
+    null
+  )
+  await auto._bump()
+
+  state.dirty.add(keyHex(auto))
+  state.log(
+    `${forger.name} forges a self-approval weight=${weight} (stands at ${standing}) and cites it`
+  )
   return true
 }
 
@@ -389,7 +510,12 @@ async function pairSync(state) {
     }
   }
 
-  await state.transport.pairSync(a.auto, b.auto, { timeoutMs: state.config.syncTimeoutMs })
+  try {
+    await state.transport.pairSync(a.auto, b.auto, { timeoutMs: state.config.syncTimeoutMs })
+  } catch (err) {
+    if (process.env.FUZZ_DIAG) await diagnose(state, [a, b], err)
+    throw err
+  }
 
   // NOT clearing state.dirty: these writers' appends are still unsynced
   // relative to everyone outside the pair
@@ -440,8 +566,20 @@ function pickGrantedTarget(state) {
   return state.pool.find((e) => keyHex(e.auto) === hex) || null
 }
 
+function granterStanding(state, entry) {
+  const hex = keyHex(entry.auto)
+  if (hex === state.genesisHex) return state.config.maxWeight
+  return currentWeight(state, hex)
+}
+
 function currentWeight(state, hex) {
   return state.weights.get(hex) || 0
+}
+
+function recWeight(rec) {
+  if (!rec) return 0
+  if (rec.maxWeight > 0 && rec.isGenesis) return rec.maxWeight
+  return rec.weight
 }
 
 function randWeightAtLeast(state, floor) {
@@ -454,9 +592,6 @@ function randWeightAtLeast(state, floor) {
 function unbackableWeight(state) {
   return Math.max(state.config.maxWeight, 2) + 1 + state.rng.int(0, 2)
 }
-
-const GARBAGE_SIGNATURE = b4a.alloc(64, 0xee)
-const GARBAGE_MANIFEST = b4a.alloc(70, 0xee)
 
 // ~half the writers keep a true clock, the rest drift by up to +/-maxDriftMs.
 // the append clamp (max(now, system.timestamp)) must keep stamps monotone
@@ -476,4 +611,55 @@ function keyHex(auto) {
 
 function keyHexOf(key) {
   return b4a.toString(key, 'hex')
+}
+
+async function diagnose(state, pair, err) {
+  console.error('\n===== DIAG: ' + err.message + ' =====')
+  console.error('pair: ' + pair.map((e) => e.name.slice(0, 3)).join(' <-> '))
+
+  for (const { auto, name } of state.pool) {
+    console.error(
+      '-- ' +
+        name.slice(0, 3) +
+        ' localLen=' +
+        auto.local.length +
+        ' active=' +
+        auto.writers.active.size
+    )
+    for (const w of auto.writers.active.values()) {
+      let contig = '?'
+      try {
+        contig = w.core.contiguousLength
+      } catch {}
+      console.error(
+        '     ' +
+          w.id.slice(0, 8) +
+          ' added=' +
+          (w.isAdded ? 1 : 0) +
+          ' removed=' +
+          (w.isRemoved ? 1 : 0) +
+          ' frozen=' +
+          (w.isFrozen ? 1 : 0) +
+          ' coreLen=' +
+          w.core.length +
+          ' contig=' +
+          contig +
+          ' pending=' +
+          (w.isPending ? 1 : 0) +
+          ' waiting=' +
+          (w.waiting ? 'Y' : 'n')
+      )
+    }
+    const recs = []
+    for (const other of state.pool) {
+      const rec = await auto.system.get(other.auto.local.key)
+      recs.push(
+        keyHex(other.auto).slice(0, 8) +
+          '=' +
+          (rec ? 'len' + rec.length + (rec.isRemoved ? ',RM' : '') : 'null')
+      )
+    }
+    console.error('     sys: ' + recs.join(' '))
+  }
+  console.error('===== END DIAG =====\n')
 }

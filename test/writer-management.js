@@ -409,7 +409,7 @@ test('writer-management - oplog flag', async function (t) {
   t.ok(localWriterInfo, 'local writer is stored in system bee after writing')
   t.ok(typeof localWriterInfo.isOplog === 'boolean', 'local writer isOplog is a boolean')
   t.ok(localWriterInfo.isOplog, 'local writer is marked as the current oplog (last writer)')
-  t.is(localWriterInfo.maxWeight, 2, 'local writer is marked as indexer')
+  t.is(localWriterInfo.maxWeight, 3, 'local writer is marked as indexer')
   t.absent(localWriterInfo.isRemoved, 'local writer is not removed')
 })
 

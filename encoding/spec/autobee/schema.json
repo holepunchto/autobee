@@ -428,6 +428,12 @@
           "array": true,
           "type": "@autobee/link",
           "version": 1
+        },
+        {
+          "name": "pending",
+          "array": true,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
@@ -527,6 +533,11 @@
           "type": "@autobee/system-writer-v4",
           "map": null,
           "version": 4
+        },
+        {
+          "type": "@autobee/system-writer-v5",
+          "map": null,
+          "version": 5
         }
       ]
     },
@@ -780,8 +791,13 @@
         },
         {
           "type": "@autobee/oplog-message-v3",
-          "map": null,
+          "map": "oplogLegacyMap",
           "version": 3
+        },
+        {
+          "type": "@autobee/oplog-message-v4",
+          "map": null,
+          "version": 4
         }
       ]
     },
@@ -853,6 +869,154 @@
           "name": "view",
           "required": false,
           "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "system-writer-v5",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "isRemoved",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isOplog",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isGenesis",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxWeight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "grant-witness",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "link",
+          "required": true,
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "approval",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "oplog-message-v4",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "links",
+          "required": true,
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "batch",
+          "type": "@autobee/batch",
+          "version": 1
+        },
+        {
+          "name": "views",
+          "type": "@autobee/views",
+          "version": 1
+        },
+        {
+          "name": "trusted",
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "witness",
+          "type": "@autobee/grant-witness",
+          "version": 1
+        },
+        {
+          "name": "approvals",
+          "array": true,
+          "type": "@autobee/approval",
+          "version": 1
+        },
+        {
+          "name": "optimistic",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "type": "buffer",
           "version": 1
         }
       ]

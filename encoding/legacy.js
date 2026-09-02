@@ -300,17 +300,35 @@ function infoLegacyMap(info) {
 }
 
 function memberLegacyMap(m) {
+  const weight = m.isIndexer ? 2 : 1
+
   return {
     version: 0,
     isRemoved: m.isRemoved,
     isOplog: false,
-    weight: m.isIndexer ? 2 : 1,
-    maxWeight: m.isIndexer ? 2 : 1,
-    length: m.length,
-    clock: 0,
     isGenesis: false,
-    isAnchor: false,
+    weight,
+    maxWeight: weight,
+    length: m.length,
     timestamp: 0
+  }
+}
+
+// a v3 node's witness is a signed attestation, which confers weight through a
+// mechanism that no longer exists - it maps to null, so the node sorts at the
+// standing its record already carries instead of failing to decode
+function oplogLegacyMap(m) {
+  return {
+    version: m.version,
+    timestamp: m.timestamp,
+    links: m.links,
+    batch: m.batch,
+    views: m.views,
+    trusted: m.trusted,
+    witness: null,
+    approvals: null,
+    optimistic: m.optimistic,
+    value: m.value
   }
 }
 
@@ -320,5 +338,6 @@ module.exports = {
   OplogMessageV1,
   SystemWriterV0,
   infoLegacyMap,
-  memberLegacyMap
+  memberLegacyMap,
+  oplogLegacyMap
 }

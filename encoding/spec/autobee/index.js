@@ -12,6 +12,36 @@ const VERSION = 1
 // eslint-disable-next-line no-unused-vars
 let version = VERSION
 
+// array of bools, packed as a bitfield
+const boolArray = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.length)
+    state.end += Math.ceil(m.length / 8)
+  },
+  encode(state, m) {
+    c.uint.encode(state, m.length)
+    for (let i = 0; i < m.length; i += 8) {
+      let byte = 0
+      for (let j = 0; j < 8 && i + j < m.length; j++) {
+        if (m[i + j]) byte |= 1 << j
+      }
+      state.buffer[state.start++] = byte
+    }
+  },
+  decode(state) {
+    const n = c.uint.decode(state)
+    if (state.end - state.start < Math.ceil(n / 8)) throw new Error('Out of bounds')
+    const m = new Array(n)
+    for (let i = 0; i < n; i += 8) {
+      const byte = state.buffer[state.start++]
+      for (let j = 0; j < 8 && i + j < n; j++) {
+        m[i + j] = (byte & (1 << j)) !== 0
+      }
+    }
+    return m
+  }
+}
+
 // @autobase-compat/checkout
 const encoding0 = {
   preencode(state, m) {
@@ -454,6 +484,9 @@ const encoding16 = {
 
 const encoding17 = external0.SystemWriterV0
 
+// @autobee/system-info-v3.pending
+const encoding18_5 = boolArray
+
 // @autobee/system-info-v3
 const encoding18 = {
   preencode(state, m) {
@@ -461,12 +494,13 @@ const encoding18 = {
     c.uint.preencode(state, m.flushes)
     encoding22.preencode(state, m.view)
     encoding18_3.preencode(state, m.heads)
-    state.end++ // max flag is 1 so always one byte
+    state.end++ // max flag is 2 so always one byte
 
     if (m.indexers) encoding18_4.preencode(state, m.indexers)
+    if (m.pending) encoding18_5.preencode(state, m.pending)
   },
   encode(state, m) {
-    const flags = m.indexers ? 1 : 0
+    const flags = (m.indexers ? 1 : 0) | (m.pending ? 2 : 0)
 
     c.uint.encode(state, m.timestamp)
     c.uint.encode(state, m.flushes)
@@ -475,6 +509,7 @@ const encoding18 = {
     c.uint.encode(state, flags)
 
     if (m.indexers) encoding18_4.encode(state, m.indexers)
+    if (m.pending) encoding18_5.encode(state, m.pending)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -490,7 +525,8 @@ const encoding18 = {
       flushes: r1,
       view: r2,
       heads: r3,
-      indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null
+      indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null,
+      pending: (flags & 2) !== 0 ? encoding18_5.decode(state) : null
     }
   }
 }
@@ -607,7 +643,7 @@ const encoding20 = {
 // @autobee/system-writer
 const encoding21 = {
   preencode(state, m) {
-    const v = m.version ?? 4
+    const v = m.version ?? 5
     c.uint.preencode(state, v)
     switch (v) {
       case 0:
@@ -619,12 +655,15 @@ const encoding21 = {
       case 4:
         encoding20.preencode(state, m)
         break
+      case 5:
+        encoding34.preencode(state, m)
+        break
       default:
         throw new Error('Unsupported version')
     }
   },
   encode(state, m) {
-    const v = m.version ?? 4
+    const v = m.version ?? 5
     c.uint.encode(state, v)
     switch (v) {
       case 0:
@@ -635,6 +674,9 @@ const encoding21 = {
         break
       case 4:
         encoding20.encode(state, m)
+        break
+      case 5:
+        encoding34.encode(state, m)
         break
       default:
         throw new Error('Unsupported version')
@@ -655,6 +697,10 @@ const encoding21 = {
       }
       case 4: {
         const decoded = encoding20.decode(state)
+        return decoded
+      }
+      case 5: {
+        const decoded = encoding34.decode(state)
         return decoded
       }
       default:
@@ -927,7 +973,7 @@ const encoding29 = {
 // @autobee/oplog
 const encoding30 = {
   preencode(state, m) {
-    const v = m.version ?? 3
+    const v = m.version ?? 4
     c.uint.preencode(state, v)
     switch (v) {
       case 0:
@@ -942,12 +988,15 @@ const encoding30 = {
       case 3:
         encoding29.preencode(state, m)
         break
+      case 4:
+        encoding37.preencode(state, m)
+        break
       default:
         throw new Error('Unsupported version')
     }
   },
   encode(state, m) {
-    const v = m.version ?? 3
+    const v = m.version ?? 4
     c.uint.encode(state, v)
     switch (v) {
       case 0:
@@ -961,6 +1010,9 @@ const encoding30 = {
         break
       case 3:
         encoding29.encode(state, m)
+        break
+      case 4:
+        encoding37.encode(state, m)
         break
       default:
         throw new Error('Unsupported version')
@@ -985,6 +1037,11 @@ const encoding30 = {
       }
       case 3: {
         const decoded = encoding29.decode(state)
+        const map = external0.oplogLegacyMap
+        return map(decoded)
+      }
+      case 4: {
+        const decoded = encoding37.decode(state)
         return decoded
       }
       default:
@@ -1075,6 +1132,142 @@ const encoding33 = {
   }
 }
 
+// @autobee/system-writer-v5
+const encoding34 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+    c.uint.preencode(state, m.weight)
+    c.uint.preencode(state, m.maxWeight)
+    c.uint.preencode(state, m.length)
+    c.uint.preencode(state, m.timestamp)
+  },
+  encode(state, m) {
+    const flags = (m.isRemoved ? 1 : 0) | (m.isOplog ? 2 : 0) | (m.isGenesis ? 4 : 0)
+
+    c.uint.encode(state, flags)
+    c.uint.encode(state, m.weight)
+    c.uint.encode(state, m.maxWeight)
+    c.uint.encode(state, m.length)
+    c.uint.encode(state, m.timestamp)
+  },
+  decode(state) {
+    const v = c.uint.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      version: v,
+      isRemoved: (flags & 1) !== 0,
+      isOplog: (flags & 2) !== 0,
+      isGenesis: (flags & 4) !== 0,
+      weight: c.uint.decode(state),
+      maxWeight: c.uint.decode(state),
+      length: c.uint.decode(state),
+      timestamp: c.uint.decode(state)
+    }
+  }
+}
+
+// @autobee/grant-witness
+const encoding35 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.weight)
+    encoding22.preencode(state, m.link)
+  },
+  encode(state, m) {
+    c.uint.encode(state, m.weight)
+    encoding22.encode(state, m.link)
+  },
+  decode(state) {
+    const r0 = c.uint.decode(state)
+    const r1 = encoding22.decode(state)
+
+    return {
+      weight: r0,
+      link: r1
+    }
+  }
+}
+
+// @autobee/approval
+const encoding36 = {
+  preencode(state, m) {
+    c.fixed32.preencode(state, m.key)
+    c.uint.preencode(state, m.weight)
+  },
+  encode(state, m) {
+    c.fixed32.encode(state, m.key)
+    c.uint.encode(state, m.weight)
+  },
+  decode(state) {
+    const r0 = c.fixed32.decode(state)
+    const r1 = c.uint.decode(state)
+
+    return {
+      key: r0,
+      weight: r1
+    }
+  }
+}
+
+// @autobee/oplog-message-v4.approvals
+const encoding37_6 = c.array(encoding36)
+
+// @autobee/oplog-message-v4
+const encoding37 = {
+  preencode(state, m) {
+    c.uint.preencode(state, m.timestamp)
+    encoding37_1.preencode(state, m.links)
+    state.end++ // max flag is 64 so always one byte
+
+    if (m.batch) encoding24.preencode(state, m.batch)
+    if (m.views) encoding25.preencode(state, m.views)
+    if (m.trusted) encoding37_4.preencode(state, m.trusted)
+    if (m.witness) encoding35.preencode(state, m.witness)
+    if (m.approvals) encoding37_6.preencode(state, m.approvals)
+    if (m.value) c.buffer.preencode(state, m.value)
+  },
+  encode(state, m) {
+    const flags =
+      (m.batch ? 1 : 0) |
+      (m.views ? 2 : 0) |
+      (m.trusted ? 4 : 0) |
+      (m.witness ? 8 : 0) |
+      (m.approvals ? 16 : 0) |
+      (m.optimistic ? 32 : 0) |
+      (m.value ? 64 : 0)
+
+    c.uint.encode(state, m.timestamp)
+    encoding37_1.encode(state, m.links)
+    c.uint.encode(state, flags)
+
+    if (m.batch) encoding24.encode(state, m.batch)
+    if (m.views) encoding25.encode(state, m.views)
+    if (m.trusted) encoding37_4.encode(state, m.trusted)
+    if (m.witness) encoding35.encode(state, m.witness)
+    if (m.approvals) encoding37_6.encode(state, m.approvals)
+    if (m.value) c.buffer.encode(state, m.value)
+  },
+  decode(state) {
+    const v = c.uint.decode(state)
+    const r0 = c.uint.decode(state)
+    const r1 = encoding37_1.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      version: v,
+      timestamp: r0,
+      links: r1,
+      batch: (flags & 1) !== 0 ? encoding24.decode(state) : null,
+      views: (flags & 2) !== 0 ? encoding25.decode(state) : null,
+      trusted: (flags & 4) !== 0 ? encoding37_4.decode(state) : null,
+      witness: (flags & 8) !== 0 ? encoding35.decode(state) : null,
+      approvals: (flags & 16) !== 0 ? encoding37_6.decode(state) : null,
+      optimistic: (flags & 32) !== 0,
+      value: (flags & 64) !== 0 ? c.buffer.decode(state) : null
+    }
+  }
+}
+
 // @autobee/system-info-v3.heads, deferred due to recusive use
 const encoding18_3 = c.array(encoding22)
 // @autobee/system-info-v3.indexers, deferred due to recusive use
@@ -1083,6 +1276,10 @@ const encoding18_4 = encoding18_3
 const encoding29_1 = encoding18_3
 // @autobee/oplog-message-v3.trusted, deferred due to recusive use
 const encoding29_8 = c.array(c.frame(encoding32))
+// @autobee/oplog-message-v4.links, deferred due to recusive use
+const encoding37_1 = encoding18_3
+// @autobee/oplog-message-v4.trusted, deferred due to recusive use
+const encoding37_4 = encoding18_3
 
 function setVersion(v) {
   version = v
@@ -1175,6 +1372,14 @@ function getEncoding(name) {
       return encoding32
     case '@autobee/migrated-head':
       return encoding33
+    case '@autobee/system-writer-v5':
+      return encoding34
+    case '@autobee/grant-witness':
+      return encoding35
+    case '@autobee/approval':
+      return encoding36
+    case '@autobee/oplog-message-v4':
+      return encoding37
     default:
       throw new Error('Encoder not found ' + name)
   }

@@ -44,11 +44,12 @@ function adaptNode(n) {
     key: b4a.toString(n.key, 'hex'),
     length: n.length,
     links: (n.links || []).map((l) => ({ key: b4a.toString(l.key, 'hex'), length: l.length })),
+    // pointer-form witnesses carry no claim and no new dep
     witness: n.witness
       ? {
-          backer: {
-            key: b4a.toString(n.witness.backer.key, 'hex'),
-            length: n.witness.backer.length
+          link: {
+            key: b4a.toString(n.witness.link.key, 'hex'),
+            length: n.witness.link.length
           }
         }
       : null,
@@ -271,7 +272,7 @@ function compareReplayPeers(a, b) {
 // inflated pin means an unbacked claim elevated somewhere - an immediate
 // failure even if every peer agrees on it
 function checkInflatedWeights(replays, maxWeight) {
-  const cap = Math.max(maxWeight, 2)
+  const cap = Math.max(maxWeight, 2) + (process.env.FUZZ_COND_GRANT ? 2 : 0)
   const failures = []
   for (const replay of replays) {
     for (const n of replay.nodes) {

@@ -289,7 +289,12 @@ test(
 
     await joiner.ready()
 
-    while (!joinerState.calls) await new Promise((resolve) => setTimeout(resolve, 100))
+    // the chase can invoke migrate on intermediate candidates that carry no
+    // legacy view (state.calls ticks, state.length does not) - wait for a
+    // COMPLETED migration, not the first attempt
+    while (!joinerState.length || !joiner._migratedHead) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
 
     t.is(joinerState.length, meta.finalViewLength)
     t.alike(
@@ -404,3 +409,70 @@ test(
     await sameContent(t, c, b, B_CONFIRMED, 'c vs b')
   }
 )
+
+// the legacy fixture's roles, from the tests above: a and b are indexers, c is
+// a plain writer. autobase had no witnesses, so standing cannot be re-derived
+// from the oplog - memberLegacyMap is the only thing carrying it across
+const A_KEY = b4a.from('7f22e8f8460095e563eb47a71843a6be852bd8c800d27904eef26068149b921a', 'hex')
+const B_KEY = b4a.from('5e5a09af', 'hex')
+const C_KEY = b4a.from('a3cdf514', 'hex')
+
+async function recordFor(auto, prefix) {
+  for await (const rec of auto.system.list()) {
+    if (b4a.toString(rec.key, 'hex').startsWith(b4a.toString(prefix, 'hex'))) return rec
+  }
+  return null
+}
+
+test('migration - legacy weights survive: indexer 2, writer 1', { skip }, async function (t) {
+  const state = {}
+  const a = await openFixture(t, 'a', state)
+
+  const legacy = {
+    a: await recordFor(a, A_KEY),
+    b: await recordFor(a, B_KEY),
+    c: await recordFor(a, C_KEY)
+  }
+
+  t.is(legacy.a.weight, 2, 'a was an indexer: sort weight 2')
+  t.is(legacy.b.weight, 2, 'b was an indexer: sort weight 2')
+  t.is(legacy.c.weight, 1, 'c was a plain writer: sort weight 1')
+
+  // capability has to come across too, or a legacy indexer reads as a
+  // non-indexer and its session is closed on the next reset()
+  t.is(legacy.a.maxWeight, 2, 'a keeps indexer capability')
+  t.is(legacy.b.maxWeight, 2, 'b keeps indexer capability')
+  t.is(legacy.c.maxWeight, 1, 'c keeps writer capability')
+
+  // no witness on a legacy node, so resolveWeight can only return the record's
+  // own standing - which is exactly why the map has to be right
+  for (let i = 0; i < a.local.length; i++) {
+    const node = require('../lib/encoding.js').decodeOplog(await a.local.get(i))
+    if (node.version > 2) continue
+    t.absent(node.witness, 'legacy nodes carry no witness')
+    break
+  }
+})
+
+test('migration - legacy weights survive a v4 flush', { skip }, async function (t) {
+  const state = {}
+  const a = await openFixture(t, 'a', state)
+
+  await a.append(b4a.from(JSON.stringify({ msg: 'post-migration' })))
+  await a.update()
+  await a.updated()
+
+  const after = {
+    a: await recordFor(a, A_KEY),
+    b: await recordFor(a, B_KEY)
+  }
+
+  t.is(after.a.weight, 2, 'a still sorts at 2 once rewritten as v4')
+  t.is(after.b.weight, 2, 'b still sorts at 2 once rewritten as v4')
+  t.is(after.a.maxWeight, 2, 'a keeps its ceiling through the rewrite')
+  t.is(after.b.maxWeight, 2, 'b keeps its ceiling through the rewrite')
+
+  const writer = a.writers.active.get(b4a.toString(after.b.key, 'hex'))
+  if (writer) t.ok(writer.isIndexer, 'a migrated indexer still reads as an indexer')
+  else t.pass('b has no open session in this fixture')
+})

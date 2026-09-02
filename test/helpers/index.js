@@ -58,6 +58,42 @@ async function apply(nodes, view, host) {
       host.addWriter(data.addWriter, { weight: data.weight })
     }
 
+    if (data.promoteAdmin) {
+      const granter = await host.auto.system.get(node.key, { unflushed: true })
+      if (granter && granter.maxWeight >= 3) {
+        host.addWriter(data.promoteAdmin, { weight: 5 })
+      }
+    }
+
+    if (data.appBootstrapAdmin) {
+      const rec = await host.auto.system.get(node.key, { unflushed: true })
+      if (rec && rec.isGenesis) {
+        const hex = b4a.toString(node.key, 'hex')
+        const w = view.write()
+        w.tryPut(b4a.from(`kconf/${hex}:${node.length}`), b4a.from(hex))
+        await w.flush()
+      }
+    }
+
+    if (data.appPromote) {
+      const entry = await view.get(b4a.from(`kconf/${data.cite.key}:${data.cite.length}`))
+      if (entry && b4a.toString(entry.value) === b4a.toString(node.key, 'hex')) {
+        host.addWriter(b4a.from(data.appPromote, 'hex'), { weight: 5 })
+        const w = view.write()
+        w.tryPut(
+          b4a.from(`kconf/${b4a.toString(node.key, 'hex')}:${node.length}`),
+          b4a.from(data.appPromote)
+        )
+        await w.flush()
+      }
+    }
+
+    if (data.promoteAdminCarrier) {
+      if (node.weight >= 3) {
+        host.addWriter(data.promoteAdminCarrier, { weight: 5 })
+      }
+    }
+
     if (data.removeWriter) {
       host.removeWriter(data.removeWriter)
     }
@@ -88,6 +124,7 @@ async function create(t, key, opts) {
     encryptionKey,
     encrypted: !!encryptionKey,
     name: '#' + t.tick++,
+    bootstrapWeight: 3,
     apply,
     ...opts
   })

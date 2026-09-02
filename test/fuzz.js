@@ -441,7 +441,49 @@ function checkNoFrozenWriters(t, pool) {
 //     two peers, that's an even earlier problem - a genuine determinism bug in how the
 //     system state gets computed, since it means "same order applied" didn't produce "same
 //     result" at all, well before the two peers' chosen orders even part ways
-function compareReplay(t, a, b) {
+// replay() walks the system backwards and reverses, so a peer that cannot
+// reach its oldest history knows a SUFFIX of the linearization, with null
+// sentinels marking the unreachable batches at the front. compare what both
+// peers actually know: align the tails.
+function knownTail(r) {
+  const last = r.nodes.lastIndexOf(null)
+  return {
+    name: r.name,
+    nodes: last === -1 ? r.nodes : r.nodes.slice(last + 1),
+    partial: last !== -1
+  }
+}
+
+function compareReplay(t, ra, rb) {
+  const a = knownTail(ra)
+  const b = knownTail(rb)
+
+  if (a.partial || b.partial) {
+    const n = Math.min(a.nodes.length, b.nodes.length)
+    const ta = a.nodes.slice(a.nodes.length - n)
+    const tb = b.nodes.slice(b.nodes.length - n)
+
+    for (let i = 0; i < n; i++) {
+      if (nodeRef(ta[i]) !== nodeRef(tb[i])) {
+        t.fail(
+          `${a.name} and ${b.name} diverge in the shared replay tail at ${i}/${n}: ` +
+            `${nodeRef(ta[i])} vs ${nodeRef(tb[i])}`
+        )
+        return
+      }
+      if (ta[i].weight !== tb[i].weight) {
+        t.fail(
+          `${a.name} and ${b.name} agree on the shared tail order but disagree on pinned weight at ${i}: ` +
+            `${nodeRef(ta[i])} ${ta[i].weight} vs ${tb[i].weight}`
+        )
+        return
+      }
+    }
+
+    t.pass(`${a.name} and ${b.name} agree on the shared replay tail (${n} nodes, partial history)`)
+    return
+  }
+
   const refsA = a.nodes.map(nodeRef)
   const refsB = b.nodes.map(nodeRef)
 

@@ -37,9 +37,16 @@ module.exports = class Autobee extends ReadyResource {
       key = null
     }
 
-    const { name = null, encrypted, encryptionKey, viewName = 'view' } = handlers
+    const {
+      name = null,
+      encrypted,
+      encryptionKey,
+      viewName = 'view',
+      bootstrapWeight = 2
+    } = handlers
 
     this.encrypted = encrypted === true || !!encryptionKey
+    this.bootstrapWeight = bootstrapWeight
 
     this.getSystemEncryption = this._getEncryptionProvider.bind(this, '_system')
     this.getViewEncryption = this._getEncryptionProvider.bind(this, viewName)
@@ -123,6 +130,10 @@ module.exports = class Autobee extends ReadyResource {
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
     this._ackRequired = false
+    this._approvalCheck = true
+    this._approvedPending = new Map()
+    this._approvalRequests = []
+    this._prefetchingApprovals = false
     this._ackedHeads = new Map()
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
@@ -236,6 +247,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    Hypercore.destroyRequests(this._approvalRequests, null)
     if (this._bootWait !== null) this._bootWait.resolve()
     if (this._notifyHandler) this._notifyHandler.destroy()
     if (this._draining) {
@@ -575,6 +587,10 @@ module.exports = class Autobee extends ReadyResource {
           this._needsUpdate = true
         }
 
+        if (!this._interrupting && (await this._appendApprovals())) {
+          this._needsUpdate = true
+        }
+
         await this._flushLocal()
 
         if (!this._interrupting) await this.writers.refresh()
@@ -712,13 +728,15 @@ module.exports = class Autobee extends ReadyResource {
   async readOplog(core, length, opts = null) {
     await core.ready()
 
+    const { conservative = false, timeout } = opts === null ? {} : opts
+
     const target = length >= 0 ? length : core.length
     if (target === 0) return null
 
     // conservative: only proceed when a connected peer can serve the head whole
-    if (opts && opts.conservative && core.remoteContiguousLength < target) return null
+    if (conservative && core.remoteContiguousLength < target) return null
 
-    const buf = await core.get(target - 1, opts)
+    const buf = await core.get(target - 1, { timeout })
     if (buf === null) return null
 
     let op = encoding.decodeOplog(buf)
@@ -726,7 +744,7 @@ module.exports = class Autobee extends ReadyResource {
     // legacy nodes always inflate, but only indexers carry views - callers
     // that need system info must check op.views
     if (op.version < 3) {
-      op = await migrations.inflateLegacyOplog(buf, core, target - 1, opts)
+      op = await migrations.inflateLegacyOplog(buf, core, target - 1, timeout)
     }
 
     return {
@@ -872,6 +890,115 @@ module.exports = class Autobee extends ReadyResource {
     return updated
   }
 
+  async _prefetchApprovals() {
+    if (this._prefetchingApprovals) return
+    this._prefetchingApprovals = true
+
+    const activeRequests = this._approvalRequests
+
+    try {
+      const prefetch = []
+      const standing = await this._standing(activeRequests)
+      if (standing <= 0 || !this._pendingWork(standing)) return
+      for await (const p of this._servableRequests(standing, activeRequests)) {
+        prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
+        prefetch.push(this.system.grantHint(p.key, { activeRequests }).catch(safetyCatch))
+      }
+      await Promise.allSettled(prefetch)
+    } finally {
+      this._prefetchingApprovals = false
+    }
+  }
+
+  async _standing(activeRequests) {
+    const rec = await this.system.get(this.local.key, { activeRequests })
+    return currentWeight(rec)
+  }
+
+  // only our own tiers: a request whose lower tiers are already anchored is
+  // somebody stronger's job, and must not keep every peer at this standing
+  // rescanning (or offering) while it waits
+  _pendingWork(standing) {
+    const digest = this.system.promotions.digest
+    const end = Math.min(standing, digest.length)
+    for (let w = 1; w <= end; w++) {
+      if (digest[w - 1]) return true
+    }
+    return false
+  }
+
+  // the requests we could serve and by how much - shared by the prefetch and
+  // the collector so the two cannot drift on what counts as ours
+  async *_servableRequests(standing, activeRequests) {
+    for await (const p of this.system.listPendingPromotions({ activeRequests })) {
+      const amount = Math.min(standing, p.weight)
+      if (amount <= 0) continue
+      yield { key: p.key, amount }
+    }
+  }
+
+  async _collectApprovals() {
+    if (!this.system.promotions.changed && !this._approvalCheck) return null
+    if (!this.writers.writable) return null
+
+    const activeRequests = this._approvalRequests
+    const standing = await this._standing(activeRequests)
+    if (standing <= 0) return null
+
+    this.system.promotions.changed = false
+    this._approvalCheck = false
+
+    if (!this._pendingWork(standing)) return null
+
+    const approvals = []
+    const approving = []
+
+    for await (const p of this._servableRequests(standing, activeRequests)) {
+      approving.push(fetchApproval.call(this, p.key, p.amount, approvals))
+    }
+
+    if (!approving.length) return null
+
+    try {
+      await Promise.all(approving)
+    } catch (err) {
+      if (this._interrupting) return null
+      throw err
+    }
+
+    if (!approvals.length) return null
+
+    for (const a of approvals) {
+      this._approvedPending.set(b4a.toString(a.key, 'hex'), a.weight)
+    }
+
+    return approvals
+
+    async function fetchApproval(key, weight, approvals) {
+      const hex = b4a.toString(key, 'hex')
+      if ((this._approvedPending.get(hex) || 0) >= weight) return
+      const [target, hint] = await Promise.all([
+        this.system.get(key, { activeRequests }),
+        this.system.grantHint(key, { activeRequests })
+      ])
+      if (!target || target.isRemoved) return
+      if (hint && hint.weight >= weight) return
+      approvals.push({ key, weight })
+    }
+  }
+
+  async _appendApprovals() {
+    if (!this.writers.writable) return false
+
+    const approvals = await this._collectApprovals()
+    if (!approvals) return false
+
+    const links = this.system.getLinks(this.local.key)
+    const t = Math.max(this._now(), this.system.timestamp)
+    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null, approvals)
+    return true
+  }
+
   // append a null value node to ack writer
   _appendAck() {
     if (!this._ackRequired) return false
@@ -905,15 +1032,15 @@ module.exports = class Autobee extends ReadyResource {
     return true
   }
 
-  async _bumpPendingWriters() {
-    if (this._catchupMigratedNodes !== null) {
+  async _bumpPendingWriters({ local = false } = {}) {
+    if (!local && this._catchupMigratedNodes !== null) {
       const updated = await this._bumpMigratedWriters()
       this._catchupMigratedNodes = null
       if (updated) return true
     }
 
     // apply the best next node to keep the prefix stable
-    const next = await this.writers.nextPendingNode()
+    const next = await this.writers.nextPendingNode({ local })
     if (next === null) return false
 
     const { writer: w, batch } = next
@@ -939,7 +1066,6 @@ module.exports = class Autobee extends ReadyResource {
   async _optimisticBatch(batch) {
     const rollbackSystem = this.system.bee.head()
     const rollbackView = this._workingBee.head()
-    const rollbackAttestations = this.writers.attestations.length
 
     const t = await this.prepareBatch(batch)
     if (t.view) this._workingBee.move(t.view)
@@ -961,8 +1087,6 @@ module.exports = class Autobee extends ReadyResource {
         this._workingBee.move(rollbackView)
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
-        // don't attest grants that were just undone
-        this.writers.attestations.length = rollbackAttestations
         return false
       }
     }
@@ -1008,7 +1132,7 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       if (b4a.equals(batch[0].key, this.key) && batch[0].length === 1) {
-        await this._host.addWriter(batch[0].key)
+        await this._host.addWriter(batch[0].key, { weight: this.bootstrapWeight })
       }
 
       await this._applyBatch(batch, batch[0].optimistic)
@@ -1031,6 +1155,17 @@ module.exports = class Autobee extends ReadyResource {
     for (const node of batch) {
       this.system.addNode(node)
 
+      if (node.approvals) {
+        for (const a of node.approvals) {
+          await this.system.addWriter(a.key, {
+            weight: a.weight,
+            coord: { key: node.key, length: node.length },
+            carrier: node.weight,
+            anchor: true
+          })
+        }
+      }
+
       // compat: autobase nodes may be null (legacy null decodes to 0-length buffer)
       if (node.value && node.value.length) userBatch.push(node)
     }
@@ -1042,15 +1177,15 @@ module.exports = class Autobee extends ReadyResource {
       this._host.applying = null
     }
 
-    const { changed, witnessed } = await this.system.flush(batch, this._workingBee)
+    const changed = await this.system.flush(batch, this._workingBee)
+
+    if (this.system.promotions.changed) this._prefetchApprovals().catch(safetyCatch)
 
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
       this._localViewLength = this._workingBee.context.local.length - this._localViewStart
       this._localFlushes = this.system.flushes
     }
-
-    this.writers.attest(witnessed)
 
     for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
@@ -1115,26 +1250,16 @@ module.exports = class Autobee extends ReadyResource {
     const t = Math.max(this._now(), this.system.timestamp)
     const batch = []
 
-    // witnesses only ride upgrade windows. witness.weight is the value the backer's
-    // snapshot witnesses - verifiers recompute the same read and verify
     const rec = await this.system.get(this.local.key)
     let witness = null
-    if (rec && rec.maxWeight > currentWeight(rec)) {
-      const sorted = this.writers.witnesses.sort(
-        (a, b) => b.attestation.weight - a.attestation.weight
-      )
-
-      for (const { key, length, attestation, manifest } of sorted) {
-        if (attestation.weight > rec.maxWeight) continue
-
-        const backer = await this.system.get(key)
-        if (!backer || backer.isRemoved || backer.length < length) continue
-
-        const { weight, signature } = attestation
-        witness = { weight, backer: { key, length, signature, manifest } }
-        break
+    if (rec) {
+      const hint = await this.system.grantHint(this.local.key)
+      if (hint && hint.weight > currentWeight(rec)) {
+        witness = { weight: hint.weight, link: { key: hint.key, length: hint.length } }
       }
     }
+
+    const approvals = optimistic ? null : await this._collectApprovals()
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
@@ -1146,7 +1271,8 @@ module.exports = class Autobee extends ReadyResource {
         { start: i, end: values.length - 1 - i },
         lnk,
         optimistic,
-        i === 0 ? witness : null
+        i === 0 ? witness : null,
+        i === 0 ? approvals : null
       )
       batch.push(node)
     }
@@ -1155,6 +1281,11 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
+    // pull any available local nodes in before flushing
+    while (!this._interrupting && (await this._bumpPendingWriters({ local: true }))) {
+      this._needsUpdate = true
+    }
+
     await this.writers.flushLocal({
       flushes: this._localFlushes,
       system: {
@@ -1356,6 +1487,7 @@ module.exports = class Autobee extends ReadyResource {
       this._workingBee.move(this.system.view)
     }
 
+    this._approvalCheck = true
     this.fastForwardTo = null
 
     // process any wakeup while fast-forward itself was in flight
