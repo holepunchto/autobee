@@ -899,7 +899,7 @@ module.exports = class Autobee extends ReadyResource {
     try {
       const prefetch = []
       const standing = await this._standing(activeRequests)
-      if (standing <= 0 || !this.system.promotions.digest) return
+      if (standing <= 0 || !this._pendingWork(standing)) return
       for await (const p of this._servableRequests(standing, activeRequests)) {
         prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
         prefetch.push(this.system.grantHint(p.key, { activeRequests }).catch(safetyCatch))
@@ -913,6 +913,18 @@ module.exports = class Autobee extends ReadyResource {
   async _standing(activeRequests) {
     const rec = await this.system.get(this.local.key, { activeRequests })
     return currentWeight(rec)
+  }
+
+  // only our own tiers: a request whose lower tiers are already anchored is
+  // somebody stronger's job, and must not keep every peer at this standing
+  // rescanning (or offering) while it waits
+  _pendingWork(standing) {
+    const digest = this.system.promotions.digest
+    const end = Math.min(standing, digest.length)
+    for (let w = 1; w <= end; w++) {
+      if (digest[w - 1]) return true
+    }
+    return false
   }
 
   // the requests we could serve and by how much - shared by the prefetch and
@@ -936,7 +948,7 @@ module.exports = class Autobee extends ReadyResource {
     this.system.promotions.changed = false
     this._approvalCheck = false
 
-    if (!this.system.promotions.digest) return null
+    if (!this._pendingWork(standing)) return null
 
     const approvals = []
     const approving = []

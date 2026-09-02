@@ -107,8 +107,12 @@ test('wire compat - system info decodes with and without pending', function (t) 
 
   const without = c.decode(SystemInfo, c.encode(SystemInfo, base))
   t.is(without.flushes, 2, 'a record written before pending existed still decodes')
-  t.absent(without.pending, 'missing pending reads as false')
+  t.ok(!without.pending || without.pending.length === 0, 'missing pending reads as empty')
 
-  const with_ = c.decode(SystemInfo, c.encode(SystemInfo, { ...base, pending: true }))
-  t.ok(with_.pending, 'pending round-trips as a flag')
+  // one flag per weight class: tier 1 quiet, tier 2 wants a stronger approver
+  // the codec renders flags as 0/1, so assert the flags themselves
+  const with_ = c.decode(SystemInfo, c.encode(SystemInfo, { ...base, pending: [false, true] }))
+  t.is(with_.pending.length, 2, 'both weight classes round-trip')
+  t.absent(with_.pending[0], 'tier 1 flag is false')
+  t.ok(with_.pending[1], 'tier 2 flag is true')
 })
