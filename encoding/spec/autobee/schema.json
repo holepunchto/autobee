@@ -871,7 +871,7 @@
     {
       "name": "grant-witness",
       "namespace": "autobee",
-      "compact": false,
+      "compact": true,
       "flagsPosition": -1,
       "fields": [
         {
@@ -934,8 +934,24 @@
         },
         {
           "name": "views",
-          "inline": true,
           "type": "@autobee/views",
+          "version": 1
+        },
+        {
+          "name": "trusted",
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "witness",
+          "type": "@autobee/grant-witness",
+          "version": 1
+        },
+        {
+          "name": "approvals",
+          "array": true,
+          "type": "@autobee/approval",
           "version": 1
         },
         {
@@ -946,23 +962,6 @@
         {
           "name": "value",
           "type": "buffer",
-          "version": 1
-        },
-        {
-          "name": "witness",
-          "type": "@autobee/grant-witness",
-          "version": 1
-        },
-        {
-          "name": "trusted",
-          "array": true,
-          "type": "@autobee/trusted-head",
-          "version": 1
-        },
-        {
-          "name": "approvals",
-          "array": true,
-          "type": "@autobee/approval",
           "version": 1
         }
       ]

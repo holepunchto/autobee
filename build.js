@@ -298,6 +298,7 @@ auto.register({
 
 auto.register({
   name: 'grant-witness',
+  compact: true,
   fields: [
     {
       name: 'weight',
@@ -418,8 +419,21 @@ auto.register({
     },
     {
       name: 'views',
-      type: '@autobee/views',
-      inline: true
+      type: '@autobee/views'
+    },
+    {
+      name: 'trusted',
+      type: '@autobee/link',
+      array: true
+    },
+    {
+      name: 'witness',
+      type: '@autobee/grant-witness'
+    },
+    {
+      name: 'approvals',
+      type: '@autobee/approval',
+      array: true
     },
     {
       name: 'optimistic',
@@ -428,20 +442,6 @@ auto.register({
     {
       name: 'value',
       type: 'buffer'
-    },
-    {
-      name: 'witness',
-      type: '@autobee/grant-witness'
-    },
-    {
-      name: 'trusted',
-      type: '@autobee/trusted-head',
-      array: true
-    },
-    {
-      name: 'approvals',
-      type: '@autobee/approval',
-      array: true
     }
   ]
 })
