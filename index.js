@@ -435,6 +435,11 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
+    // since we are doing this DURING the hyperbee2 boot we need to ready the core
+    // be good if we had better plumbing for it
+    await this._workingBee.core.ready()
+    await this.bee.core.ready()
+
     this._workingBee.move(view)
     this.bee.move(view)
 
