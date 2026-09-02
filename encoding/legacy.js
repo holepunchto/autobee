@@ -300,10 +300,13 @@ function infoLegacyMap(info) {
 }
 
 function memberLegacyMap(m) {
+  const weight = m.isIndexer ? 2 : 1
+
   return {
     version: 0,
     isRemoved: m.isRemoved,
-    weight: m.isIndexer ? 2 : 1,
+    weight,
+    maxWeight: weight,
     length: m.length
   }
 }
