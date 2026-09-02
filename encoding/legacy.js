@@ -308,11 +308,30 @@ function memberLegacyMap(m) {
   }
 }
 
+// a v3 node's witness is a signed attestation, which confers weight through a
+// mechanism that no longer exists - it maps to null, so the node sorts at the
+// standing its record already carries instead of failing to decode
+function oplogLegacyMap(m) {
+  return {
+    version: m.version,
+    timestamp: m.timestamp,
+    links: m.links,
+    batch: m.batch,
+    views: m.views,
+    optimistic: m.optimistic,
+    value: m.value,
+    witness: null,
+    trusted: m.trusted,
+    approvals: null
+  }
+}
+
 module.exports = {
   BootRecordV0,
   OplogMessageV0,
   OplogMessageV1,
   SystemWriterV0,
   infoLegacyMap,
-  memberLegacyMap
+  memberLegacyMap,
+  oplogLegacyMap
 }

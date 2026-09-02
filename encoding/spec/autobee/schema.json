@@ -557,26 +557,6 @@
       ]
     },
     {
-      "name": "migrated-head",
-      "namespace": "autobee",
-      "compact": true,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "system",
-          "required": true,
-          "type": "@autobee/link",
-          "version": 1
-        },
-        {
-          "name": "view",
-          "required": false,
-          "type": "@autobee/link",
-          "version": 1
-        }
-      ]
-    },
-    {
       "name": "external-batch",
       "namespace": "autobee",
       "compact": true,
@@ -649,47 +629,7 @@
       ]
     },
     {
-      "name": "witness",
-      "namespace": "autobee",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "weight",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "link",
-          "required": true,
-          "type": "@autobee/link",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "approval",
-      "namespace": "autobee",
-      "compact": true,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "key",
-          "required": true,
-          "type": "fixed32",
-          "version": 1
-        },
-        {
-          "name": "weight",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "trusted-head",
+      "name": "signed-backer",
       "namespace": "autobee",
       "compact": false,
       "flagsPosition": -1,
@@ -707,9 +647,61 @@
           "version": 1
         },
         {
-          "name": "flushes",
+          "name": "signature",
+          "required": true,
+          "type": "fixed64",
+          "version": 1
+        },
+        {
+          "name": "manifest",
+          "required": true,
+          "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "witness",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "weight",
           "required": true,
           "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "backer",
+          "required": true,
+          "type": "@autobee/signed-backer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "attestation",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "signature",
+          "required": true,
+          "type": "fixed64",
           "version": 1
         }
       ]
@@ -760,15 +752,15 @@
           "version": 1
         },
         {
-          "name": "trusted",
+          "name": "attestations",
           "array": true,
-          "type": "@autobee/trusted-head",
+          "type": "@autobee/attestation",
           "version": 1
         },
         {
-          "name": "approvals",
+          "name": "trusted",
           "array": true,
-          "type": "@autobee/approval",
+          "type": "@autobee/trusted-head",
           "version": 1
         }
       ]
@@ -794,8 +786,13 @@
         },
         {
           "type": "@autobee/oplog-message-v3",
-          "map": null,
+          "map": "oplogLegacyMap",
           "version": 3
+        },
+        {
+          "type": "@autobee/oplog-message-v4",
+          "map": null,
+          "version": 4
         }
       ]
     },
@@ -821,6 +818,151 @@
           "name": "namespace",
           "required": false,
           "type": "fixed32",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "trusted-head",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "flushes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "migrated-head",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "system",
+          "required": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "view",
+          "required": false,
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "grant-witness",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "link",
+          "required": true,
+          "type": "@autobee/link",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "approval",
+      "namespace": "autobee",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "fixed32",
+          "version": 1
+        },
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "oplog-message-v4",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "links",
+          "required": true,
+          "array": true,
+          "type": "@autobee/link",
+          "version": 1
+        },
+        {
+          "name": "batch",
+          "type": "@autobee/batch",
+          "version": 1
+        },
+        {
+          "name": "views",
+          "inline": true,
+          "type": "@autobee/views",
+          "version": 1
+        },
+        {
+          "name": "optimistic",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "value",
+          "type": "buffer",
+          "version": 1
+        },
+        {
+          "name": "witness",
+          "type": "@autobee/grant-witness",
+          "version": 1
+        },
+        {
+          "name": "trusted",
+          "array": true,
+          "type": "@autobee/trusted-head",
+          "version": 1
+        },
+        {
+          "name": "approvals",
+          "array": true,
+          "type": "@autobee/approval",
           "version": 1
         }
       ]

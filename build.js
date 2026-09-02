@@ -234,7 +234,70 @@ auto.register({
 })
 
 auto.register({
+  name: 'signed-backer',
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'length',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'signature',
+      type: 'fixed64',
+      required: true
+    },
+    {
+      name: 'manifest',
+      type: 'buffer',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'witness',
+  fields: [
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'backer',
+      type: '@autobee/signed-backer',
+      required: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'attestation',
+  fields: [
+    {
+      name: 'key',
+      type: 'fixed32',
+      required: true
+    },
+    {
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'signature',
+      type: 'fixed64',
+      required: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'grant-witness',
   fields: [
     {
       name: 'weight',
@@ -323,6 +386,54 @@ auto.register({
       type: '@autobee/witness'
     },
     {
+      name: 'attestations',
+      type: '@autobee/attestation',
+      array: true
+    },
+    {
+      name: 'trusted',
+      type: '@autobee/trusted-head',
+      array: true
+    }
+  ]
+})
+
+auto.register({
+  name: 'oplog-message-v4',
+  fields: [
+    {
+      name: 'timestamp',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'links',
+      type: '@autobee/link',
+      array: true,
+      required: true
+    },
+    {
+      name: 'batch',
+      type: '@autobee/batch'
+    },
+    {
+      name: 'views',
+      type: '@autobee/views',
+      inline: true
+    },
+    {
+      name: 'optimistic',
+      type: 'bool'
+    },
+    {
+      name: 'value',
+      type: 'buffer'
+    },
+    {
+      name: 'witness',
+      type: '@autobee/grant-witness'
+    },
+    {
       name: 'trusted',
       type: '@autobee/trusted-head',
       array: true
@@ -352,7 +463,12 @@ auto.register({
     },
     {
       version: 3,
-      type: '@autobee/oplog-message-v3'
+      type: '@autobee/oplog-message-v3',
+      map: 'oplogLegacyMap'
+    },
+    {
+      version: 4,
+      type: '@autobee/oplog-message-v4'
     }
   ]
 })
