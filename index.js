@@ -131,7 +131,6 @@ module.exports = class Autobee extends ReadyResource {
     this._needsUpdate = false
     this._ackRequired = false
     this._approvalCheck = true
-    this._approvalsCheckedAt = []
     this._approvedPending = new Map()
     this._approvalRequests = []
     this._prefetchingApprovals = false
@@ -900,7 +899,7 @@ module.exports = class Autobee extends ReadyResource {
     try {
       const prefetch = []
       const standing = await this._standing(activeRequests)
-      if (standing <= 0 || !this._pendingWork(standing)) return
+      if (standing <= 0 || !this.system.promotions.digest) return
       for await (const p of this._servableRequests(standing, activeRequests)) {
         prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
         prefetch.push(this.system.grantHint(p.key, { activeRequests }).catch(safetyCatch))
@@ -922,20 +921,8 @@ module.exports = class Autobee extends ReadyResource {
     for await (const p of this.system.listPendingPromotions({ activeRequests })) {
       const amount = Math.min(standing, p.weight)
       if (amount <= 0) continue
-      yield { key: p.key, amount, flushes: p.flushes }
+      yield { key: p.key, amount }
     }
-  }
-
-  // only our own tiers: a request whose lower tiers are already anchored is
-  // somebody stronger's job, and must not keep every peer at this standing
-  // rescanning (or offering) while it waits
-  _pendingWork(standing) {
-    const digest = this.system.promotions.digest
-    const end = Math.min(standing, digest.length)
-    for (let w = 1; w <= end; w++) {
-      if (digest[w - 1] > (this._approvalsCheckedAt[w - 1] || 0)) return true
-    }
-    return false
   }
 
   async _collectApprovals() {
@@ -949,23 +936,13 @@ module.exports = class Autobee extends ReadyResource {
     this.system.promotions.changed = false
     this._approvalCheck = false
 
-    if (!this._pendingWork(standing)) return null
-    const digest = this.system.promotions.digest
-    const end = Math.min(standing, digest.length)
+    if (!this.system.promotions.digest) return null
 
     const approvals = []
     const approving = []
 
     for await (const p of this._servableRequests(standing, activeRequests)) {
-      if (p.flushes <= (this._approvalsCheckedAt[p.amount - 1] || 0)) continue
       approving.push(fetchApproval.call(this, p.key, p.amount, approvals))
-    }
-
-    for (let w = 1; w <= end; w++) {
-      while (this._approvalsCheckedAt.length < w) this._approvalsCheckedAt.push(0)
-      if (digest[w - 1] > this._approvalsCheckedAt[w - 1]) {
-        this._approvalsCheckedAt[w - 1] = digest[w - 1]
-      }
     }
 
     if (!approving.length) return null

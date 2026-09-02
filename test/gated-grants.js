@@ -428,9 +428,7 @@ test('gated grants - a tier goes quiet once one peer at that standing answers', 
     ['m', m],
     ['n', n]
   ]) {
-    const digest = auto.system.promotions.digest
-    t.is(digest[0], 0, `${name}: tier 1 reads zero - nothing left for standing 1`)
-    t.ok(digest[1] > 0, `${name}: tier 2 still open for someone stronger`)
+    t.ok(auto.system.promotions.digest, `${name}: digest says a request is outstanding`)
   }
 
   // n must not add a second approval at its own standing
@@ -444,4 +442,8 @@ test('gated grants - a tier goes quiet once one peer at that standing answers', 
   await replicateAndSync(g, m, n, b)
   t.is(await g.system.pendingPromotion(b.local.key), 0, 'genesis finished the request')
   t.is((await g.system.grantHint(b.local.key)).weight, 2, 'anchored at the full weight')
+
+  // the approval that satisfied the request cleared the entry, so the digest
+  // has nothing left to advertise
+  t.absent(g.system.promotions.digest, 'digest clears once the index is empty')
 })

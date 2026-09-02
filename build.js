@@ -44,8 +44,7 @@ auto.register({
     },
     {
       name: 'pending',
-      type: 'uint',
-      array: true
+      type: 'bool'
     }
   ]
 })

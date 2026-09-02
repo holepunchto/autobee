@@ -107,8 +107,8 @@ test('wire compat - system info decodes with and without pending', function (t) 
 
   const without = c.decode(SystemInfo, c.encode(SystemInfo, base))
   t.is(without.flushes, 2, 'a record written before pending existed still decodes')
-  t.ok(!without.pending || without.pending.length === 0, 'missing pending reads as empty')
+  t.absent(without.pending, 'missing pending reads as false')
 
-  const with_ = c.decode(SystemInfo, c.encode(SystemInfo, { ...base, pending: [0, 5, 0] }))
-  t.alike(with_.pending, [0, 5, 0], 'pending round-trips')
+  const with_ = c.decode(SystemInfo, c.encode(SystemInfo, { ...base, pending: true }))
+  t.ok(with_.pending, 'pending round-trips as a flag')
 })
