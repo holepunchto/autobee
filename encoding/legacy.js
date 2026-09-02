@@ -280,8 +280,8 @@ const SystemWriterV0 = {
 
     return {
       version: 0,
-      isIndexer: flags & 1,
-      isRemoved: flags & 2,
+      isIndexer: (flags & 1) !== 0,
+      isRemoved: (flags & 2) !== 0,
       length: c.uint.decode(state)
     }
   }
@@ -303,8 +303,14 @@ function memberLegacyMap(m) {
   return {
     version: 0,
     isRemoved: m.isRemoved,
+    isOplog: false,
     weight: m.isIndexer ? 2 : 1,
-    length: m.length
+    maxWeight: m.isIndexer ? 2 : 1,
+    length: m.length,
+    clock: 0,
+    isGenesis: false,
+    isAnchor: false,
+    timestamp: 0
   }
 }
 
