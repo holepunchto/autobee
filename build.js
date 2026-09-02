@@ -123,6 +123,50 @@ auto.register({
 })
 
 auto.register({
+  name: 'system-writer-v5',
+  fields: [
+    {
+      name: 'isRemoved',
+      type: 'bool',
+      required: true
+    },
+    {
+      name: 'isOplog',
+      type: 'bool',
+      required: true
+    },
+    {
+      // genesis or anchor
+      name: 'isGenesis',
+      type: 'bool',
+      required: true
+    },
+    {
+      // resolved sort weight of the writer's last applied node
+      name: 'weight',
+      type: 'uint',
+      required: true
+    },
+    {
+      // granted capability - written only by apply ops
+      name: 'maxWeight',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'length',
+      type: 'uint',
+      required: true
+    },
+    {
+      name: 'timestamp',
+      type: 'uint',
+      required: true
+    }
+  ]
+})
+
+auto.register({
   name: 'system-writer',
   versions: [
     {
@@ -133,6 +177,10 @@ auto.register({
     {
       version: 4,
       type: '@autobee/system-writer-v4'
+    },
+    {
+      version: 5,
+      type: '@autobee/system-writer-v5'
     }
   ]
 })

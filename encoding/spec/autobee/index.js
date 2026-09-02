@@ -613,7 +613,7 @@ const encoding20 = {
 // @autobee/system-writer
 const encoding21 = {
   preencode(state, m) {
-    const v = m.version ?? 4
+    const v = m.version ?? 5
     c.uint.preencode(state, v)
     switch (v) {
       case 0:
@@ -625,12 +625,15 @@ const encoding21 = {
       case 4:
         encoding20.preencode(state, m)
         break
+      case 5:
+        encoding37.preencode(state, m)
+        break
       default:
         throw new Error('Unsupported version')
     }
   },
   encode(state, m) {
-    const v = m.version ?? 4
+    const v = m.version ?? 5
     c.uint.encode(state, v)
     switch (v) {
       case 0:
@@ -641,6 +644,9 @@ const encoding21 = {
         break
       case 4:
         encoding20.encode(state, m)
+        break
+      case 5:
+        encoding37.encode(state, m)
         break
       default:
         throw new Error('Unsupported version')
@@ -661,6 +667,10 @@ const encoding21 = {
       }
       case 4: {
         const decoded = encoding20.decode(state)
+        return decoded
+      }
+      case 5: {
+        const decoded = encoding37.decode(state)
         return decoded
       }
       default:
@@ -1193,6 +1203,41 @@ const encoding36 = {
   }
 }
 
+// @autobee/system-writer-v5
+const encoding37 = {
+  preencode(state, m) {
+    state.end++ // max flag is 4 so always one byte
+    c.uint.preencode(state, m.weight)
+    c.uint.preencode(state, m.maxWeight)
+    c.uint.preencode(state, m.length)
+    c.uint.preencode(state, m.timestamp)
+  },
+  encode(state, m) {
+    const flags = (m.isRemoved ? 1 : 0) | (m.isOplog ? 2 : 0) | (m.isGenesis ? 4 : 0)
+
+    c.uint.encode(state, flags)
+    c.uint.encode(state, m.weight)
+    c.uint.encode(state, m.maxWeight)
+    c.uint.encode(state, m.length)
+    c.uint.encode(state, m.timestamp)
+  },
+  decode(state) {
+    const v = c.uint.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      version: v,
+      isRemoved: (flags & 1) !== 0,
+      isOplog: (flags & 2) !== 0,
+      isGenesis: (flags & 4) !== 0,
+      weight: c.uint.decode(state),
+      maxWeight: c.uint.decode(state),
+      length: c.uint.decode(state),
+      timestamp: c.uint.decode(state)
+    }
+  }
+}
+
 // @autobee/system-info-v3.heads, deferred due to recusive use
 const encoding18_3 = c.array(encoding22)
 // @autobee/system-info-v3.indexers, deferred due to recusive use
@@ -1303,6 +1348,8 @@ function getEncoding(name) {
       return encoding35
     case '@autobee/oplog-message-v4':
       return encoding36
+    case '@autobee/system-writer-v5':
+      return encoding37
     default:
       throw new Error('Encoder not found ' + name)
   }

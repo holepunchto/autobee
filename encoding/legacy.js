@@ -306,12 +306,10 @@ function memberLegacyMap(m) {
     version: 0,
     isRemoved: m.isRemoved,
     isOplog: false,
+    isGenesis: false,
     weight,
     maxWeight: weight,
     length: m.length,
-    clock: 0,
-    isGenesis: false,
-    isAnchor: false,
     timestamp: 0
   }
 }
@@ -326,11 +324,11 @@ function oplogLegacyMap(m) {
     links: m.links,
     batch: m.batch,
     views: m.views,
-    optimistic: m.optimistic,
-    value: m.value,
-    witness: null,
     trusted: m.trusted,
-    approvals: null
+    witness: null,
+    approvals: null,
+    optimistic: m.optimistic,
+    value: m.value
   }
 }
 

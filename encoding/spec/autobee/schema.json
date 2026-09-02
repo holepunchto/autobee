@@ -533,6 +533,11 @@
           "type": "@autobee/system-writer-v4",
           "map": null,
           "version": 4
+        },
+        {
+          "type": "@autobee/system-writer-v5",
+          "map": null,
+          "version": 5
         }
       ]
     },
@@ -962,6 +967,56 @@
         {
           "name": "value",
           "type": "buffer",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "system-writer-v5",
+      "namespace": "autobee",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "isRemoved",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isOplog",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "isGenesis",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "weight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxWeight",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "length",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
           "version": 1
         }
       ]
