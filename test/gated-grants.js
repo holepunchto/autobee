@@ -396,3 +396,52 @@ test('gated grants - a claim citing an anchor that raced the removal still lands
   }
   t.is(orders.size, 1, 'every peer converges on the same order')
 })
+
+// The O(1)-per-tier property: a request that only a stronger peer can finish
+// must stop soliciting the tier that already answered. digest[w - 1] going to
+// zero is what tells every other peer at standing w that its tier is done -
+// otherwise 100 weight-1 writers each offer their own approval while the
+// request waits on an offline weight-2 writer.
+test('gated grants - a tier goes quiet once one peer at that standing answers', async function (t) {
+  const g = await create(t, { bootstrapWeight: 3 })
+  const m = await create(t, g.key)
+  const n = await create(t, g.key)
+  const b = await create(t, g.key)
+
+  await g.append(encode({ addWriter: m.local.id, weight: 1 }))
+  await g.append(encode({ addWriter: n.local.id, weight: 1 }))
+  await replicateAndSync(g, m, n, b)
+  await replicateAndSync(g, m, n, b)
+
+  // b wants 2, but only m and n are online and both stand at 1
+  await m.append(encode({ addWriter: b.local.id, weight: 2 }))
+  await replicateAndSync(m, n, b)
+  await replicateAndSync(m, n, b)
+
+  const pending = await m.system.pendingPromotion(b.local.key)
+  t.is(pending, 2, 'the weight-2 request is still outstanding')
+
+  const hint = await m.system.grantHint(b.local.key)
+  t.is(hint.weight, 1, 'a standing-1 peer anchored the part it could')
+
+  for (const [name, auto] of [
+    ['m', m],
+    ['n', n]
+  ]) {
+    const digest = auto.system.promotions.digest
+    t.is(digest[0], 0, `${name}: tier 1 reads zero - nothing left for standing 1`)
+    t.ok(digest[1] > 0, `${name}: tier 2 still open for someone stronger`)
+  }
+
+  // n must not add a second approval at its own standing
+  const before = n.local.length
+  await n.append(encode({ msg: 'unrelated' }))
+  await replicateAndSync(m, n, b)
+  t.is(n.local.length, before + 1, 'n appended only its own message, no approval')
+
+  // and the stronger peer can still finish it
+  await replicateAndSync(g, m, n, b)
+  await replicateAndSync(g, m, n, b)
+  t.is(await g.system.pendingPromotion(b.local.key), 0, 'genesis finished the request')
+  t.is((await g.system.grantHint(b.local.key)).weight, 2, 'anchored at the full weight')
+})

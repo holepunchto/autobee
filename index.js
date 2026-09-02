@@ -893,9 +893,9 @@ module.exports = class Autobee extends ReadyResource {
       const prefetch = []
       const rec = await this.system.get(this.local.key, { activeRequests })
       const standing = currentWeight(rec)
-      if (standing <= 0 || !this._pendingWork()) return
+      if (standing <= 0 || !this._pendingWork(standing)) return
       for await (const p of this.system.listPendingPromotions({ activeRequests })) {
-        if (Math.min(standing, p.weight) <= 0) continue
+        if (Math.min(standing, p.weight) <= p.anchored) continue
         prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
         prefetch.push(this.system.grantHint(p.key, { activeRequests }).catch(safetyCatch))
       }
@@ -905,11 +905,13 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  // a request above our standing is still work (we anchor the partial), so
-  // the scan is not capped at standing - only the check-off below is
-  _pendingWork() {
+  // only our own tiers: a request whose lower tiers are already anchored is
+  // somebody stronger's job, and must not keep every peer at this standing
+  // rescanning (or offering) while it waits
+  _pendingWork(standing) {
     const digest = this.system.promotions.digest
-    for (let w = 1; w <= digest.length; w++) {
+    const end = Math.min(standing, digest.length)
+    for (let w = 1; w <= end; w++) {
       if (digest[w - 1] > (this._approvalsCheckedAt[w - 1] || 0)) return true
     }
     return false
@@ -927,7 +929,7 @@ module.exports = class Autobee extends ReadyResource {
     this.system.promotions.changed = false
     this._approvalCheck = false
 
-    if (!this._pendingWork()) return null
+    if (!this._pendingWork(standing)) return null
     const digest = this.system.promotions.digest.slice(0, standing)
 
     const approvals = []
@@ -935,8 +937,8 @@ module.exports = class Autobee extends ReadyResource {
 
     for await (const p of this.system.listPendingPromotions({ activeRequests })) {
       const amount = Math.min(standing, p.weight)
-      if (amount <= 0) continue
-      if (p.flushes <= (this._approvalsCheckedAt[p.weight - 1] || 0)) continue
+      if (amount <= p.anchored) continue
+      if (p.flushes <= (this._approvalsCheckedAt[amount - 1] || 0)) continue
       approving.push(fetchApproval.call(this, p.key, amount, approvals))
     }
 
