@@ -483,7 +483,9 @@ async function buggyForgeApproval(state) {
   await auto._bump()
 
   state.dirty.add(keyHex(auto))
-  state.log(`${forger.name} forges a self-approval weight=${weight} (stands at ${standing}) and cites it`)
+  state.log(
+    `${forger.name} forges a self-approval weight=${weight} (stands at ${standing}) and cites it`
+  )
   return true
 }
 
