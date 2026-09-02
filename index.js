@@ -908,7 +908,7 @@ module.exports = class Autobee extends ReadyResource {
   // a request above our standing is still work (we anchor the partial), so
   // the scan is not capped at standing - only the check-off below is
   _pendingWork() {
-    const digest = this.system.pendingDigest
+    const digest = this.system.promotions.digest
     for (let w = 1; w <= digest.length; w++) {
       if (digest[w - 1] > (this._approvalsCheckedAt[w - 1] || 0)) return true
     }
@@ -916,7 +916,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _collectApprovals() {
-    if (!this.system.pendingChanged && !this._approvalCheck) return null
+    if (!this.system.promotions.changed && !this._approvalCheck) return null
     if (!this.writers.writable) return null
 
     const activeRequests = this._approvalRequests
@@ -924,11 +924,11 @@ module.exports = class Autobee extends ReadyResource {
     const standing = currentWeight(rec)
     if (standing <= 0) return null
 
-    this.system.pendingChanged = false
+    this.system.promotions.changed = false
     this._approvalCheck = false
 
     if (!this._pendingWork()) return null
-    const digest = this.system.pendingDigest.slice(0, standing)
+    const digest = this.system.promotions.digest.slice(0, standing)
 
     const approvals = []
     const approving = []
@@ -1196,7 +1196,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const changed = await this.system.flush(batch, this._workingBee)
 
-    if (this.system.pendingChanged) this._prefetchApprovals().catch(safetyCatch)
+    if (this.system.promotions.changed) this._prefetchApprovals().catch(safetyCatch)
 
     if (local) {
       this._localSystemLength = this.system.bee.context.local.length - this._localSystemStart
