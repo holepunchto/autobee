@@ -363,7 +363,7 @@ async function embedWitness(state, claimant, witness, how) {
     { start: 0, end: 0 },
     links,
     false,
-    { pointer: 0, data: witness }
+    witness
   )
   await auto._bump()
 
@@ -477,7 +477,7 @@ async function buggyForgeApproval(state) {
     { start: 0, end: 0 },
     auto.system.getLinks(auto.local.key),
     false,
-    { pointer: 0, data: { weight, link: { key: auto.local.key, length: at } } },
+    { weight, link: { key: auto.local.key, length: at } },
     null
   )
   await auto._bump()

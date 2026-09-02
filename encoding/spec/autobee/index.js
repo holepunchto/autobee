@@ -803,7 +803,7 @@ const encoding26_inline = {
   }
 }
 
-// @autobee/witness-data
+// @autobee/witness
 const encoding27 = {
   preencode(state, m) {
     c.uint.preencode(state, m.weight)
@@ -824,38 +824,8 @@ const encoding27 = {
   }
 }
 
-// @autobee/witness.data
-const encoding28_1 = c.frame(encoding27)
-
-// @autobee/witness
-const encoding28 = {
-  preencode(state, m) {
-    c.uint.preencode(state, m.pointer)
-    state.end++ // max flag is 1 so always one byte
-
-    if (m.data) encoding28_1.preencode(state, m.data)
-  },
-  encode(state, m) {
-    const flags = m.data ? 1 : 0
-
-    c.uint.encode(state, m.pointer)
-    c.uint.encode(state, flags)
-
-    if (m.data) encoding28_1.encode(state, m.data)
-  },
-  decode(state) {
-    const r0 = c.uint.decode(state)
-    const flags = c.uint.decode(state)
-
-    return {
-      pointer: r0,
-      data: (flags & 1) !== 0 ? encoding28_1.decode(state) : null
-    }
-  }
-}
-
 // @autobee/approval
-const encoding29 = {
+const encoding28 = {
   preencode(state, m) {
     c.fixed32.preencode(state, m.key)
     c.uint.preencode(state, m.weight)
@@ -876,7 +846,7 @@ const encoding29 = {
 }
 
 // @autobee/trusted-head
-const encoding30 = {
+const encoding29 = {
   preencode(state, m) {
     c.fixed32.preencode(state, m.key)
     c.uint.preencode(state, m.length)
@@ -901,14 +871,14 @@ const encoding30 = {
 }
 
 // @autobee/oplog-message-v3.witness
-const encoding31_6 = c.frame(encoding28)
+const encoding30_6 = c.frame(encoding27)
 // @autobee/oplog-message-v3.trusted
-const encoding31_7 = c.array(c.frame(encoding30))
+const encoding30_7 = c.array(c.frame(encoding29))
 // @autobee/oplog-message-v3.approvals
-const encoding31_8 = c.array(encoding29)
+const encoding30_8 = c.array(encoding28)
 
 // @autobee/oplog-message-v3
-const encoding31 = {
+const encoding30 = {
   preencode(state, m) {
     let flags =
       (m.batch ? 1 : 0) |
@@ -923,15 +893,15 @@ const encoding31 = {
     }
 
     c.uint.preencode(state, m.timestamp)
-    encoding31_1.preencode(state, m.links)
+    encoding30_1.preencode(state, m.links)
     c.uint.preencode(state, flags)
 
     if (m.batch) encoding25.preencode(state, m.batch)
     if (m.views) encoding26_inline.preencode(state, m.views)
     if (m.value) c.buffer.preencode(state, m.value)
-    if (m.witness) encoding31_6.preencode(state, m.witness)
-    if (m.trusted) encoding31_7.preencode(state, m.trusted)
-    if (m.approvals) encoding31_8.preencode(state, m.approvals)
+    if (m.witness) encoding30_6.preencode(state, m.witness)
+    if (m.trusted) encoding30_7.preencode(state, m.trusted)
+    if (m.approvals) encoding30_8.preencode(state, m.approvals)
   },
   encode(state, m) {
     let flags =
@@ -947,20 +917,20 @@ const encoding31 = {
     }
 
     c.uint.encode(state, m.timestamp)
-    encoding31_1.encode(state, m.links)
+    encoding30_1.encode(state, m.links)
     c.uint.encode(state, flags)
 
     if (m.batch) encoding25.encode(state, m.batch)
     if (m.views) encoding26_inline.encode(state, m.views)
     if (m.value) c.buffer.encode(state, m.value)
-    if (m.witness) encoding31_6.encode(state, m.witness)
-    if (m.trusted) encoding31_7.encode(state, m.trusted)
-    if (m.approvals) encoding31_8.encode(state, m.approvals)
+    if (m.witness) encoding30_6.encode(state, m.witness)
+    if (m.trusted) encoding30_7.encode(state, m.trusted)
+    if (m.approvals) encoding30_8.encode(state, m.approvals)
   },
   decode(state) {
     const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
-    const r1 = encoding31_1.decode(state)
+    const r1 = encoding30_1.decode(state)
     const flags = c.uint.decode(state)
 
     return {
@@ -971,15 +941,15 @@ const encoding31 = {
       views: (flags & 2) !== 0 ? encoding26_inline.decode(state, flags >>> 2) : null,
       optimistic: (flags & 8) !== 0,
       value: (flags & 16) !== 0 ? c.buffer.decode(state) : null,
-      witness: (flags & 32) !== 0 ? encoding31_6.decode(state) : null,
-      trusted: (flags & 64) !== 0 ? encoding31_7.decode(state) : null,
-      approvals: (flags & 128) !== 0 ? encoding31_8.decode(state) : null
+      witness: (flags & 32) !== 0 ? encoding30_6.decode(state) : null,
+      trusted: (flags & 64) !== 0 ? encoding30_7.decode(state) : null,
+      approvals: (flags & 128) !== 0 ? encoding30_8.decode(state) : null
     }
   }
 }
 
 // @autobee/oplog
-const encoding32 = {
+const encoding31 = {
   preencode(state, m) {
     const v = m.version ?? 3
     c.uint.preencode(state, v)
@@ -994,7 +964,7 @@ const encoding32 = {
         encoding14.preencode(state, m)
         break
       case 3:
-        encoding31.preencode(state, m)
+        encoding30.preencode(state, m)
         break
       default:
         throw new Error('Unsupported version')
@@ -1014,7 +984,7 @@ const encoding32 = {
         encoding14.encode(state, m)
         break
       case 3:
-        encoding31.encode(state, m)
+        encoding30.encode(state, m)
         break
       default:
         throw new Error('Unsupported version')
@@ -1038,7 +1008,7 @@ const encoding32 = {
         return decoded
       }
       case 3: {
-        const decoded = encoding31.decode(state)
+        const decoded = encoding30.decode(state)
         return decoded
       }
       default:
@@ -1048,7 +1018,7 @@ const encoding32 = {
 }
 
 // @autobee/manifest-data
-const encoding33 = {
+const encoding32 = {
   preencode(state, m) {
     c.uint.preencode(state, m.version)
     state.end++ // max flag is 2 so always one byte
@@ -1082,7 +1052,7 @@ const encoding18_3 = c.array(encoding22)
 // @autobee/system-info-v3.indexers, deferred due to recusive use
 const encoding18_4 = encoding18_3
 // @autobee/oplog-message-v3.links, deferred due to recusive use
-const encoding31_1 = encoding18_3
+const encoding30_1 = encoding18_3
 
 function setVersion(v) {
   version = v
@@ -1161,20 +1131,18 @@ function getEncoding(name) {
       return encoding25
     case '@autobee/views':
       return encoding26
-    case '@autobee/witness-data':
-      return encoding27
     case '@autobee/witness':
-      return encoding28
+      return encoding27
     case '@autobee/approval':
-      return encoding29
+      return encoding28
     case '@autobee/trusted-head':
-      return encoding30
+      return encoding29
     case '@autobee/oplog-message-v3':
-      return encoding31
+      return encoding30
     case '@autobee/oplog':
-      return encoding32
+      return encoding31
     case '@autobee/manifest-data':
-      return encoding33
+      return encoding32
     default:
       throw new Error('Encoder not found ' + name)
   }

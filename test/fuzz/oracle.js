@@ -46,11 +46,11 @@ function adaptNode(n) {
     links: (n.links || []).map((l) => ({ key: b4a.toString(l.key, 'hex'), length: l.length })),
     // pointer-form witnesses carry no claim and no new dep
     witness:
-      n.witness && n.witness.data
+      n.witness
         ? {
             link: {
-              key: b4a.toString(n.witness.data.link.key, 'hex'),
-              length: n.witness.data.link.length
+              key: b4a.toString(n.witness.link.key, 'hex'),
+              length: n.witness.link.length
             }
           }
         : null,

@@ -996,38 +996,10 @@ module.exports = class Autobee extends ReadyResource {
     const approvals = await this._collectApprovals()
     if (!approvals) return false
 
-    const witness = await this._witnessRef()
     const links = this.system.getLinks(this.local.key)
     const t = Math.max(this._now(), this.system.timestamp)
-    const node = this.writers.appendLocal(
-      null,
-      t,
-      { start: 0, end: 0 },
-      links,
-      false,
-      witness,
-      approvals
-    )
+    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null, approvals)
     return true
-  }
-
-  // approval carriers prove their standing: pointer back to our last witness,
-  // else re-cite the hint inline. genesis proves by key, no witness needed
-  async _witnessRef() {
-    if (b4a.equals(this.local.key, this.key)) return null
-
-    const w = this.writers.localWriter
-    await w.loadWitnessPointer()
-    if (w.witnessPointer >= 0) {
-      return { pointer: w.witnessPointer + 1, data: null }
-    }
-
-    const hint = await this.system.grantHint(this.local.key)
-    if (hint === null) return null
-    return {
-      pointer: 0,
-      data: { weight: hint.weight, link: { key: hint.key, length: hint.length } }
-    }
   }
 
   // append a null value node to ack writer
@@ -1285,15 +1257,11 @@ module.exports = class Autobee extends ReadyResource {
     if (rec) {
       const hint = await this.system.grantHint(this.local.key)
       if (hint && hint.weight > currentWeight(rec)) {
-        witness = {
-          pointer: 0,
-          data: { weight: hint.weight, link: { key: hint.key, length: hint.length } }
-        }
+        witness = { weight: hint.weight, link: { key: hint.key, length: hint.length } }
       }
     }
 
     const approvals = optimistic ? null : await this._collectApprovals()
-    if (approvals && !witness) witness = await this._witnessRef()
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]

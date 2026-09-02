@@ -649,7 +649,7 @@
       ]
     },
     {
-      "name": "witness-data",
+      "name": "witness",
       "namespace": "autobee",
       "compact": false,
       "flagsPosition": -1,
@@ -664,26 +664,6 @@
           "name": "link",
           "required": true,
           "type": "@autobee/link",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "witness",
-      "namespace": "autobee",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "pointer",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "data",
-          "required": false,
-          "type": "@autobee/witness-data",
           "version": 1
         }
       ]

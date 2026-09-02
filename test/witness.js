@@ -5,7 +5,7 @@ const { create, replicateAndSync, encode } = require('./helpers')
 async function forceWitness(auto, value, witness) {
   const links = auto.system.getLinks(auto.local.key)
   const ts = Math.max(auto._now(), auto.system.timestamp)
-  const ref = { pointer: 0, data: witness }
+  const ref = witness
   auto.writers.appendLocal(encode(value), ts, { start: 0, end: 0 }, links, false, ref)
   await auto._bump()
 }

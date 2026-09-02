@@ -234,7 +234,7 @@ auto.register({
 })
 
 auto.register({
-  name: 'witness-data',
+  name: 'witness',
   fields: [
     {
       name: 'weight',
@@ -245,22 +245,6 @@ auto.register({
       name: 'link',
       type: '@autobee/link',
       required: true
-    }
-  ]
-})
-
-auto.register({
-  name: 'witness',
-  fields: [
-    {
-      name: 'pointer',
-      type: 'uint',
-      required: true
-    },
-    {
-      name: 'data',
-      type: '@autobee/witness-data',
-      required: false
     }
   ]
 })
