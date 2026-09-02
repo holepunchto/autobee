@@ -255,8 +255,6 @@ test('view - rapid alternating writes then single sync', async function (t) {
 })
 
 test('view - restart converges with peers after undo-redo', async function (t) {
-  const { dump } = require('./helpers')
-
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
@@ -270,10 +268,6 @@ test('view - restart converges with peers after undo-redo', async function (t) {
 
   t.ok(await same(auto1, auto2), 'peers converge before restart')
 
-  console.log('\n--- before restart ---')
-  console.log('auto1 view:\n' + (await dump(auto1)))
-  console.log('auto2 view:\n' + (await dump(auto2)))
-
   // Restart auto1 from same storage
   const storage = auto1.store.storage
   const auto1Key = auto1.key
@@ -281,15 +275,8 @@ test('view - restart converges with peers after undo-redo', async function (t) {
   const auto1b = await create(t, auto1Key, { storage })
   await auto1b.ready()
 
-  console.log('\n--- after restart, before sync ---')
-  console.log('auto1b view:\n' + (await dump(auto1b)))
-
   // Sync restarted node with auto2
   await replicateAndSync(auto1b, auto2)
-
-  console.log('\n--- after restart + sync ---')
-  console.log('auto1b view:\n' + (await dump(auto1b)))
-  console.log('auto2 view:\n' + (await dump(auto2)))
 
   // The restarted node must converge with auto2
   t.ok(await same(auto1b, auto2), 'restarted node converges with peer')
