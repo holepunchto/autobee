@@ -891,17 +891,30 @@ module.exports = class Autobee extends ReadyResource {
 
     try {
       const prefetch = []
-      const rec = await this.system.get(this.local.key, { activeRequests })
-      const standing = currentWeight(rec)
+      const standing = await this._standing(activeRequests)
       if (standing <= 0 || !this._pendingWork(standing)) return
-      for await (const p of this.system.listPendingPromotions({ activeRequests })) {
-        if (Math.min(standing, p.weight) <= p.anchored) continue
+      for await (const p of this._servableRequests(standing, activeRequests)) {
         prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
         prefetch.push(this.system.grantHint(p.key, { activeRequests }).catch(safetyCatch))
       }
       await Promise.allSettled(prefetch)
     } finally {
       this._prefetchingApprovals = false
+    }
+  }
+
+  async _standing(activeRequests) {
+    const rec = await this.system.get(this.local.key, { activeRequests })
+    return currentWeight(rec)
+  }
+
+  // the requests we could serve and by how much - shared by the prefetch and
+  // the collector so the two cannot drift on what counts as ours
+  async *_servableRequests(standing, activeRequests) {
+    for await (const p of this.system.listPendingPromotions({ activeRequests })) {
+      const amount = Math.min(standing, p.weight)
+      if (amount <= 0) continue
+      yield { key: p.key, amount, flushes: p.flushes }
     }
   }
 
@@ -922,27 +935,25 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.writers.writable) return null
 
     const activeRequests = this._approvalRequests
-    const rec = await this.system.get(this.local.key, { activeRequests })
-    const standing = currentWeight(rec)
+    const standing = await this._standing(activeRequests)
     if (standing <= 0) return null
 
     this.system.promotions.changed = false
     this._approvalCheck = false
 
     if (!this._pendingWork(standing)) return null
-    const digest = this.system.promotions.digest.slice(0, standing)
+    const digest = this.system.promotions.digest
+    const end = Math.min(standing, digest.length)
 
     const approvals = []
     const approving = []
 
-    for await (const p of this.system.listPendingPromotions({ activeRequests })) {
-      const amount = Math.min(standing, p.weight)
-      if (amount <= p.anchored) continue
-      if (p.flushes <= (this._approvalsCheckedAt[amount - 1] || 0)) continue
-      approving.push(fetchApproval.call(this, p.key, amount, approvals))
+    for await (const p of this._servableRequests(standing, activeRequests)) {
+      if (p.flushes <= (this._approvalsCheckedAt[p.amount - 1] || 0)) continue
+      approving.push(fetchApproval.call(this, p.key, p.amount, approvals))
     }
 
-    for (let w = 1; w <= digest.length; w++) {
+    for (let w = 1; w <= end; w++) {
       while (this._approvalsCheckedAt.length < w) this._approvalsCheckedAt.push(0)
       if (digest[w - 1] > this._approvalsCheckedAt[w - 1]) {
         this._approvalsCheckedAt[w - 1] = digest[w - 1]

@@ -80,12 +80,14 @@ const actions = [
   // rounds have to merge much staler branches (deeper reorgs, harder
   // recompute-on-reapply) than a fixed sync cadence alone produces
   { name: 'pairSync', weight: 2, run: pairSync },
-  // fault injection: a single faulty CLAIMANT, three ways. there is no
-  // buggy-backer action any more - the grant log is system-authored, so a
-  // third party has nothing to forge. all three must floor deterministically
+  // fault injection: a single faulty CLAIMANT, four ways. approvals are wire
+  // data, so a writer can hand-craft one for itself - forging above your own
+  // standing and citing it is a single-fault attack. all four must floor
+  // deterministically
   { name: 'buggyClaimInflate', weight: BYZ, run: buggyClaimInflate },
   { name: 'buggyClaimNakedLink', weight: BYZ, run: buggyClaimNakedLink },
   { name: 'buggyClaimForeignGrant', weight: BYZ, run: buggyClaimForeignGrant },
+  { name: 'buggyForgeApproval', weight: BYZ, run: buggyForgeApproval },
   // EXPERIMENT (FUZZ_COND_GRANT=live|carrier): an application-level
   // rule - "only an admin may promote to admin" - whose verdict is evaluated
   // inside apply, three ways (live register read / cited grant / carrier
@@ -440,6 +442,51 @@ async function buggyClaimForeignGrant(state) {
   return false
 }
 
+// forge a self-approval above our own standing, then cite it
+async function buggyForgeApproval(state) {
+  const writable = writableEntries(state)
+  if (!writable.length) return false
+
+  const forger = state.rng.pick(writable)
+  const auto = forger.auto
+
+  const rec = await auto.system.get(auto.local.key)
+  const standing = recWeight(rec)
+
+  const weight = Math.min(state.config.maxWeight, standing + 1)
+  if (weight <= standing) return false
+
+  const at = auto.writers.localWriter.appendLength
+
+  state.seq++
+  auto.writers.appendLocal(
+    encode({ msg: `m${state.seq}`, from: forger.name }),
+    Math.max(auto._now(), auto.system.timestamp),
+    { start: 0, end: 0 },
+    auto.system.getLinks(auto.local.key),
+    false,
+    null,
+    [{ key: auto.local.key, weight }]
+  )
+  await auto._bump()
+
+  state.seq++
+  auto.writers.appendLocal(
+    encode({ msg: `m${state.seq}`, from: forger.name }),
+    Math.max(auto._now(), auto.system.timestamp),
+    { start: 0, end: 0 },
+    auto.system.getLinks(auto.local.key),
+    false,
+    { pointer: 0, data: { weight, link: { key: auto.local.key, length: at } } },
+    null
+  )
+  await auto._bump()
+
+  state.dirty.add(keyHex(auto))
+  state.log(`${forger.name} forges a self-approval weight=${weight} (stands at ${standing}) and cites it`)
+  return true
+}
+
 async function pairSync(state) {
   // below 3 peers the full sync cadence already covers this
   if (state.pool.length < 3) return false
@@ -525,6 +572,12 @@ function granterStanding(state, entry) {
 
 function currentWeight(state, hex) {
   return state.weights.get(hex) || 0
+}
+
+function recWeight(rec) {
+  if (!rec) return 0
+  if (rec.maxWeight > 0 && rec.isGenesis) return rec.maxWeight
+  return rec.weight
 }
 
 function randWeightAtLeast(state, floor) {
