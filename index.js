@@ -587,10 +587,6 @@ module.exports = class Autobee extends ReadyResource {
           this._needsUpdate = true
         }
 
-        if (!this._interrupting && (await this._appendApprovals())) {
-          this._needsUpdate = true
-        }
-
         await this._flushLocal()
 
         if (!this._interrupting) await this.writers.refresh()
@@ -985,18 +981,6 @@ module.exports = class Autobee extends ReadyResource {
       if (hint && hint.weight >= weight) return
       approvals.push({ key, weight })
     }
-  }
-
-  async _appendApprovals() {
-    if (!this.writers.writable) return false
-
-    const approvals = await this._collectApprovals()
-    if (!approvals) return false
-
-    const links = this.system.getLinks(this.local.key)
-    const t = Math.max(this._now(), this.system.timestamp)
-    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null, approvals)
-    return true
   }
 
   // append a null value node to ack writer
