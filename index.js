@@ -1377,10 +1377,7 @@ module.exports = class Autobee extends ReadyResource {
     // peek, so the hints are still there for the drain once we have booted
     const result = await this._filterHints(this._wakeup.hints)
 
-    const candidates = await this._readCandidateHeads(
-      result,
-      FastForward.DEFAULT_TIMEOUT
-    )
+    const candidates = await this._readCandidateHeads(result, FastForward.DEFAULT_TIMEOUT)
 
     const ff = await FastForward.fromHeads(this, [head, ...candidates], {
       force: true,
