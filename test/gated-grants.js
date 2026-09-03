@@ -23,13 +23,18 @@ test('gated grants - a grant clamps until a qualified peer sees it', async funct
   const b = await create(t, g.key)
 
   await g.append(encode({ addWriter: m.local.id, weight: 2 }))
-  await replicateAndSync(g, m, b)
+  await g.append(encode({ msg: 'g-approves' }))
+  await replicateAndSync(m, g)
   await m.append(encode({ msg: 'm-cites' }))
-  await replicateAndSync(g, m, b)
 
   await m.append(encode({ addWriter: b.local.id, weight: 3 }))
   await replicateAndSync(m, b)
   await b.append(encode({ msg: 'b-cites-the-clamp' }))
+  await replicateAndSync(m, b)
+
+  await m.append(encode({ msg: 'm-approves' }))
+  await replicateAndSync(m, b)
+  await b.append(encode({ msg: 'b-cites' }))
   await replicateAndSync(m, b)
 
   for (const [name, auto] of [
@@ -43,6 +48,7 @@ test('gated grants - a grant clamps until a qualified peer sees it', async funct
   }
 
   await replicateAndSync(g, m, b)
+  await g.append(encode({ msg: 'g-approves-b' }))
   await replicateAndSync(g, m, b)
   await b.append(encode({ msg: 'b-cites-the-approval' }))
   await replicateAndSync(g, m, b)
@@ -68,6 +74,7 @@ test('gated grants - the approval op is citable like any grant', async function 
   await replicateAndSync(g, m, b)
   await m.append(encode({ addWriter: b.local.id, weight: 3 }))
   await replicateAndSync(g, m, b)
+  await g.append(encode({ msg: 'g-approves' }))
   await replicateAndSync(g, m, b)
 
   const approved = await b.system.grantHint(b.local.key)
@@ -95,6 +102,7 @@ test('gated grants - an ack racing removal of the acker converges', async functi
   await g.append(encode({ addWriter: a.local.id, weight: 3 }))
   await g.append(encode({ addWriter: d.local.id, weight: 3 }))
   await g.append(encode({ addWriter: b.local.id, weight: 1 }))
+  await g.append(encode({ msg: 'g-approves' }))
   await replicateAndSync(g, a, d, b)
   await a.append(encode({ msg: 'a-cites' }))
   await d.append(encode({ msg: 'd-cites' }))
@@ -103,6 +111,7 @@ test('gated grants - an ack racing removal of the acker converges', async functi
   await d.append(encode({ removeWriter: a.local.id }))
   await new Promise((resolve) => setTimeout(resolve, 5))
   await a.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await a.append(encode({ msg: 'a-approves' }))
 
   await replicateAndSync(a, b)
   await b.append(encode({ msg: 'claim' }))
@@ -138,11 +147,14 @@ test('gated grants - weight above the genesis root cannot be minted', async func
   const y = await create(t, g.key)
 
   await g.append(encode({ addWriter: x.local.id, weight: 3 }))
+  await g.append(encode({ msg: 'g-approves' }))
   await replicateAndSync(g, x, y)
   await x.append(encode({ msg: 'x-cites' }))
   await replicateAndSync(g, x, y)
 
   await x.append(encode({ addWriter: y.local.id, weight: 5 }))
+  await replicateAndSync(g, x, y)
+  await x.append(encode({ msg: 'x-approves' }))
   await replicateAndSync(g, x, y)
   await y.append(encode({ msg: 'y-cites' }))
   await replicateAndSync(g, x, y)
@@ -172,18 +184,9 @@ test('gated grants - the approver indexes its own approval like every remote', a
   await g.append(encode({ addWriter: m.local.id, weight: 2 }))
   await replicateAndSync(g, m, b)
   await m.append(encode({ addWriter: b.local.id, weight: 3 }))
-
-  const links = g.system.getLinks(g.local.key)
-  g.writers.appendLocal(
-    encode({ msg: 'carrier' }),
-    Date.now(),
-    { start: 0, end: 0 },
-    links,
-    false,
-    null
-  )
-
   await replicateAndSync(g, m, b)
+
+  await g.append(encode({ msg: 'carrier' }))
   await replicateAndSync(g, m, b)
 
   const approval = await g.system.grantHint(b.local.key)
@@ -191,8 +194,9 @@ test('gated grants - the approver indexes its own approval like every remote', a
   t.ok(b4a.equals(approval.key, g.local.key), 'authored by the qualified peer')
 
   const node = encoding.decodeOplog(await g.local.get(approval.length - 1))
-  t.is(node.approvals.length, 1, 'the entry coordinate carries the wire field')
-  t.ok(b4a.equals(node.approvals[0].key, b.local.key), 'for the proposed writer')
+  const entry = node.approvals.find((a) => b4a.equals(a.key, b.local.key))
+  t.ok(entry, 'the entry coordinate carries the wire field for the proposed writer')
+  t.is(entry.weight, 3, 'at the approved weight')
 
   for (const [name, auto] of [
     ['g', g],
@@ -209,13 +213,13 @@ test('gated grants - the hint stays one entry per writer across grants', async f
   const b = await create(t, g.key)
 
   await g.append(encode({ addWriter: b.local.id, weight: 2 }))
-  await replicateAndSync(g, b)
+  await g.append(encode({ msg: 'g-approves' }))
   await replicateAndSync(g, b)
   const first = await g.system.grantHint(b.local.key)
   t.is(first.weight, 2, 'anchored at 2')
 
   await g.append(encode({ addWriter: b.local.id, weight: 3 }))
-  await replicateAndSync(g, b)
+  await g.append(encode({ msg: 'g-approves-again' }))
   await replicateAndSync(g, b)
 
   await b.append(encode({ msg: 'claim' }))
@@ -241,6 +245,8 @@ test('gated grants - hint and pending prune on removal', async function (t) {
   await replicateAndSync(g, m, b)
   await m.append(encode({ addWriter: b.local.id, weight: 5 }))
   await replicateAndSync(g, m, b)
+  await g.append(encode({ msg: 'g-approves' }))
+  await replicateAndSync(g, m, b)
 
   t.ok(await g.system.grantHint(b.local.key), 'hint live before removal')
   t.is(await g.system.pendingPromotion(b.local.key), 5, 'pending live before removal')
@@ -263,6 +269,7 @@ test('gated grants - an unfulfillable pending promotion persists and is listable
   const b = await create(t, g.key)
 
   await g.append(encode({ addWriter: m.local.id, weight: 2 }))
+  await g.append(encode({ msg: 'g-approves-m' }))
   await replicateAndSync(g, m, b)
   await m.append(encode({ addWriter: b.local.id, weight: 5 }))
   await replicateAndSync(g, m, b)
@@ -331,12 +338,13 @@ test('gated grants - a removed approver anchor stays verifiable', async function
   const b = await create(t, g.key)
 
   await g.append(encode({ addWriter: a.local.id, weight: 3 }))
+  await g.append(encode({ msg: 'g-approves-a' }))
   await replicateAndSync(g, a, b)
   await a.append(encode({ msg: 'a-cites' }))
   await replicateAndSync(g, a, b)
 
   await a.append(encode({ addWriter: b.local.id, weight: 3 }))
-  await replicateAndSync(g, a, b)
+  await a.append(encode({ msg: 'a-approves-b' }))
   await replicateAndSync(g, a, b)
 
   const hint = await b.system.grantHint(b.local.key)
@@ -367,6 +375,7 @@ test('gated grants - a claim citing an anchor that raced the removal still lands
 
   await g.append(encode({ addWriter: a.local.id, weight: 3 }))
   await g.append(encode({ addWriter: b.local.id, weight: 1 }))
+  await g.append(encode({ msg: 'g-approves' }))
   await replicateAndSync(g, a, b)
   await a.append(encode({ msg: 'a-cites' }))
   await replicateAndSync(g, a, b)
@@ -374,7 +383,7 @@ test('gated grants - a claim citing an anchor that raced the removal still lands
   await replicateAndSync(g, a, b)
 
   await a.append(encode({ addWriter: b.local.id, weight: 3 }))
-  await replicateAndSync(a, b)
+  await a.append(encode({ msg: 'a-approves-b' }))
   await replicateAndSync(a, b)
   await b.append(encode({ msg: 'doomed claim' }))
   await replicateAndSync(a, b)
@@ -410,12 +419,15 @@ test('gated grants - a tier goes quiet once one peer at that standing answers', 
 
   await g.append(encode({ addWriter: m.local.id, weight: 1 }))
   await g.append(encode({ addWriter: n.local.id, weight: 1 }))
+  await g.append(encode({ msg: 'g-approves' }))
   await replicateAndSync(g, m, n, b)
+  await m.append(encode({ msg: 'm-cites' }))
+  await n.append(encode({ msg: 'n-cites' }))
   await replicateAndSync(g, m, n, b)
 
   // b wants 2, but only m and n are online and both stand at 1
   await m.append(encode({ addWriter: b.local.id, weight: 2 }))
-  await replicateAndSync(m, n, b)
+  await m.append(encode({ msg: 'm-approves' }))
   await replicateAndSync(m, n, b)
 
   const pending = await m.system.pendingPromotion(b.local.key)
@@ -433,14 +445,23 @@ test('gated grants - a tier goes quiet once one peer at that standing answers', 
     t.ok(digest[1], `${name}: tier 2 still open for someone stronger`)
   }
 
-  // n must not add a second approval at its own standing
+  // n must not add a second approval at its own standing. approvals ride the
+  // writer's own node now, so this reads the node rather than counting them
+  const encoding = require('../lib/encoding.js')
   const before = n.local.length
   await n.append(encode({ msg: 'unrelated' }))
   await replicateAndSync(m, n, b)
-  t.is(n.local.length, before + 1, 'n appended only its own message, no approval')
+  t.is(n.local.length, before + 1, 'n appended only its own message')
+
+  const carried = encoding.decodeOplog(await n.local.get(before))
+  t.absent(
+    carried.approvals && carried.approvals.some((a) => b4a.equals(a.key, b.local.key)),
+    'n carried no approval for b - its tier already answered'
+  )
 
   // and the stronger peer can still finish it
   await replicateAndSync(g, m, n, b)
+  await g.append(encode({ msg: 'g-finishes' }))
   await replicateAndSync(g, m, n, b)
   t.is(await g.system.pendingPromotion(b.local.key), 0, 'genesis finished the request')
   t.is((await g.system.grantHint(b.local.key)).weight, 2, 'anchored at the full weight')

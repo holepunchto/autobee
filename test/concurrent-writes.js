@@ -39,7 +39,7 @@ test('three-way fork and merge', async function (t) {
 
   // The test helper only stores the latest value, so we verify the merge happened
   // by checking that all nodes have the same state and local lengths increased
-  t.is(auto1.local.length, 6, 'auto1 wrote 6 entries (initial + 2 addWriter + 2 anchors + fork)')
+  t.is(auto1.local.length, 4, 'auto1 wrote 4 entries (initial + 2 addWriter + fork)')
   t.is(auto2.local.length, 1, 'auto2 wrote 1 entry (fork)')
   t.is(auto3.local.length, 1, 'auto3 wrote 1 entry (fork)')
 })
@@ -103,6 +103,6 @@ test('sequential fork and merge - multiple rounds', async function (t) {
 
   // auto1: initial + addWriter + round1 + round2 + round3 = 5 entries
   // auto2: round1 + round2 + round3 = 3 entries
-  t.is(auto1.local.length, 6, 'auto1 wrote 6 entries total (incl anchor)')
+  t.is(auto1.local.length, 5, 'auto1 wrote 5 entries total')
   t.is(auto2.local.length, 3, 'auto2 wrote 3 entries total')
 })

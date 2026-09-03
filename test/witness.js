@@ -23,6 +23,9 @@ test('witness - grant-linked elevation works end to end', async function (t) {
   await replicateAndSync(a, b, c)
   t.ok(b.writable, 'b writable')
 
+  await a.append(encode({ msg: 'a-approves' }))
+  await replicateAndSync(a, b, c)
+
   await b.append(encode({ msg: 'from b' }))
   await replicateAndSync(a, b, c)
 
@@ -45,6 +48,9 @@ test('witness - elevation survives removal of the granter', async function (t) {
 
   await a.append(encode({ addWriter: c.local.id, weight: 2 }))
   await a.append(encode({ addWriter: b.local.id, weight: 2 }))
+  await replicateAndSync(a, b, c)
+
+  await a.append(encode({ msg: 'a-approves' }))
   await replicateAndSync(a, b, c)
 
   await b.append(encode({ msg: 'from b' }))
@@ -73,12 +79,16 @@ test('witness - either of two concurrent equal grants justifies a claim', async 
   const c = await create(t, a.key)
 
   await a.append(encode({ addWriter: c.local.id, weight: 2 }))
+  await a.append(encode({ msg: 'a-approves-c' }))
+  await replicateAndSync(a, b, c)
+  await c.append(encode({ msg: 'c-cites' }))
   await replicateAndSync(a, b, c)
 
   await a.append(encode({ addWriter: b.local.id, weight: 2 }))
   await c.append(encode({ addWriter: b.local.id, weight: 2 }))
   await replicateAndSync(a, b, c)
 
+  await a.append(encode({ msg: 'a-approves-b' }))
   await replicateAndSync(a, b, c)
 
   await b.append(encode({ msg: 'from b' }))
@@ -172,6 +182,9 @@ test('witness - a grant to another writer does not justify our claim', async fun
 
   await a.append(encode({ addWriter: b.local.id, weight: 1 }))
   await a.append(encode({ addWriter: c.local.id, weight: 3 }))
+  await replicateAndSync(a, b, c)
+
+  await a.append(encode({ msg: 'a-approves' }))
   await replicateAndSync(a, b, c)
 
   const cGrant = await b.system.grantHint(c.local.key)
