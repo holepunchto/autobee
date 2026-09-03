@@ -24,6 +24,7 @@ const TrustedPeers = require('./lib/trusted.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
+const { trace, traceVerbose } = require('./lib/debug-log.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
@@ -69,7 +70,7 @@ module.exports = class Autobee extends ReadyResource {
     this._handlers = handlers
     this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
 
-    this.system = new System(this.store.namespace('system'), this.name, {
+    this.system = new System(this.store.namespace('system'), name, {
       getEncryptionProvider: this.getSystemEncryption,
       encrypted: this.encrypted
     })
@@ -177,6 +178,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _open() {
+    trace(this, 'open: starting', { key: this.key, ff: this._ffEnabled })
+
     await this._preBoot()
 
     this._bootingState = this._bootState()
@@ -192,6 +195,13 @@ module.exports = class Autobee extends ReadyResource {
     this._localSystemStart = this.system.bee.context.local.length
     this._localViewStart = this._workingBee.context.local.length
     this._localFlushes = this.system.flushes
+
+    trace(this, 'open: ready', {
+      writable: this.writable,
+      flushes: this.system.flushes,
+      view: this.system.view,
+      heads: this.system.heads
+    })
 
     this.bumpSoon()
   }
@@ -378,6 +388,13 @@ module.exports = class Autobee extends ReadyResource {
     this.previousDrain = result.previousDrain
     this.local = result.local
 
+    trace(this, 'boot: read local storage', {
+      local: result.local.key,
+      system: result.system,
+      migration: result.migration ? 'legacy autobase' : 'none',
+      previousDrain: result.previousDrain
+    })
+
     if (this.encrypted && this.encryptionKey === null) {
       throw new Error('Encryption key is expected')
     }
@@ -408,19 +425,43 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.system.boot(system)
 
+    trace(this, 'boot: system booted', {
+      head: system,
+      version: this.system.version,
+      flushes: this.system.flushes,
+      view: this.system.view,
+      heads: this.system.heads
+    })
+
     const migrated = await this.local.getUserData('autobee/migrated-head')
     if (migrated) this._migratedHead = encoding.decodeMigratedHead(migrated)
+
+    if (this._migratedHead) {
+      trace(this, 'boot: found stored migrated head', {
+        system: this._migratedHead.system,
+        view: this._migratedHead.view
+      })
+    }
 
     let view = this.system.view
     if (!view) view = (this._migratedHead && this._migratedHead.view) || EMPTY_HEAD
 
     // @todo migration
     if (result.migration) {
+      trace(this, 'migrate: local autobase storage', {
+        system: result.migration.system,
+        views: result.migration.views,
+        catchup: result.migration.catchup.length,
+        hasHandler: !!this._handlers.migrate
+      })
+
       if (this._handlers.migrate) {
         view =
           (await this._handlers.migrate(result.migration.views, result.migration.system)) ||
           EMPTY_HEAD
         this._catchupMigratedNodes = result.migration.catchup
+
+        trace(this, 'migrate: handler mapped legacy views', { view })
 
         this._migratedHead = {
           system: result.migration.system,
@@ -440,6 +481,7 @@ module.exports = class Autobee extends ReadyResource {
 
       for (const batch of result.migration.catchup) {
         const { key, length } = batch[batch.length - 1]
+        traceVerbose(this, 'migrate: queueing catchup writer', { key, length })
         this.writers.wakeup(key, length)
       }
     }
@@ -452,11 +494,15 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee.move(view)
     this.bee.move(view)
 
+    trace(this, 'boot: view set', { view })
+
     await this.writers.updateLocalState()
   }
 
   async _bootAll() {
     if (!(await this._bootReady())) return
+
+    trace(this, 'boot: adding system heads as writers', { heads: this.system.heads })
 
     for (const head of this.system.heads) {
       await this.writers.add(head.key)
@@ -508,6 +554,8 @@ module.exports = class Autobee extends ReadyResource {
 
     this._lastError = err
 
+    trace(this, 'error', { message: err.message, interrupt: err === INTERRUPT })
+
     if (err === INTERRUPT) {
       this.emit('interrupt', this.interrupted)
       this.emit('update')
@@ -532,7 +580,10 @@ module.exports = class Autobee extends ReadyResource {
     if (this._preapply === null || this._preApplied) return
 
     this._preApplied = true
+
+    trace(this, 'preapply: running host gate')
     await this._preapply(this.view)
+    trace(this, 'preapply: host gate resolved')
   }
 
   async _drain() {
@@ -542,10 +593,26 @@ module.exports = class Autobee extends ReadyResource {
 
     this.stats.drains++
 
+    trace(this, 'drain: start', {
+      drain: this.stats.drains,
+      bumping: this.bumping,
+      flushes: this.system.flushes,
+      writers: this.writers.active.size,
+      pending: this.writers.pending.length,
+      bootFrom: this.bootFrom ? 'pending' : 'none'
+    })
+
     if (this.bootFrom) {
       const { head = null, legacy = null, bootCondition = null, wait = false } = this.bootFrom
 
       this.bootFrom = null
+
+      trace(this, 'drain: boot-from requested', {
+        head,
+        legacy,
+        wait,
+        gated: !!bootCondition
+      })
 
       if (legacy) await this._bootFromSystem(legacy)
       else if (head) await this._bootFromHead(head, bootCondition, wait)
@@ -587,7 +654,11 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this._draining = null
-    if (this._interrupting) return
+
+    if (this._interrupting) {
+      trace(this, 'drain: interrupted', { reason: this.interrupted })
+      return
+    }
 
     const updating = rrp()
     this._updating = updating.promise
@@ -599,9 +670,20 @@ module.exports = class Autobee extends ReadyResource {
       this._updating = null
       updating.resolve()
     }
+
+    trace(this, 'drain: done', {
+      drain: this.stats.drains,
+      flushes: this.system.flushes,
+      applies: this.stats.applies,
+      undos: this.stats.undos,
+      fastForwards: this.stats.fastForwards,
+      view: this.system.view,
+      heads: this.system.heads
+    })
   }
 
   _onGroupUpdate({ key, length }) {
+    trace(this, 'wakeup: group announced writer', { key, length })
     this._wakeup.hint({ key, length })
     this.bumpSoon()
   }
@@ -614,6 +696,11 @@ module.exports = class Autobee extends ReadyResource {
       keys.push(key)
     }
     if (!keys.length) return
+
+    trace(this, 'wakeup: replaying group hints from storage', {
+      keys: keys.length,
+      since: this.previousDrain
+    })
 
     // read the lengths straight from storage in one batch instead of opening cores
     const discoveryKeys = keys.map((key) => crypto.discoveryKey(key))
@@ -635,8 +722,12 @@ module.exports = class Autobee extends ReadyResource {
     const hints = this._wakeup.flush()
     if (!hints.size) return []
 
+    trace(this, 'wakeup: applying hints', { hints: hints.size })
+
     this.previousDrain = Date.now()
     const results = await this._filterHints(hints)
+
+    trace(this, 'wakeup: hints worth chasing', { heads: results })
 
     for (const { key, length } of results) {
       // wakeup() itself no-ops the add for an already-active writer, but still
@@ -663,7 +754,14 @@ module.exports = class Autobee extends ReadyResource {
     if (length) {
       const info = await this.system.get(key)
       // if we've seen this already, ignore
-      if (info && info.length >= length) return
+      if (info && info.length >= length) {
+        trace(this, 'wakeup: hint already applied, ignoring', {
+          key,
+          hinted: length,
+          applied: info.length
+        })
+        return
+      }
     }
     results.push({ key, length })
   }
@@ -672,21 +770,35 @@ module.exports = class Autobee extends ReadyResource {
     const hints = await this._applyWakeupHints()
     if (!hints.length) return
 
-    if (!this._ffEnabled) return
+    if (!this._ffEnabled) {
+      trace(this, 'ff: skipped, fast-forward disabled')
+      return
+    }
 
     // a scheduled fast-forward is applied by the drain before we look again
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) return
-    if (this._interrupting || this.closing || this.bootFrom) return
+    if (this.fastForwardTo !== null || this.fastForwarding !== null) {
+      trace(this, 'ff: skipped, one already in flight')
+      return
+    }
+
+    if (this._interrupting || this.closing || this.bootFrom) {
+      trace(this, 'ff: skipped, shutting down or still booting')
+      return
+    }
 
     try {
       const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
+
+      trace(this, 'ff: candidate heads read from hints', { heads })
 
       const ff = await FastForward.fromHeads(this, heads, {
         timeout: FastForward.DEFAULT_TIMEOUT
       })
 
       if (ff !== null) await this._runFastForward(ff)
+      else trace(this, 'ff: no candidate head was acceptable')
     } catch (err) {
+      trace(this, 'ff: candidate search threw', { message: err.message })
       safetyCatch(err)
     }
   }
@@ -766,6 +878,12 @@ module.exports = class Autobee extends ReadyResource {
     // that need system info must check op.views
     if (op.version < 3) {
       op = await migrations.inflateLegacyOplog(buf, core, target - 1, timeout)
+      trace(this, 'migrate: inflated legacy oplog node', {
+        key: core.key,
+        length: target,
+        version: op.version,
+        system: op.views ? op.views.system : null
+      })
     }
 
     return {
@@ -778,6 +896,8 @@ module.exports = class Autobee extends ReadyResource {
   async _update(changes) {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
+
+    trace(this, 'update: view published', { view: this._workingBee.head() })
 
     if (!changes) return
 
@@ -818,6 +938,8 @@ module.exports = class Autobee extends ReadyResource {
     asserts.assert(!this.appending, 'Cannot rotate a newLocal writer if an append is in progress')
 
     const oldLocal = this.local
+
+    trace(this, 'local: rotating writer', { from: oldLocal.key, to: newLocal.key })
 
     this.local = newLocal
     await this.writers.rotateLocalWriter(this.local)
@@ -898,6 +1020,10 @@ module.exports = class Autobee extends ReadyResource {
   async _bumpMigratedWriters() {
     const opened = new Set()
     let updated = false
+
+    trace(this, 'migrate: applying catchup batches', {
+      batches: this._catchupMigratedNodes.length
+    })
 
     for (const batch of this._catchupMigratedNodes) {
       await this._processBatch(batch)
@@ -1021,6 +1147,16 @@ module.exports = class Autobee extends ReadyResource {
 
     const { writer: w, batch } = next
 
+    traceVerbose(this, 'apply: next pending batch', {
+      writer: w.core.key,
+      from: batch[0].length,
+      to: batch[batch.length - 1].length,
+      nodes: batch.length,
+      added: w.isAdded,
+      removed: w.isRemoved,
+      optimistic: !!batch[0].optimistic
+    })
+
     if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
       await this._processBatch(batch)
       w.notify(batch)
@@ -1029,6 +1165,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.optimistic && !w.isRemoved && batch[0].optimistic) {
       if (!(await this._optimisticBatch(batch))) {
+        trace(this, 'apply: optimistic batch rejected', { writer: w.core.key })
         w.removePending()
         return true
       }
@@ -1085,6 +1222,7 @@ module.exports = class Autobee extends ReadyResource {
     if (t.undo) {
       this.stats.undos++
       this.trusted.clear()
+      trace(this, 'apply: undo to reorder', { to: t.undo, undos: this.stats.undos })
       t.view = await this.system.undo(t.undo)
       if (!t.view.length && this._migratedHead && this._migratedHead.view) {
         t.view = this._migratedHead.view
@@ -1155,6 +1293,16 @@ module.exports = class Autobee extends ReadyResource {
 
     const changed = await this.system.flush(batch, this._workingBee)
 
+    traceVerbose(this, 'apply: batch flushed', {
+      writer: batch[0].key,
+      length: batch[batch.length - 1].length,
+      nodes: batch.length,
+      userNodes: userBatch.length,
+      flushes: this.system.flushes,
+      view: this.system.view,
+      writerChanges: changed.length
+    })
+
     if (this.system.promotions.changed) this._prefetchApprovals().catch(safetyCatch)
 
     if (local) {
@@ -1164,6 +1312,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     for (const { key, added } of changed) {
+      trace(this, added ? 'apply: writer added' : 'apply: writer removed', { key })
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }
@@ -1201,6 +1350,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async wakeup({ key, length }) {
     if (!(await this._bootReady())) return
+    trace(this, 'wakeup: peer announced writer', { key, length })
     await this.writers.wakeup(key, length)
     await this._bump()
   }
@@ -1287,8 +1437,13 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.opened) await this.ready()
     if (this.closing) throw new Error('Autobee closed')
 
+    trace(this, 'ff: moveTo requested', { head })
+
     const ff = await FastForward.fromHead(this, head, null, { force: true })
-    if (ff === null) return null
+    if (ff === null) {
+      trace(this, 'ff: moveTo head unusable', { head })
+      return null
+    }
 
     if (!(await this._runFastForward(ff))) return null
 
@@ -1297,10 +1452,13 @@ module.exports = class Autobee extends ReadyResource {
 
   // legacy: ungated boot straight onto a system head
   async _bootFromSystem(system) {
+    trace(this, 'boot: booting straight onto legacy system head', { head: system })
+
     try {
       const ff = new FastForward(this, system, { timeout: FastForward.DEFAULT_TIMEOUT })
       return await this._runFastForward(ff)
     } catch (err) {
+      trace(this, 'boot: legacy system boot threw', { message: err.message })
       safetyCatch(err)
       return false
     }
@@ -1309,6 +1467,8 @@ module.exports = class Autobee extends ReadyResource {
   // the boot head seeds the view every trust decision here is made against,
   // since our own view is still empty
   async _bootFromHead(head, bootCondition, wait = false) {
+    trace(this, 'boot: booting from head', { head, wait, gated: !!bootCondition })
+
     // just a head: one attempt, we do not wait around if it cannot be read
     if (bootCondition === null && !wait) {
       try {
@@ -1317,8 +1477,11 @@ module.exports = class Autobee extends ReadyResource {
           timeout: FastForward.DEFAULT_TIMEOUT
         })
 
+        if (ff === null) trace(this, 'boot: head could not be read, giving up', { head })
+
         return ff !== null && (await this._runFastForward(ff))
       } catch (err) {
+        trace(this, 'boot: single boot attempt threw', { message: err.message })
         safetyCatch(err)
         return false
       }
@@ -1327,10 +1490,13 @@ module.exports = class Autobee extends ReadyResource {
     // park until the head can be read and, if a condition is set, something
     // acceptable turns up
     let opened = null
+    let attempt = 0
 
     try {
       while (!this._interrupting) {
         this._bootWait = rrp()
+
+        trace(this, 'boot: waiting-boot attempt', { head, attempt: ++attempt })
 
         try {
           if (bootCondition === null) {
@@ -1357,10 +1523,13 @@ module.exports = class Autobee extends ReadyResource {
             }
           }
         } catch (err) {
+          trace(this, 'boot: waiting-boot attempt threw', { message: err.message })
           safetyCatch(err)
         }
 
         if (this._interrupting) break
+
+        trace(this, 'boot: no acceptable head yet, parking until next hint', { attempt })
 
         await this._bootWait.promise
       }
@@ -1378,12 +1547,19 @@ module.exports = class Autobee extends ReadyResource {
 
     const candidates = await this._readCandidateHeads(result, FastForward.DEFAULT_TIMEOUT)
 
+    trace(this, 'boot: gated attempt over candidate heads', {
+      head,
+      candidates
+    })
+
     const ff = await FastForward.fromHeads(this, [head, ...candidates], {
       force: true,
       timeout: FastForward.DEFAULT_TIMEOUT,
       condition: bootCondition,
       reference
     })
+
+    if (ff === null) trace(this, 'boot: no candidate satisfied the boot condition')
 
     return ff !== null && (await this._runFastForward(ff))
   }
@@ -1392,7 +1568,16 @@ module.exports = class Autobee extends ReadyResource {
     const oplog = await FastForward.flushHead(this, head, {
       timeout: FastForward.DEFAULT_TIMEOUT
     })
-    if (oplog === null || oplog.op.version > LEGACY_OPLOG_VERSION) return false
+
+    if (oplog === null || oplog.op.version > LEGACY_OPLOG_VERSION) {
+      trace(this, 'boot: head is not a legacy oplog', {
+        head,
+        version: oplog ? oplog.op.version : null
+      })
+      return false
+    }
+
+    trace(this, 'boot: head is legacy, booting via migration', { head })
 
     const ff = await FastForward.fromHead(this, head, null, {
       force: true,
@@ -1412,18 +1597,29 @@ module.exports = class Autobee extends ReadyResource {
 
   async _runFastForward(ff) {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) {
+      trace(this, 'ff: run refused, one already in flight', { head: ff.head })
       await ff.close()
       return false
     }
 
     this.fastForwarding = ff
 
+    trace(this, 'ff: running', { head: ff.head })
+
     const result = await ff.run()
     await ff.close()
 
     if (this.fastForwarding === ff) this.fastForwarding = null
 
-    if (!result) return false
+    if (!result) {
+      trace(this, 'ff: run produced nothing', { head: ff.head, failed: ff.failed })
+      return false
+    }
+
+    trace(this, 'ff: scheduled for next drain', {
+      head: result.head,
+      migrate: result.migrate ? 'legacy views' : 'none'
+    })
 
     this.fastForwardTo = result
     this.ff = rrp()
@@ -1442,8 +1638,21 @@ module.exports = class Autobee extends ReadyResource {
     const from = this.system.bee.head()
     const to = head
 
+    trace(this, 'ff: applying', {
+      from,
+      to,
+      migrate: migrate ? 'legacy views' : 'none'
+    })
+
     this.system.bee.move(head)
     await this.system.reset()
+
+    trace(this, 'ff: system reset onto new head', {
+      version: this.system.version,
+      flushes: this.system.flushes,
+      view: this.system.view,
+      heads: this.system.heads
+    })
 
     // migrate is set when fast-forwarding from a legacy head
     if (migrate) {
@@ -1453,6 +1662,11 @@ module.exports = class Autobee extends ReadyResource {
         system: head,
         view: view.length ? view : (this._migratedHead && this._migratedHead.view) || null
       }
+
+      trace(this, 'migrate: fast-forwarded off a legacy head', {
+        views: migrate,
+        view
+      })
 
       await this._storeMigratedHead()
       this.bee.move(view)
@@ -1476,6 +1690,16 @@ module.exports = class Autobee extends ReadyResource {
     await this._storeBoot()
 
     this.stats.fastForwards++
+
+    trace(this, 'ff: applied', {
+      from,
+      to,
+      flushes: this.system.flushes,
+      view: this.system.view,
+      heads: this.system.heads,
+      fastForwards: this.stats.fastForwards
+    })
+
     this.emit('move-to', to, from)
     this.ff.resolve({ to, from })
   }
