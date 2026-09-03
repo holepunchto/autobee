@@ -26,6 +26,7 @@ const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
+const DEFAULT_ACK_THRESHOLD = 64
 const INTERRUPT = new Error('Apply interrupted')
 
 module.exports = class Autobee extends ReadyResource {
@@ -110,6 +111,9 @@ module.exports = class Autobee extends ReadyResource {
     this._localSystemStart = 0
     this._localSystemLength = 0
     this._localFlushes = 0
+    this._acking = false
+    this._ackThreshold = DEFAULT_ACK_THRESHOLD
+    this._ackFlushes = -1
     this._localViewStart = 0
     this._localViewLength = 0
 
@@ -174,6 +178,13 @@ module.exports = class Autobee extends ReadyResource {
 
   get flushes() {
     return this.system.flushes
+  }
+
+  setAcking(acking, { threshold = DEFAULT_ACK_THRESHOLD } = {}) {
+    this._acking = acking !== false && threshold > 0
+    this._ackThreshold = threshold
+
+    if (this._acking) this.bumpSoon()
   }
 
   async _open() {
@@ -574,7 +585,12 @@ module.exports = class Autobee extends ReadyResource {
             break // revaluate conditions...
           }
 
-          if (!(await this._bumpPendingWriters())) break
+          if (await this._bumpPendingWriters()) {
+            this._needsUpdate = true
+            continue
+          }
+
+          if (!(await this._appendAck())) break
           this._needsUpdate = true
         }
 
@@ -789,6 +805,7 @@ module.exports = class Autobee extends ReadyResource {
     await this.writers.rotateLocalWriter(this.local)
 
     this._updateLocalCore = null
+    this._ackFlushes = -1
 
     this.local.setUserData('referrer', this.key)
     if (this.encryptionKey) {
@@ -972,6 +989,30 @@ module.exports = class Autobee extends ReadyResource {
       if (hint && hint.weight >= weight) return
       approvals.push({ key, weight })
     }
+  }
+
+  async _appendAck() {
+    if (!this._acking) return false
+    if (!this.writers.writable) return false
+
+    if (this.writers.localWriter.pending !== null) return false
+
+    if ((await this._flushesBehind()) < this._ackThreshold) return false
+
+    const links = this.system.getLinks(this.local.key)
+    const t = Math.max(this._now(), this.system.timestamp)
+
+    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null)
+    return true
+  }
+
+  async _flushesBehind() {
+    if (this._ackFlushes === -1) {
+      const latest = await this.writers.getLatestLocalOplog()
+      this._ackFlushes = latest && latest.views ? latest.views.flushes : this.system.flushes
+    }
+
+    return this.system.flushes - this._ackFlushes
   }
 
   async _bumpPendingWriters({ local = false } = {}) {
@@ -1228,7 +1269,7 @@ module.exports = class Autobee extends ReadyResource {
       this._needsUpdate = true
     }
 
-    await this.writers.flushLocal({
+    const flushed = await this.writers.flushLocal({
       flushes: this._localFlushes,
       system: {
         key: this.system.bee.context.local.key,
@@ -1241,6 +1282,8 @@ module.exports = class Autobee extends ReadyResource {
         length: this._localViewLength
       }
     })
+
+    if (flushed) this._ackFlushes = this._localFlushes
 
     this._localSystemStart = this.system.bee.context.local.length
     this._localSystemLength = 0

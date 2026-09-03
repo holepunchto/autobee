@@ -162,6 +162,10 @@ Hint that a new writer core is available at `key` with at least `length` entries
 
 Rotate the local writer to a different key. The new writer takes over as the active oplog.
 
+#### `db.setAcking(acking, [options])`
+
+Toggle acking (default `false`). When enabled, an empty node is appended whenever the local writer falls `options.threshold` (default `4`) flushes behind the system.
+
 #### `views = db.views()`
 
 Returns the current system and view core positions. Used for replication coordination.
