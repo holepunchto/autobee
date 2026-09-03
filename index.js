@@ -461,6 +461,7 @@ module.exports = class Autobee extends ReadyResource {
     for (const head of this.system.heads) {
       await this.writers.add(head.key)
     }
+
     await this._bump()
   }
 
