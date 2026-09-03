@@ -634,24 +634,44 @@ module.exports = class Autobee extends ReadyResource {
   // wakeup hints keep arriving asynchronously
   async _applyWakeupHints() {
     const hints = this._wakeup.flush()
-    if (!hints.size) return hints
+    if (!hints.size) return []
 
     this.previousDrain = Date.now()
+    const results = await this._filterHints(hints)
 
-    for (const [hex, length] of hints) {
-      const key = b4a.from(hex, 'hex')
+    for (const { key, length } of results) {
       // wakeup() itself no-ops the add for an already-active writer, but still
       // needs to run so it can hint() the announced length - skipping it here
       // for active writers left gc with no hint to protect them
       await this.writers.wakeup(key, length)
     }
 
-    return hints
+    return results
+  }
+
+  async _filterHints(hints) {
+    const results = []
+    const promises = []
+    for (const [hex, length] of hints) {
+      const key = b4a.from(hex, 'hex')
+      promises.push(this._filterTracked(key, length, results))
+    }
+    await Promise.all(promises)
+    return results
+  }
+
+  async _filterTracked(key, length, results) {
+    if (length) {
+      const info = await this.system.get(key)
+      // if we've seen this already, ignore
+      if (info && info.length >= length) return
+    }
+    results.push({ key, length })
   }
 
   async _flushWakeup() {
     const hints = await this._applyWakeupHints()
-    if (!hints.size) return
+    if (!hints.length) return
 
     if (!this._ffEnabled) return
 
@@ -675,10 +695,9 @@ module.exports = class Autobee extends ReadyResource {
   async _readCandidateHeads(hints, timeout) {
     const promises = []
 
-    for (const [hex, length] of hints) {
+    for (const { key, length } of hints) {
       if (length === 0) continue
-      const key = b4a.from(hex, 'hex')
-      promises.push(this._getOplog(key, length, timeout ? { timeout } : null))
+      promises.push(this._resolveOplogHint(key, length, timeout ? { timeout } : null))
     }
 
     const ops = await Promise.all(promises)
@@ -699,6 +718,22 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     return heads
+  }
+
+  async _resolveOplogHint(key, length, opts) {
+    const core = this.openCore(key)
+
+    try {
+      await core.ready()
+      const max = Math.max(length, core.length)
+
+      const block = await this.readOplog(core, max, opts)
+      if (max >= core.length) return block // best one
+
+      return await this.readOplog(core, core.length, opts)
+    } finally {
+      await core.close()
+    }
   }
 
   async _getOplog(key, length, opts = null) {
@@ -1340,10 +1375,9 @@ module.exports = class Autobee extends ReadyResource {
 
   async _bootAttempt(head, bootCondition, reference) {
     // peek, so the hints are still there for the drain once we have booted
-    const candidates = await this._readCandidateHeads(
-      this._wakeup.hints,
-      FastForward.DEFAULT_TIMEOUT
-    )
+    const result = await this._filterHints(this._wakeup.hints)
+
+    const candidates = await this._readCandidateHeads(result, FastForward.DEFAULT_TIMEOUT)
 
     const ff = await FastForward.fromHeads(this, [head, ...candidates], {
       force: true,
