@@ -115,6 +115,8 @@ module.exports = class Autobee extends ReadyResource {
 
     this._appending = []
     this._draining = null
+    this._probing = null
+    this._probeHints = new Map()
     this._bootWait = null
 
     this.legacyViews = handlers.legacyViews || []
@@ -248,10 +250,11 @@ module.exports = class Autobee extends ReadyResource {
     Hypercore.destroyRequests(this._approvalRequests, null)
     if (this._bootWait !== null) this._bootWait.resolve()
     if (this._notifyHandler) this._notifyHandler.destroy()
-    if (this._draining) {
-      // drain may be waiting on replicated blocks
+    if (this._draining || this._probing) {
+      // drain and probe may be waiting on replicated blocks
       this._clearRequests()
-      await this._draining
+      if (this._draining) await this._draining
+      if (this._probing) await this._probing
     }
 
     if (this._updating) await this._updating
@@ -678,16 +681,38 @@ module.exports = class Autobee extends ReadyResource {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return
     if (this._interrupting || this.closing || this.bootFrom) return
 
+    this._probeFastForward(hints)
+  }
+
+  // reading the announced heads waits on peers, so it runs off the drain and
+  // schedules the fast-forward for a later pass
+  _probeFastForward(hints) {
+    for (const hint of hints) {
+      const hex = b4a.toString(hint.key, 'hex')
+      const prev = this._probeHints.get(hex)
+      if (!prev || hint.length === -1 || prev.length < hint.length) this._probeHints.set(hex, hint)
+    }
+
+    if (this._probing === null) this._probing = this._probe().catch(safetyCatch)
+  }
+
+  async _probe() {
     try {
-      const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
+      while (this._probeHints.size && !this._interrupting && !this.closing) {
+        const hints = [...this._probeHints.values()]
+        this._probeHints.clear()
 
-      const ff = await FastForward.fromHeads(this, heads, {
-        timeout: FastForward.DEFAULT_TIMEOUT
-      })
+        const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
+        if (this._interrupting || this.closing) return
 
-      if (ff !== null) await this._runFastForward(ff)
-    } catch (err) {
-      safetyCatch(err)
+        const ff = await FastForward.fromHeads(this, heads, {
+          timeout: FastForward.DEFAULT_TIMEOUT
+        })
+
+        if (ff !== null) await this._runFastForward(ff)
+      }
+    } finally {
+      this._probing = null
     }
   }
 
