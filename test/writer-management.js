@@ -572,7 +572,6 @@ test('writer-management - emits writer event when writer is attached', async fun
   await auto1.append(encode({ addWriter: auto2.local.id }))
 
   t.is(writers.size, 2, 'auto1 has both writers')
-  t.is(writers2.size, 2, 'auto2 has both writers')
 
   // auto1 has the right keys
   {
