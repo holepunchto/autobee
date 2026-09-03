@@ -383,7 +383,6 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this.local.setEncryption(this._getEncryptionProvider())
-    this.local.setActive(true)
 
     this.writers = new ActiveWriters(this)
 

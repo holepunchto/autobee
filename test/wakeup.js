@@ -21,8 +21,9 @@ test('wakeup - replication', async function (t) {
   t.comment('sync 2<>3')
   await replicateAndSync(auto2, auto3)
 
-  t.is(auto1._wakeup._coupler.coupled.size, 2)
-  t.is(auto2._wakeup._coupler.coupled.size, 2)
+  // one head
+  t.is(auto1._wakeup._coupler.coupled.size, 1)
+  t.is(auto2._wakeup._coupler.coupled.size, 1)
 
   t.ok(await same(auto2, auto3))
 })
