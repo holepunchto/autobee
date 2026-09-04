@@ -77,7 +77,6 @@ module.exports = class Autobee extends ReadyResource {
       encrypted: this.encrypted,
       getEncryptionProvider: this.getSystemEncryption
     })
-    this.system.auto = this
 
     this.bee = bee.snapshot()
     this.view = ApplyView.open(this.bee, this)
