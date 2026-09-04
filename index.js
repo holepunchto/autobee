@@ -254,6 +254,13 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _close() {
+    trace(this, 'close: tearing down', {
+      writers: this.writers ? this.writers.active.size : null,
+      draining: !!this._draining,
+      flushes: this.system.flushes,
+      view: this.system.view
+    })
+
     this._interrupting = true
     Hypercore.destroyRequests(this._approvalRequests, null)
     if (this._bootWait !== null) this._bootWait.resolve()
@@ -305,6 +312,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   hintWakeup(wakeup) {
+    trace(this, 'wakeup: host hinted', { wakeup })
     this._wakeup.hint(wakeup)
   }
 
@@ -540,6 +548,7 @@ module.exports = class Autobee extends ReadyResource {
 
   interrupt(reason) {
     asserts.assert(!!this._host.applying, 'Interrupt is only allowed in apply')
+    trace(this, 'apply: host interrupted us', { reason })
     this._interrupting = true
     if (reason) this.interrupted = reason
     throw INTERRUPT
@@ -684,7 +693,7 @@ module.exports = class Autobee extends ReadyResource {
 
   _onGroupUpdate({ key, length }) {
     trace(this, 'wakeup: group announced writer', { key, length })
-    this._wakeup.hint({ key, length })
+    this._wakeup.hint({ key, length }, 'corestore group update')
     this.bumpSoon()
   }
 
@@ -713,7 +722,16 @@ module.exports = class Autobee extends ReadyResource {
     for (let i = 0; i < keys.length; i++) {
       const info = infos[i]
       const length = info && info.head ? info.head.length : 0
-      this._wakeup.hint({ key: keys[i], length })
+
+      // the length here is whatever local storage last recorded, which for a
+      // known-but-undownloaded writer is behind what peers announced
+      trace(this, 'wakeup: boot hint from local storage head', {
+        key: keys[i],
+        length,
+        hasInfo: !!info
+      })
+
+      this._wakeup.hint({ key: keys[i], length }, 'boot replay from storage')
     }
   }
 
@@ -755,13 +773,23 @@ module.exports = class Autobee extends ReadyResource {
       const info = await this.system.get(key)
       // if we've seen this already, ignore
       if (info && info.length >= length) {
+        // -1 means "length unknown, go look" - it compares >= against any
+        // applied length, so a tracked writer's unknown-length hint is
+        // silently swallowed here
         trace(this, 'wakeup: hint already applied, ignoring', {
           key,
           hinted: length,
-          applied: info.length
+          applied: info.length,
+          unknownLength: length === -1
         })
         return
       }
+
+      trace(this, 'wakeup: hint is ahead of us, chasing', {
+        key,
+        hinted: length,
+        applied: info ? info.length : null
+      })
     }
     results.push({ key, length })
   }
