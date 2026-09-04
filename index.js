@@ -198,13 +198,14 @@ module.exports = class Autobee extends ReadyResource {
 
   async _open() {
     this._prebooting = this._preBoot()
-    await this._prebooting
 
     this._bootingState = this._bootState()
     this._bootingAll = this._bootAll()
 
     this._bootingState.catch(safetyCatch)
     this._bootingAll.catch(safetyCatch)
+
+    await this._prebooting
 
     await this.bee.ready()
     await this._workingBee.ready()
@@ -480,6 +481,8 @@ module.exports = class Autobee extends ReadyResource {
 
   async _bootAll() {
     if (!(await this._bootReady())) return
+
+    await this._prebooting
 
     for (const head of this.system.heads) {
       await this.writers.add(head.key)
