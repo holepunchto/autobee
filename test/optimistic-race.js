@@ -99,3 +99,26 @@ test('optimistic - multiple batches from one writer', async function (t) {
 
   t.is(writerInfo.length, 10, 'all 10 batches processed')
 })
+
+test.solo('optimistic - a joiner announces its own claim, unaided', async function (t) {
+  const host = await create(t)
+  await host.append(encode({ hello: 'world' }))
+
+  const joiner = await create(t, host.key)
+
+  const done = replicate(host, joiner)
+
+  await sync(host, joiner)
+
+  await joiner.append(encode({ addWriter: joiner.local.id }), { optimistic: true })
+  await sync(host, joiner)
+
+  const info = await host.system.get(joiner.local.key)
+
+  done()
+
+  t.ok(
+    info && info.length >= joiner.local.length,
+    'the host admitted a joiner it was never told about'
+  )
+})
