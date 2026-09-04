@@ -119,6 +119,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._appending = []
     this._draining = null
+    this._updating = null
     this._bootWait = null
     this._tracedApplies = 0
 
@@ -179,6 +180,14 @@ module.exports = class Autobee extends ReadyResource {
 
   get flushes() {
     return this.system.flushes
+  }
+
+  // work is in flight: either the drain loop, or the publish-and-persist phase
+  // that follows it. _draining is cleared before _update/_storeBoot run, so a
+  // check against it alone leaves a window where the applied nodes are not
+  // stored yet. Bounded: the loop ends once nothing more is applicable.
+  get busy() {
+    return !!(this._draining || this._updating)
   }
 
   async _open() {
