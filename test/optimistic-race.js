@@ -100,7 +100,7 @@ test('optimistic - multiple batches from one writer', async function (t) {
   t.is(writerInfo.length, 10, 'all 10 batches processed')
 })
 
-test.solo('optimistic - a joiner announces its own claim, unaided', async function (t) {
+test('optimistic - a joiner announces its own claim, unaided', async function (t) {
   const host = await create(t)
   await host.append(encode({ hello: 'world' }))
 
