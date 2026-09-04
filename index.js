@@ -51,7 +51,9 @@ module.exports = class Autobee extends ReadyResource {
     this.getSystemEncryption = this._getEncryptionProvider.bind(this, '_system')
     this.getViewEncryption = this._getEncryptionProvider.bind(this, viewName)
 
-    const bee = new Hyperbee(store.namespace('view'), {
+    const beeStore = store.session()
+    const bee = new Hyperbee(beeStore, {
+      core: beeStore.get({ preload: this._getCorePreload(viewName) }),
       // defer one tick to ensure consistent state, then return state prom
       preload: async () => {
         await 1
@@ -69,9 +71,11 @@ module.exports = class Autobee extends ReadyResource {
     this._handlers = handlers
     this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
 
-    this.system = new System(this.store.namespace('system'), this.name, {
-      getEncryptionProvider: this.getSystemEncryption,
-      encrypted: this.encrypted
+    const systemStore = this.store.session()
+    this.system = new System(systemStore, this.name, {
+      core: systemStore.get({ preload: this._getCorePreload('system') }),
+      encrypted: this.encrypted,
+      getEncryptionProvider: this.getSystemEncryption
     })
     this.system.auto = this
 
@@ -150,6 +154,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._catchupMigratedNodes = null
     this._migratedHead = null
+    this._prebooting = null
 
     this.ready().catch(noop)
   }
@@ -181,8 +186,19 @@ module.exports = class Autobee extends ReadyResource {
     return !!(this._draining || this._updating)
   }
 
+  async _getCorePreload(name) {
+    await 1
+    const result = await this._prebooting
+    return {
+      name: 'autobee/' + result.local.id + '/' + name,
+      encryption: name === 'system' ? this.getSystemEncryption() : this.getViewEncryption(),
+      inflightRange: [256, 512]
+    }
+  }
+
   async _open() {
-    await this._preBoot()
+    this._prebooting = this._preBoot()
+    await this._prebooting
 
     this._bootingState = this._bootState()
     this._bootingAll = this._bootAll()
@@ -338,6 +354,11 @@ module.exports = class Autobee extends ReadyResource {
     if (this.bootFrom) {
       this.bootFrom = getBootOption(await this.bootFrom)
     }
+
+    return boot(this.store, this.key, this.legacyViews, {
+      encryptionKey: this.encryptionKey,
+      keyPair: this.keyPair
+    })
   }
 
   getMostRecentHead() {
@@ -370,10 +391,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootStateUnsafe() {
-    const result = await boot(this.store, this.key, this.legacyViews, {
-      encryptionKey: this.encryptionKey,
-      keyPair: this.keyPair
-    })
+    const result = await this._prebooting
 
     this.key = result.key
     this.bootstrap = result.bootstrap
