@@ -115,6 +115,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._appending = []
     this._draining = null
+    this._updating = null
     this._bootWait = null
 
     this.legacyViews = handlers.legacyViews || []
@@ -174,6 +175,10 @@ module.exports = class Autobee extends ReadyResource {
 
   get flushes() {
     return this.system.flushes
+  }
+
+  get busy() {
+    return !!(this._draining || this._updating)
   }
 
   async _open() {
