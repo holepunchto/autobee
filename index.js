@@ -26,6 +26,9 @@ const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
 const { trace, traceVerbose } = require('./lib/debug-log.js')
 
+// how many applies between progress lines, so a long backlog is visible
+const APPLY_HEARTBEAT = 250
+
 const EMPTY_HEAD = { length: 0, key: null }
 const INTERRUPT = new Error('Apply interrupted')
 
@@ -117,6 +120,7 @@ module.exports = class Autobee extends ReadyResource {
     this._appending = []
     this._draining = null
     this._bootWait = null
+    this._tracedApplies = 0
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -1321,6 +1325,16 @@ module.exports = class Autobee extends ReadyResource {
 
     const changed = await this.system.flush(batch, this._workingBee)
 
+    if (this.stats.applies - this._tracedApplies >= APPLY_HEARTBEAT) {
+      this._tracedApplies = this.stats.applies
+      trace(this, 'apply: still working through the backlog', {
+        applies: this.stats.applies,
+        flushes: this.system.flushes,
+        view: this.system.view,
+        pending: this.writers.pending.length
+      })
+    }
+
     traceVerbose(this, 'apply: batch flushed', {
       writer: batch[0].key,
       length: batch[batch.length - 1].length,
@@ -1347,6 +1361,14 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   _storeBoot() {
+    // only reached once the drain loop has finished - an interrupted drain
+    // persists nothing, so every node it applied is discarded on reboot
+    trace(this, 'boot: persisting boot record', {
+      system: this.system.bootRecord(),
+      view: this.system.view,
+      flushes: this.system.flushes
+    })
+
     const proms = []
     proms.push(
       this.local.setUserData(
