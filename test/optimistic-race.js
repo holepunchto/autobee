@@ -122,3 +122,48 @@ test('optimistic - a joiner announces its own claim, unaided', async function (t
     'the host admitted a joiner it was never told about'
   )
 })
+
+test('optimistic - join, then shutdown, then activity from idle', async function (t) {
+  const a = await t.tmp()
+  const b = await t.tmp()
+
+  let host = await create(t, null, { storage: a })
+  await host.append(encode({ hello: 'world' }))
+
+  let joiner = await create(t, host.key, { storage: b })
+
+  let done = replicate(host, joiner)
+
+  await sync(host, joiner)
+
+  await joiner.append(encode({ addWriter: joiner.local.id }), { optimistic: true })
+  await sync(host, joiner)
+
+  const info = await host.system.get(joiner.local.key)
+
+  await done()
+
+  await joiner.append(encode({ hello: 'world' }))
+  await joiner.append(encode({ hello: 'world' }))
+  await joiner.append(encode({ hello: 'world' }))
+
+  await joiner.close()
+  await host.close()
+
+  host = await create(t, null, { storage: a })
+  joiner = await create(t, host.key, { storage: b })
+
+  done = replicate(host, joiner)
+
+  await sync(host, joiner)
+
+  for await (const info of host.system.list()) {
+    const other = await joiner.system.get(info.key)
+    t.alike(info, other)
+  }
+
+  for await (const info of joiner.system.list()) {
+    const other = await host.system.get(info.key)
+    t.alike(info, other)
+  }
+})
