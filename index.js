@@ -137,7 +137,6 @@ module.exports = class Autobee extends ReadyResource {
     this._needsUpdate = false
     this._approvalCheck = true
     this._approvedPending = new Map()
-    this._approvalRequests = []
     this._prefetchingApprovals = false
     this._updateLocalCore = null
     this._host = new ApplyCalls(this)
@@ -288,24 +287,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
-    Hypercore.destroyRequests(this._approvalRequests, null)
-    if (this._bootWait !== null) this._bootWait.resolve()
-    if (this._notifyHandler) this._notifyHandler.destroy()
-    if (this._draining) {
-      // drain may be waiting on replicated blocks
-      this._clearRequests()
-      await this._draining
-    }
 
-    if (this._updating) await this._updating
-
-    // let in-flight writer adds finish
-    try {
-      await this._bootOnlineGuard.ready()
-    } catch {}
-
-    // a failed boot leaves the bees rootless with a rejected preload, which
-    // rejects their closes - swallow so teardown still reaches store.close
     try {
       await ApplyView.close(this.view, this)
     } catch (err) {
@@ -316,7 +298,7 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
-    if (this.bootstrap && !this.bootstrap.closed) await this.bootstrap.close()
+    if (this.bootstrap) await this.bootstrap.close()
 
     try {
       await this._workingView.close()
@@ -325,18 +307,20 @@ module.exports = class Autobee extends ReadyResource {
       safetyCatch(err)
     }
 
+    // don't rely on the store teardown to stop the notify watcher
+    if (this._notifyHandler) this._notifyHandler.destroy()
+
+    // rugpull the rest
     await this.store.close()
-  }
 
-  _clearRequests() {
-    const closingError = new Error('Autobee is closing')
-    for (const session of this.store.sessions) {
-      if (session.opened && !session.closing) {
-        session.clearRequests(session.activeRequests, closingError)
-      }
-    }
+    if (this._bootWait !== null) this._bootWait.resolve()
+    if (this._updating) await this._updating
+    if (this._draining) await this._draining
 
-    if (this.fastForwarding) this.fastForwarding.clearRequests(closingError)
+    // let in-flight writer adds finish
+    try {
+      await this._bootOnlineGuard.ready()
+    } catch {}
   }
 
   replicate(...args) {
@@ -975,15 +959,13 @@ module.exports = class Autobee extends ReadyResource {
     if (this._prefetchingApprovals) return
     this._prefetchingApprovals = true
 
-    const activeRequests = this._approvalRequests
-
     try {
       const prefetch = []
-      const standing = await this._standing(activeRequests)
+      const standing = await this._standing()
       if (standing <= 0 || !this._pendingWork(standing)) return
-      for await (const p of this._servableRequests(standing, activeRequests)) {
-        prefetch.push(this.system.get(p.key, { activeRequests }).catch(safetyCatch))
-        prefetch.push(this.system.grantHint(p.key, { activeRequests }).catch(safetyCatch))
+      for await (const p of this._servableRequests(standing)) {
+        prefetch.push(this.system.get(p.key).catch(safetyCatch))
+        prefetch.push(this.system.grantHint(p.key).catch(safetyCatch))
       }
       await Promise.allSettled(prefetch)
     } finally {
@@ -991,8 +973,8 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _standing(activeRequests) {
-    const rec = await this.system.get(this.local.key, { activeRequests })
+  async _standing() {
+    const rec = await this.system.get(this.local.key)
     return currentWeight(rec)
   }
 
@@ -1010,8 +992,8 @@ module.exports = class Autobee extends ReadyResource {
 
   // the requests we could serve and by how much - shared by the prefetch and
   // the collector so the two cannot drift on what counts as ours
-  async *_servableRequests(standing, activeRequests) {
-    for await (const p of this.system.listPendingPromotions({ activeRequests })) {
+  async *_servableRequests(standing) {
+    for await (const p of this.system.listPendingPromotions()) {
       const amount = Math.min(standing, p.weight)
       if (amount <= 0) continue
       yield { key: p.key, amount }
@@ -1022,8 +1004,7 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.system.promotions.changed && !this._approvalCheck) return null
     if (!this.writers.writable) return null
 
-    const activeRequests = this._approvalRequests
-    const standing = await this._standing(activeRequests)
+    const standing = await this._standing()
     if (standing <= 0) return null
 
     this.system.promotions.changed = false
@@ -1034,7 +1015,7 @@ module.exports = class Autobee extends ReadyResource {
     const approvals = []
     const approving = []
 
-    for await (const p of this._servableRequests(standing, activeRequests)) {
+    for await (const p of this._servableRequests(standing)) {
       approving.push(fetchApproval.call(this, p.key, p.amount, approvals))
     }
 
@@ -1058,10 +1039,7 @@ module.exports = class Autobee extends ReadyResource {
     async function fetchApproval(key, weight, approvals) {
       const hex = b4a.toString(key, 'hex')
       if ((this._approvedPending.get(hex) || 0) >= weight) return
-      const [target, hint] = await Promise.all([
-        this.system.get(key, { activeRequests }),
-        this.system.grantHint(key, { activeRequests })
-      ])
+      const [target, hint] = await Promise.all([this.system.get(key), this.system.grantHint(key)])
       if (!target || target.isRemoved) return
       if (hint && hint.weight >= weight) return
       approvals.push({ key, weight })
