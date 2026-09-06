@@ -57,7 +57,7 @@ module.exports = class Autobee extends ReadyResource {
       // defer one tick to ensure consistent state, then return state prom
       preload: async () => {
         await 1
-        await this._bootReady()
+        await this._bootGuard.ready()
       },
       getEncryptionProvider: this.getViewEncryption
     })
@@ -123,9 +123,11 @@ module.exports = class Autobee extends ReadyResource {
 
     this.legacyViews = handlers.legacyViews || []
 
+    // the guards may be destroyed before anyone waits on them
     this._bootGuard = new ReadyGuard()
-    this._bootingState = null
-    this._bootingAll = null
+    this._bootGuard.ready().catch(safetyCatch)
+    this._bootOnlineGuard = new ReadyGuard()
+    this._bootOnlineGuard.ready().catch(safetyCatch)
 
     this._now = handlers.now || Date.now // overridable for clock-drift tests
     this._preapply = handlers.preapply || null
@@ -195,26 +197,46 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  // network free: only a migration needs peers, so ready() awaits the full
+  // state boot unless one is pending and defers it to the background if so -
+  // anything needing the booted system must wait on the boot guard
   async _open() {
     this._prebooting = this._preBoot()
 
-    this._bootingState = this._bootState()
-    this._bootingAll = this._bootAll()
+    let result = null
 
-    this._bootingState.catch(safetyCatch)
-    this._bootingAll.catch(safetyCatch)
+    try {
+      result = await this._prebooting
 
-    await this._prebooting
+      this.key = result.key
+      this.bootstrap = result.bootstrap
+      this.discoveryKey = result.bootstrap.core.discoveryKey
+      this.id = result.bootstrap.core.id
+      this.encryptionKey = result.encryptionKey
+      this.previousDrain = result.previousDrain
+      this.local = result.local
 
-    await this.bee.ready()
-    await this._workingBee.ready()
-    await this._bootingState
+      if (this.encrypted && this.encryptionKey === null) {
+        throw new Error('Encryption key is expected')
+      }
 
-    this._localSystemStart = this.system.bee.context.local.length
-    this._localViewStart = this._workingBee.context.local.length
-    this._localFlushes = this.system.flushes
+      this.local.setEncryption(this._getEncryptionProvider())
+      this.writers = new ActiveWriters(this)
+    } catch (err) {
+      // unblock the guard awaiters (bee preloads, bumps, wakeups, flushes)
+      this._bootGuard.destroy(err)
+      this._bootOnlineGuard.destroy(err)
+      throw err
+    }
 
-    this.bumpSoon()
+    const booting = this._boot()
+
+    // waits on the boot guard internally and destroys its own guard on failure
+    this._bootOnline()
+
+    // if migrating, we might need network io, if not lets wait on it - less surprises
+    if (result.migration) booting.catch(this._onErrorBound)
+    else await booting
   }
 
   _requestWakeup() {
@@ -279,18 +301,30 @@ module.exports = class Autobee extends ReadyResource {
 
     // let in-flight writer adds finish
     try {
-      await this._bootingAll
+      await this._bootOnlineGuard.ready()
     } catch {}
 
-    await ApplyView.close(this.view, this)
+    // a failed boot leaves the bees rootless with a rejected preload, which
+    // rejects their closes - swallow so teardown still reaches store.close
+    try {
+      await ApplyView.close(this.view, this)
+    } catch (err) {
+      safetyCatch(err)
+    }
 
     if (this.writers) await this.writers.close()
     await this.local.close()
     await this.system.close()
     await this._wakeup.close()
     if (this.bootstrap && !this.bootstrap.closed) await this.bootstrap.close()
-    await this._workingView.close()
-    await this.bee.close()
+
+    try {
+      await this._workingView.close()
+      await this.bee.close()
+    } catch (err) {
+      safetyCatch(err)
+    }
+
     await this.store.close()
   }
 
@@ -312,7 +346,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async flush() {
-    await this._bootingAll
+    await this._bootOnlineGuard.ready()
   }
 
   hintWakeup(wakeup) {
@@ -338,6 +372,10 @@ module.exports = class Autobee extends ReadyResource {
     return new WriterEncryption(this)
   }
 
+  getMostRecentHead() {
+    return topo.getMostRecentHead(this, this.system.bee.snapshot())
+  }
+
   async _preBoot() {
     if (this._handlers.wait) await this._handlers.wait()
 
@@ -361,15 +399,11 @@ module.exports = class Autobee extends ReadyResource {
     })
   }
 
-  getMostRecentHead() {
-    return topo.getMostRecentHead(this, this.system.bee.snapshot())
-  }
-
-  async _bootState() {
+  async _boot() {
     if (!this._bootGuard.enter()) return this._bootGuard.ready()
 
     try {
-      await this._bootStateUnsafe()
+      await this._bootUnsafe()
     } catch (err) {
       this._bootGuard.destroy(err)
       throw err
@@ -377,37 +411,13 @@ module.exports = class Autobee extends ReadyResource {
 
     this._bootGuard.exit()
 
+    this.bumpSoon()
+
     return this._bootGuard.ready()
   }
 
-  async _bootReady() {
-    if (this._bootGuard.opened) return true
-    try {
-      await this._bootGuard.ready()
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  async _bootStateUnsafe() {
+  async _bootUnsafe() {
     const result = await this._prebooting
-
-    this.key = result.key
-    this.bootstrap = result.bootstrap
-    this.discoveryKey = result.bootstrap.core.discoveryKey
-    this.id = result.bootstrap.core.id
-    this.encryptionKey = result.encryptionKey
-    this.previousDrain = result.previousDrain
-    this.local = result.local
-
-    if (this.encrypted && this.encryptionKey === null) {
-      throw new Error('Encryption key is expected')
-    }
-
-    this.local.setEncryption(this._getEncryptionProvider())
-
-    this.writers = new ActiveWriters(this)
 
     if (this._handlers.wakeupCapability) {
       this.wakeupCapability = await this._handlers.wakeupCapability
@@ -476,32 +486,52 @@ module.exports = class Autobee extends ReadyResource {
     this.bee.move(view)
 
     await this.writers.updateLocalState()
+
+    // roots are moved, so these resolve without re-entering the boot guard
+    await this.bee.ready()
+    await this._workingBee.ready()
+
+    // baseline before the guard opens so an early drain can't flush against stale offsets
+    this._localSystemStart = this.system.bee.context.local.length
+    this._localViewStart = this._workingBee.context.local.length
+    this._localFlushes = this.system.flushes
   }
 
-  async _bootAll() {
-    if (!(await this._bootReady())) return
+  async _bootOnline() {
+    if (!this._bootOnlineGuard.enter()) return
 
-    await this._prebooting
+    try {
+      if (!this._bootGuard.opened) await this._bootGuard.ready()
 
-    for (const head of this.system.heads) {
-      await this.writers.add(head.key)
+      for (const head of this.system.heads) {
+        await this.writers.add(head.key)
+      }
+
+      if (!this.system.heads.length) {
+        await this.writers.add(this.bootstrap.key)
+      }
+
+      await this._bump(true)
+    } catch (err) {
+      this._bootOnlineGuard.destroy(err)
+      return
     }
 
-    if (!this.system.heads.length) {
-      await this.writers.add(this.bootstrap.key)
-    }
-
-    await this._bump()
+    this._bootOnlineGuard.exit()
   }
 
   bumpSoon() {
-    this._bump().catch(safetyCatch)
+    this._bump(false).catch(safetyCatch)
   }
 
-  async _bump() {
-    if (!(await this._bootReady())) return
+  async _bump(force) {
+    if (!force && !this._bootGuard.opened) await this._bootGuard.ready()
 
+    // resolve before the bootAll gate: a parked boot-from retries on any bump,
+    // and its drain is the one _bootOnline itself is waiting on
     if (this._bootWait !== null) this._bootWait.resolve()
+
+    if (!force && !this._bootOnlineGuard.opened) await this._bootOnlineGuard.ready()
 
     this.bumping++
 
@@ -513,11 +543,11 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   update() {
-    return this._bump()
+    return this._bump(false)
   }
 
   async updated() {
-    if (this.opened === false) await this.ready()
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this._draining) return this._draining
     return Promise.resolve()
   }
@@ -816,7 +846,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async setLocal(key, { keyPair } = {}) {
-    if (!this.opened) await this.ready()
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
 
     const manifest = keyPair
@@ -1229,10 +1259,12 @@ module.exports = class Autobee extends ReadyResource {
     return encoding.encodeValue(value, opts)
   }
 
+  // gates on the state boot only, so hints can still feed a parked boot-from -
+  // the trailing bump waits for bootAll like any other drain
   async wakeup({ key, length }) {
-    if (!(await this._bootReady())) return
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
     await this.writers.wakeup(key, length)
-    await this._bump()
+    await this._bump(false)
   }
 
   async append(values, { optimistic = false } = {}) {
@@ -1242,7 +1274,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!Array.isArray(values)) values = [values]
 
-    if (!this.opened) await this.ready()
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
 
     if (!optimistic && this.writers.localWriter.isRemoved) {
       throw new Error('Not writable')
@@ -1283,7 +1315,7 @@ module.exports = class Autobee extends ReadyResource {
       batch.push(node)
     }
 
-    return this._bump()
+    return this._bump(false)
   }
 
   async _flushLocal() {
@@ -1314,7 +1346,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async moveTo(head) {
-    if (!this.opened) await this.ready()
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
 
     const ff = await FastForward.fromHead(this, head, null, { force: true })

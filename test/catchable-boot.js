@@ -6,7 +6,7 @@ const { apply } = require('./helpers')
 // A boot failure (here: encrypted but the encryption key resolves null, as
 // happens when a room is opened before its local state is durable) must reject
 // ready() and must NOT escape as an uncaught rejection from the internal
-// _bootGuard.ready() awaiters (bee preload, _bootAll, _bump, wakeup).
+// _bootGuard.ready() awaiters (bee preload, _bootOnline, _bump, wakeup).
 test('boot failure is catchable via ready()', async function (t) {
   const store = new Corestore(await t.tmp())
   t.teardown(() => store.close())
@@ -28,8 +28,8 @@ test('boot failure is catchable via ready()', async function (t) {
   t.pass('no uncaught rejection escaped the failed boot')
 })
 
-// A wakeup arriving on an instance whose boot failed must not throw either.
-test('wakeup after failed boot does not throw', async function (t) {
+// wakeup is a host-facing API like append, so a failed boot surfaces there too
+test('wakeup after failed boot rejects with the boot error', async function (t) {
   const store = new Corestore(await t.tmp())
   t.teardown(() => store.close())
 
@@ -42,12 +42,13 @@ test('wakeup after failed boot does not throw', async function (t) {
 
   await t.exception(auto.ready())
 
-  // wakeup awaits the boot guard internally - must bail, not reject uncaught
-  await auto.wakeup({
-    key: store.createKeyPair ? (await store.createKeyPair('x')).publicKey : Buffer.alloc(32),
-    length: 1
-  })
+  await t.exception(
+    auto.wakeup({
+      key: store.createKeyPair ? (await store.createKeyPair('x')).publicKey : Buffer.alloc(32),
+      length: 1
+    }),
+    'wakeup rejects with the boot error'
+  )
 
   await auto.close()
-  t.pass('wakeup returned without throwing')
 })

@@ -5,7 +5,16 @@ const Corestore = require('corestore')
 const FastForward = require('../lib/fast-forward.js')
 const encoding = require('../lib/encoding.js')
 
-const { create, replicate, replicateAndSync, same, sync, encode, decode } = require('./helpers')
+const {
+  create,
+  replicate,
+  replicateAndSync,
+  same,
+  sync,
+  encode,
+  decode,
+  dump
+} = require('./helpers')
 
 // predates the moveTo removal
 test.skip('fast-forward - simple', async function (t) {
@@ -474,4 +483,53 @@ test('close settles while a boot attempt is in flight', async function (t) {
 
   t.comment('close took ' + elapsed + 'ms')
   t.ok(elapsed < 5000, 'close did not wait out the boot timeout')
+})
+
+// after a fast-forward the system bee points into the writer's system core, and
+// the local replica's announced length keeps advancing past the blocks that
+// were actually fetched - a restart with no peers must still boot fully from
+// storage (the reads are pinned by the persisted checkpoint, never the tip)
+test('boots offline after a fast-forward', async function (t) {
+  t.timeout(60000)
+
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const storage = await t.tmp()
+  const auto2 = await create(t, auto1.key, {
+    storage,
+    fastForward: { boot: { head: { key: auto1.local.key, length: auto1.local.length } } }
+  })
+
+  const unreplicate = replicate(auto1, auto2)
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  await sync(auto1, auto2)
+
+  // advance the writer's system core: the joiner replays these through the
+  // oplog, so it only ever learns the new system length, not the blocks
+  const sys = auto1.system.bee.context.local
+  for (let i = 0; i < 20; i++) await auto1.append(encode({ value: 'b' + i }))
+  await sync(auto1, auto2)
+
+  const remote = auto2.store.get({ key: sys.key })
+  await remote.ready()
+  while (remote.length < sys.length) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  t.absent(await remote.has(remote.length - 1), 'system core tip was announced but not fetched')
+  await remote.close()
+
+  const expected = await dump(auto2)
+
+  await unreplicate()
+  await auto2.close()
+
+  // reopen with no peers attached: the boot must complete from storage alone
+  const auto3 = await create(t, auto1.key, { storage })
+
+  t.ok(auto3._bootGuard.opened, 'state boot completed offline')
+
+  await auto3.update()
+  t.is(await dump(auto3), expected, 'view intact after the offline boot')
 })
