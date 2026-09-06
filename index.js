@@ -72,7 +72,7 @@ module.exports = class Autobee extends ReadyResource {
     this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
 
     const systemStore = this.store.session()
-    this.system = new System(systemStore, this.name, {
+    this.system = new System(this, systemStore, {
       core: systemStore.get({ preload: this._getCorePreload('system') }),
       encrypted: this.encrypted,
       getEncryptionProvider: this.getSystemEncryption
@@ -145,7 +145,6 @@ module.exports = class Autobee extends ReadyResource {
     this.interrupted = null
     this._interrupting = false
     this._onErrorBound = this._onError.bind(this)
-    this._bumpSoonBound = this.bumpSoon.bind(this)
     this._onGroupUpdateBound = this._onGroupUpdate.bind(this)
 
     this.wakeupCapability = null
@@ -153,7 +152,7 @@ module.exports = class Autobee extends ReadyResource {
     this.previousDrain = 0
 
     this._catchupMigratedNodes = null
-    this._migratedHead = null
+    this._migrating = false
     this._prebooting = null
 
     this.ready().catch(noop)
@@ -425,35 +424,16 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.system.boot(system)
 
-    const migrated = await this.local.getUserData('autobee/migrated-head')
-    if (migrated) this._migratedHead = encoding.decodeMigratedHead(migrated)
-
-    let view = this.system.view
-    if (!view) view = (this._migratedHead && this._migratedHead.view) || EMPTY_HEAD
-
-    // @todo migration
     if (result.migration) {
-      if (this._handlers.migrate) {
-        view =
-          (await this._handlers.migrate(result.migration.views, result.migration.system)) ||
-          EMPTY_HEAD
-        this._catchupMigratedNodes = result.migration.catchup
-
-        this._migratedHead = {
-          system: result.migration.system,
-          view: view.length ? view : (this._migratedHead && this._migratedHead.view) || null
-        }
-
-        await this._storeMigratedHead()
+      if (!this._handlers.migrate) {
+        throw new Error('Missing migration handler')
       }
+
+      this._migrating = true
+      this._catchupMigratedNodes = result.migration.catchup
 
       // ff boot invalidated by migration
       this.bootFrom = null
-
-      // clear legacy data
-      await this.bootstrap.setUserData('autobase/local', null)
-      await this.local.setUserData('autobase/boot', null)
-      await this.local.setUserData('autobase/encryption', null)
 
       for (const batch of result.migration.catchup) {
         const { key, length } = batch[batch.length - 1]
@@ -465,6 +445,8 @@ module.exports = class Autobee extends ReadyResource {
     // be good if we had better plumbing for it
     await this._workingBee.core.ready()
     await this.bee.core.ready()
+
+    const view = this.system.view
 
     this._workingBee.move(view)
     this.bee.move(view)
@@ -1124,9 +1106,6 @@ module.exports = class Autobee extends ReadyResource {
       this.stats.undos++
       this.trusted.clear()
       t.view = await this.system.undo(t.undo)
-      if (!t.view.length && this._migratedHead && this._migratedHead.view) {
-        t.view = this._migratedHead.view
-      }
     }
 
     return t
@@ -1207,8 +1186,9 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  _storeBoot() {
+  async _storeBoot() {
     const proms = []
+
     proms.push(
       this.local.setUserData(
         'autobee/previous-drain',
@@ -1221,12 +1201,15 @@ module.exports = class Autobee extends ReadyResource {
       proms.push(this.local.setUserData('autobee/head', encoding.encodeBootRecord(boot)))
     }
 
-    return Promise.all(proms)
-  }
+    await Promise.all(proms)
 
-  _storeMigratedHead() {
-    const value = this._migratedHead ? encoding.encodeMigratedHead(this._migratedHead) : null
-    return this.local.setUserData('autobee/migrated-head', value)
+    if (this._migrating) {
+      // clear legacy data
+      await this.bootstrap.setUserData('autobase/local', null)
+      await this.local.setUserData('autobase/boot', null)
+      await this.local.setUserData('autobase/encryption', null)
+      this._migrating = false
+    }
   }
 
   static decodeValue(buf, opts) {
@@ -1477,7 +1460,7 @@ module.exports = class Autobee extends ReadyResource {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
-    const { head, migrate } = this.fastForwardTo
+    const { head } = this.fastForwardTo
 
     const from = this.system.bee.head()
     const to = head
@@ -1485,22 +1468,8 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    // migrate is set when fast-forwarding from a legacy head
-    if (migrate) {
-      const view = (await this._handlers.migrate(migrate, head)) || EMPTY_HEAD
-
-      this._migratedHead = {
-        system: head,
-        view: view.length ? view : (this._migratedHead && this._migratedHead.view) || null
-      }
-
-      await this._storeMigratedHead()
-      this.bee.move(view)
-      this._workingBee.move(view)
-    } else {
-      this.bee.move(this.system.view)
-      this._workingBee.move(this.system.view)
-    }
+    this.bee.move(this.system.view)
+    this._workingBee.move(this.system.view)
 
     this._approvalCheck = true
     this.fastForwardTo = null
