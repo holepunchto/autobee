@@ -94,6 +94,10 @@ async function openFixture(t, name, state, opts = {}) {
   t.teardown(() => auto.close())
   await auto.ready()
 
+  // a migration boots in the background after ready(), and the fixture is
+  // local on disk, so wait for it to settle before the tests poke at state
+  await auto.flush()
+
   return auto
 }
 
@@ -335,6 +339,7 @@ test(
     t.teardown(() => a.close())
 
     await a.ready()
+    await a.flush() // the migration boots in the background after ready()
     t.ok(aState.calls, 'a migrated locally')
 
     await a.append(JSON.stringify({ noop: 1 }))
