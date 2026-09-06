@@ -614,6 +614,8 @@ module.exports = class Autobee extends ReadyResource {
 
           if (this.fastForwardTo !== null) {
             await this._applyFastForward()
+            if (changes) changes.track()
+            this._needsUpdate = false
             break // revaluate conditions...
           }
 
@@ -637,7 +639,7 @@ module.exports = class Autobee extends ReadyResource {
     this._updating = updating.promise
 
     try {
-      if (this._needsUpdate) await this._update(changes)
+      if (this._needsUpdate) await this._update(changes, false)
       await this._storeBoot()
     } finally {
       this._updating = null
@@ -819,13 +821,13 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _update(changes) {
+  async _update(changes, fastForward) {
     this._needsUpdate = false
     this.bee.update(this._workingBee.root)
 
     if (!changes) return
 
-    changes.finalise()
+    changes.finalise(fastForward)
     await this._handlers.update(this.view, changes)
   }
 
@@ -1512,7 +1514,7 @@ module.exports = class Autobee extends ReadyResource {
     // we moved, so ask our peers to tell us their heads again
     this._requestWakeup()
 
-    await this._update(changes)
+    await this._update(changes, true)
     await this._storeBoot()
 
     this.stats.fastForwards++
