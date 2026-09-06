@@ -1485,22 +1485,8 @@ module.exports = class Autobee extends ReadyResource {
     this.system.bee.move(head)
     await this.system.reset()
 
-    // migrate is set when fast-forwarding from a legacy head
-    if (migrate) {
-      const view = (await this._handlers.migrate(migrate, head)) || EMPTY_HEAD
-
-      this._migratedHead = {
-        system: head,
-        view: view.length ? view : (this._migratedHead && this._migratedHead.view) || null
-      }
-
-      await this._storeMigratedHead()
-      this.bee.move(view)
-      this._workingBee.move(view)
-    } else {
-      this.bee.move(this.system.view)
-      this._workingBee.move(this.system.view)
-    }
+    this.bee.move(this.system.view)
+    this._workingBee.move(this.system.view)
 
     this._approvalCheck = true
     this.fastForwardTo = null
