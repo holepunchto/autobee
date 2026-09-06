@@ -10,7 +10,7 @@ const os = IS_BARE ? null : require('os')
 const Autobee = require('../index.js')
 const { replicate, sync } = require('./helpers')
 
-const skip = IS_BARE || ['linux', 'darwin'].includes(os.platform())
+const skip = IS_BARE || !['linux', 'darwin'].includes(os.platform())
 
 const path = skip ? null : require('path')
 const fs = skip ? null : require('fs/promises')
