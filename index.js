@@ -344,6 +344,29 @@ module.exports = class Autobee extends ReadyResource {
   async _close() {
     this._interrupting = true
 
+    // the local core holds the exclusive lock but the local writer closes it
+    // early in the teardown, so hand the lock to a detached session that
+    // outlives the teardown and only release it once everything is down
+    let lock = null
+
+    if (this.local.exclusive) {
+      lock = this.store.session()
+      const local = lock.get({ key: this.local.key, active: false })
+      await local.ready()
+
+      // transfer exclusiveness, the detached session now unlocks on close
+      local.exclusive = true
+      this.local.exclusive = false
+    }
+
+    try {
+      await this._teardown()
+    } finally {
+      if (lock) await lock.close()
+    }
+  }
+
+  async _teardown() {
     try {
       await ApplyView.close(this.view, this)
     } catch (err) {
@@ -351,7 +374,6 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     if (this.writers) await this.writers.close()
-    await this.local.close()
     await this.system.close()
     await this._wakeup.close()
     if (this.bootstrap) await this.bootstrap.close()
@@ -365,6 +387,8 @@ module.exports = class Autobee extends ReadyResource {
 
     // don't rely on the store teardown to stop the notify watcher
     if (this._notifyHandler) this._notifyHandler.destroy()
+
+    await this.local.close()
 
     // rugpull the rest
     await this.store.close()
