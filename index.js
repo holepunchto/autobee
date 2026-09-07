@@ -347,7 +347,8 @@ module.exports = class Autobee extends ReadyResource {
 
   openCore(key) {
     const encryption = this.encryptionKey ? new WriterEncryption(this) : null
-    return this.store.get({ key, encryption })
+    const group = this.wakeupCapability ? this.wakeupCapability.discoveryKey : null
+    return this.store.get({ key, encryption, group })
   }
 
   _getEncryptionProvider(view) {
