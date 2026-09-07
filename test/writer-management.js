@@ -2,6 +2,7 @@ const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 const Autobee = require('../index.js')
+const encoding = require('../lib/encoding.js')
 const {
   apply,
   create,
@@ -712,3 +713,56 @@ async function getExternalViews(auto) {
   }
   return views
 }
+
+test('writer-management - wakeup hint racing setLocal does not track the local core twice', async function (t) {
+  const auto = await create(t)
+  await auto.append(encode({ init: true })) // optimistic nodes need a non-genesis system
+
+  // like a pairing flow: the join request is appended to the core out of band,
+  // before we rotate onto it
+  const core = auto.store.get({ name: 'rotate-target' })
+  await core.ready()
+  await core.append(
+    Autobee.encodeValue(encode({ addWriter: core.id }), {
+      optimistic: true,
+      encrypted: !!encryptionKey
+    })
+  )
+
+  // a peer announces the core right as we rotate onto it - the hint lands
+  // between the rotation and the drain flushing wakeups
+  auto.once('rotate-local-writer', () => auto.hintWakeup({ key: core.key, length: 1 }))
+
+  await auto.setLocal(core.key)
+  await auto.update()
+
+  const id = b4a.toString(core.key, 'hex')
+  const tracking = new Set()
+  for (const w of [auto.writers.localWriter, ...auto.writers.active.values()]) {
+    if (b4a.equals(w.core.key, core.key)) tracking.add(w)
+  }
+
+  t.is(tracking.size, 1, 'exactly one writer tracks the rotated core')
+  t.is(auto.writers.active.get(id), auto.writers.localWriter, 'and it is the local writer')
+
+  const info = await auto.system.get(core.key)
+  t.is(info.length, 1, 'the out of band node was applied once')
+
+  // a duplicate apply dedupes the oplog writer record out of the system flush,
+  // which leaves an entry topo cannot resolve - make sure every entry is sound
+  await auto.append(encode({ hello: 'world' }))
+  for await (const data of auto.system.bee.createChangesStream()) {
+    let oplogs = 0
+    for (const { keys } of data.batch) {
+      if (!keys) continue
+      for (const k of keys) {
+        if (k.key[0] !== 1) continue
+        const value = encoding.decodeSystemWriter(k.key, k.value)
+        if (value.isOplog) oplogs++
+      }
+    }
+    t.is(oplogs, 1, 'system entry ' + data.head.length + ' carries its oplog writer')
+  }
+
+  t.ok(auto.writable, 'rotated local writer is writable')
+})
