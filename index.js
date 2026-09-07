@@ -166,11 +166,11 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   get isIndexer() {
-    return this.writers.localWriter.isIndexer
+    return this.writers ? this.writers.localWriter.isIndexer : false
   }
 
   get writable() {
-    return this.writers.writable
+    return this.writers ? this.writers.writable : false
   }
 
   // autobase compat
