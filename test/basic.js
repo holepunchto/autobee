@@ -390,4 +390,8 @@ test('cores - what a mirror should pin', async function (t) {
   t.alike(mirror.writers, [auto2.local.key, auto1.local.key])
   // auto2 never appended, so its own views are empty - only the trusted ones land
   t.alike(mirror.views, [auto1.system.bee.context.local.key, auto1._workingBee.context.local.key])
+
+  // replay-only bases write everything locally, so all mode adds nothing new
+  const everything = await auto2.cores({ wait: true, all: true })
+  t.alike(everything.views, mirror.views, 'no foreign refs without a fast-forward')
 })

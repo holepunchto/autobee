@@ -520,6 +520,16 @@ test('boots offline after a fast-forward', async function (t) {
   t.absent(await remote.has(remote.length - 1), 'system core tip was announced but not fetched')
   await remote.close()
 
+  // the ff left the joiner's bees referencing the writer's cores - all mode
+  // must surface them so a mirror pins the full dependency set
+  const pinned = await auto2.cores({ all: true })
+  const hexes = pinned.views.map((k) => b4a.toString(k, 'hex'))
+  t.ok(hexes.includes(b4a.toString(sys.key, 'hex')), 'all mode pins the referenced system core')
+  t.ok(
+    hexes.includes(b4a.toString(auto1._workingBee.context.local.key, 'hex')),
+    'all mode pins the referenced view core'
+  )
+
   const expected = await dump(auto2)
 
   await unreplicate()

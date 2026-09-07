@@ -268,17 +268,20 @@ module.exports = class Autobee extends ReadyResource {
   // the cores a mirror should pin: our writer core, our views when we are
   // trusted, and (with wait) the most recent trusted head so a mirror that
   // forgets to add one still pins a valid entrypoint
-  async cores({ wait = false, local = true } = {}) {
+  async cores({ wait = true, local = true, all = false } = {}) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
 
-    const result = { key: this.key, views: [], writers: [] }
+    const result = { key: this.key, views: null, writers: [] }
+    const views = new Map()
 
     if (local) {
       result.writers.push(this.local.key)
 
       if (await this.trusted.isTrusted(this.local.key, this.view)) {
-        const views = await this.writers.localWriter.views()
-        for (const { key } of views) result.views.push(key)
+        const localViews = await this.writers.localWriter.views()
+        for (const { key } of localViews) {
+          views.set(b4a.toString(key, 'hex'), key)
+        }
       }
     }
 
@@ -288,12 +291,32 @@ module.exports = class Autobee extends ReadyResource {
       if (head && (!local || !b4a.equals(head.key, this.local.key))) {
         const oplog = await this._resolveOplogHint(head.key, head.length)
         if (oplog && oplog.op.views) {
-          result.views.push(oplog.op.views.system.key)
-          result.views.push(oplog.op.views.view.key)
+          const skey = oplog.op.views.system.key
+          const vkey = oplog.op.views.view.key
+
+          views.set(b4a.toString(skey, 'hex'), skey)
+          views.set(b4a.toString(vkey, 'hex'), vkey)
         }
+
         result.writers.push(head.key)
       }
+
+      if (all) {
+        const [viewCores, systemCores] = await Promise.all([
+          this.bee.cores({ local: false }),
+          this.system.bee.cores({ local: false })
+        ])
+
+        for (const key of viewCores) {
+          views.set(b4a.toString(key, 'hex'), key)
+        }
+        for (const key of systemCores) {
+          views.set(b4a.toString(key, 'hex'), key)
+        }
+      }
     }
+
+    result.views = [...views.values()]
 
     return result
   }
