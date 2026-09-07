@@ -2,7 +2,9 @@ const test = require('brittle')
 const c = require('compact-encoding')
 const migrations = require('../lib/migrations.js')
 const crypto = require('hypercore-crypto')
-const { create, encode } = require('./helpers')
+const Corestore = require('corestore')
+const Autobee = require('../')
+const { create, encode, apply, encryptionKey } = require('./helpers')
 const { Oplog } = require('../lib/encoding.js')
 
 test('close settles while a drain waits on unavailable blocks', async function (t) {
@@ -32,6 +34,31 @@ test('close settles while a drain waits on unavailable blocks', async function (
 
   t.is(result, 'closed')
   t.comment('close took ' + (Date.now() - started) + 'ms')
+})
+
+// the local writer closes the local core early in the teardown, which used to
+// drop its exclusive lock while the rest of the instance was still closing
+test('local core lock is held until the store session is torn down', async function (t) {
+  const store = new Corestore(await t.tmp(), { manifestVersion: 2 })
+  t.teardown(() => store.close())
+
+  const auto = new Autobee(store.session(), null, {
+    encryptionKey,
+    encrypted: !!encryptionKey,
+    bootstrapWeight: 3,
+    apply
+  })
+  await auto.ready()
+  await auto.append(encode({ value: 'a' }))
+
+  // contend for the lock the way a second instance on the same store would
+  const local = store.get({ key: auto.local.key, exclusive: true })
+  const locked = local.ready().then(() => auto.store.closed)
+  t.teardown(() => local.close())
+
+  await auto.close()
+
+  t.is(await locked, true, 'lock granted only after the store session was torn down')
 })
 
 // _getOplog is called fire-and-forget from the wakeup path, so a core it leaves
