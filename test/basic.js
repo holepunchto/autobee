@@ -355,3 +355,43 @@ async function settle(t, fn, message, { timeout = 20000, interval = 50 } = {}) {
   }
   t.fail(message)
 }
+
+test('cores - what a mirror should pin', async function (t) {
+  // no trust hooks: everything local counts as trusted
+  const auto0 = await create(t)
+  await auto0.append(encode({ value: 'x' }))
+
+  const own = await auto0.cores()
+  t.alike(own.key, auto0.key)
+  t.alike(own.writers, [auto0.local.key])
+  t.alike(own.views, [auto0.system.bee.context.local.key, auto0._workingBee.context.local.key])
+
+  // a mostRecentTrusted hook without isTrusted means the local writer is not
+  // trusted, and its own head is never mixed back in
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+  for (let i = 0; i < 3; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const untrusted = await auto1.cores({ wait: true })
+  t.alike(untrusted.writers, [auto1.local.key])
+  t.is(untrusted.views.length, 0, 'untrusted local writer pins no views')
+
+  // a joiner mixes in the most recent trusted head it heard about
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  t.teardown(replicate(auto1, auto2))
+  await sync(auto1, auto2)
+
+  const mirror = await auto2.cores({ wait: true })
+  t.alike(mirror.writers, [auto2.local.key, auto1.local.key])
+  // auto2 never appended, so its own views are empty - only the trusted ones land
+  t.alike(mirror.views, [auto1.system.bee.context.local.key, auto1._workingBee.context.local.key])
+
+  // replay-only bases write everything locally, so all mode adds nothing new
+  const everything = await auto2.cores({ wait: true, all: true })
+  t.alike(everything.views, mirror.views, 'no foreign refs without a fast-forward')
+})
