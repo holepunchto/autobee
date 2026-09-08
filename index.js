@@ -457,7 +457,7 @@ module.exports = class Autobee extends ReadyResource {
       this.bootFrom = getBootOption(await this.bootFrom)
     }
 
-    return boot(this.store, this.key, this.legacyViews, {
+    return boot(this.store, this.key, {
       encryptionKey: this.encryptionKey,
       keyPair: this.keyPair
     })
@@ -504,12 +504,9 @@ module.exports = class Autobee extends ReadyResource {
     const system = result.system || EMPTY_HEAD
 
     await this.system.boot(system)
+    if (this.system.migration) await this._runMigration()
 
     if (result.migration) {
-      if (!this._handlers.migrate) {
-        throw new Error('Missing migration handler')
-      }
-
       this._migrating = true
       this._catchupMigratedNodes = result.migration.catchup
 
@@ -1539,6 +1536,17 @@ module.exports = class Autobee extends ReadyResource {
     return true
   }
 
+  async _runMigration() {
+    if (!this._handlers.migrate) {
+      throw new Error('Missing migration handler')
+    }
+
+    const migration = this.system.migration
+    this.system.migration = null
+
+    await this._handlers.migrate(migration.views, migration.head)
+  }
+
   async _applyFastForward() {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
@@ -1550,6 +1558,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.system.bee.move(head)
     await this.system.reset()
+    if (this.system.migration) await this._runMigration()
 
     this.bee.move(this.system.view)
     this._workingBee.move(this.system.view)
