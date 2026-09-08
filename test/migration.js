@@ -223,17 +223,20 @@ test(
 )
 
 test(
-  'migration - 2) a fresh peer boots straight onto a migrated head, triggering ff migration',
+  'migration - 2) a fresh peer boots from the legacy system pointer, triggering ff migration',
   { skip: skipFF },
   async function (t) {
     const bState = {}
     const b = await openFixture(t, 'b', bState)
 
-    const head = safeHeadOfB(b)
+    const legacy = {
+      key: b4a.from('6fd1e0b67c3946a8665cbd1f1bca90aad868def590d83f6e6dc8ca64bcd92de6', 'hex'),
+      length: 0
+    }
 
     const joinerStore = new Corestore(await t.tmp())
     const joinerState = {}
-    const joiner = makeAutobee(joinerStore, joinerState, { fastForward: { boot: { head } } })
+    const joiner = makeAutobee(joinerStore, joinerState, { fastForward: { boot: { legacy } } })
     t.teardown(() => joiner.close())
 
     const done = replicate(b, joiner)

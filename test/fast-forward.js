@@ -211,56 +211,67 @@ test('ff onto a trusted head keeps the untrusted tip pending', async function (t
   t.alike(decode(entry.value), { hello: 'tip' + (TIP - 1) }, 'the tip landed after the ff')
 })
 
-test('boot from a trusted peer', async function (t) {
-  const auto1 = await create(t, {
-    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
-  })
+test('boot from a head ignores trust', async function (t) {
+  const auto1 = await create(t)
 
   for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
 
-  const conditions = []
-
   const auto2 = await create(t, auto1.key, {
-    isTrusted: () => true,
+    isTrusted: () => false,
     fastForward: {
-      boot: {
-        head: { key: auto1.local.key, length: auto1.local.length },
-        bootCondition: async (view) => {
-          const entry = await view.get(b4a.from('latest'))
-          conditions.push(!!entry)
-          return !!entry
-        }
-      }
+      boot: { head: { key: auto1.local.key, length: auto1.local.length } }
     }
   })
 
   t.teardown(replicate(auto1, auto2))
 
   await new Promise((resolve) => auto2.once('move-to', resolve))
-  t.pass('booted onto a trusted head')
-
-  t.ok(conditions.length > 0, 'bootCondition was consulted with the candidate view')
+  t.pass('booted onto the head we were handed')
 
   await replicateAndSync(auto1, auto2)
   t.ok(await same(auto1, auto2), 'converged')
 })
 
-test('boot from trusted parks while the condition rejects', async function (t) {
-  const auto1 = await create(t, {
-    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
-  })
+test('boot from a stale head searches for the latest', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const stale = { key: auto1.local.key, length: 4 }
 
   for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'b' + i }))
 
-  let accept = false
+  const block = await auto1.local.get(auto1.local.length - 1)
+  const { views } = encoding.decodeOplog(block)
+  const latest = { key: views.system.key, length: views.system.start + views.system.length }
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => false,
+    fastForward: { boot: { head: stale } }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  const to = await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.alike(to, latest, 'booted onto the latest oplog head, not the length we were handed')
+
+  await replicateAndSync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'converged')
+})
+
+test('boot waits for the head when asked to', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'b' + i }))
+
   let moved = false
 
   const auto2 = await create(t, auto1.key, {
-    isTrusted: () => true,
+    isTrusted: () => false,
     fastForward: {
       boot: {
         head: { key: auto1.local.key, length: auto1.local.length },
-        bootCondition: () => accept
+        wait: true
       }
     }
   })
@@ -269,16 +280,13 @@ test('boot from trusted parks while the condition rejects', async function (t) {
     moved = true
   })
 
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  t.absent(moved, 'parked while the head cannot be read')
+
   t.teardown(replicate(auto1, auto2))
 
-  await new Promise((resolve) => setTimeout(resolve, 1500))
-  t.absent(moved, 'parked while the condition rejects')
-
-  accept = true
-  await auto1.append(encode({ value: 'unblock' }))
-
   await new Promise((resolve) => auto2.once('move-to', resolve))
-  t.pass('booted once the condition accepted')
+  t.pass('booted once the head turned up')
 
   await sync(auto1, auto2)
 })
@@ -304,7 +312,7 @@ test('boot from a head above the last flush', async function (t) {
     new Promise((resolve) => setTimeout(() => resolve(false), 3000))
   ])
 
-  t.ok(moved, 'walked back to the nearest flush head and booted')
+  t.ok(moved, 'resolved the nearest flush head and booted')
 
   await sync(auto1, auto2)
   t.ok(await same(auto1, auto2), 'converged on the full tip')
@@ -366,15 +374,12 @@ test('candidate views are opened and closed through the handlers', async functio
       closes++
       if (view && view.wrapped) seen.push('wrapped')
     },
-    isTrusted: () => true,
-    fastForward: {
-      boot: {
-        head: { key: auto1.local.key, length: auto1.local.length },
-        bootCondition: (target) => {
-          seen.push(target && target.wrapped ? 'condition-wrapped' : 'condition-raw')
-          return true
-        }
+    isTrusted: () => false,
+    mostRecentTrusted: (target, reference) => {
+      if (reference !== null) {
+        seen.push(target && target.wrapped ? 'candidate-wrapped' : 'candidate-raw')
       }
+      return { key: auto1.local.key, length: auto1.local.length }
     }
   })
 
@@ -383,12 +388,12 @@ test('candidate views are opened and closed through the handlers', async functio
   await new Promise((resolve) => auto2.once('move-to', resolve))
   await sync(auto1, auto2)
 
-  t.ok(seen.includes('condition-wrapped'), 'bootCondition got the opened view')
+  t.ok(seen.includes('candidate-wrapped'), 'mostRecentTrusted got the opened view')
   t.ok(seen.includes('wrapped'), 'close() got the opened view')
 
   // only the main and working views stay open, every candidate view we opened
   // along the way has to have been closed again
-  t.comment('after boot: opens=' + opens + ' closes=' + closes)
+  t.comment('after ff: opens=' + opens + ' closes=' + closes)
   t.ok(opens > 2, 'candidate views were opened as well as the main and working views')
   t.is(opens - closes, 2, 'no candidate view was left open')
 })
