@@ -247,17 +247,19 @@ Called at flush time to stamp your own oplog (with your view as `target` and a `
 
 ```js
 {
-  head: { key, length },       // oplog head to boot from
-  legacy: { key, length },     // pre-2.0 pointer, see below
-  bootCondition (target, reference) {} // optional gate on the view we would land on
+  head: { key, length },   // oplog head to boot from
+  legacy: { key, length }, // pre-2.0 pointer, see below
+  wait: false              // park until the head can be read
 }
 ```
 
 Pass one of `head` or `legacy`, not both.
 
-Without `bootCondition` this is a single attempt that gives up if the head cannot be read; with one it parks until the condition is satisfied, which today means indefinitely if it never is.
+`head` must be a v3 or newer oplog node. `length` is a floor: the key is searched for its latest oplog head at or past it, and the boot lands ungated on the views that head stamps.
 
-`legacy` is for records written before boot heads were oplog heads: the key is a _system_ head and a `0` length is resolved from the core. It boots ungated - `bootCondition` does not apply - and will be removed, so don't reach for it. A bare `{ key, length }` in place of the whole struct means the same thing, older still.
+`wait` parks and retries until the head can be read, instead of giving up after one attempt.
+
+`legacy` is the pre-2.0 pointer: a _system_ head whose `0` length resolves from the core. It will be removed, so don't reach for it. A bare `{ key, length }` in place of the whole struct means the same.
 
 #### `fastForward.conservative`
 
