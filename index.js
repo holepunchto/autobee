@@ -435,10 +435,6 @@ module.exports = class Autobee extends ReadyResource {
     return new WriterEncryption(this)
   }
 
-  getMostRecentHead() {
-    return topo.getMostRecentHead(this, this.system.bee.snapshot())
-  }
-
   async _preBoot() {
     if (this._handlers.wait) await this._handlers.wait()
 
