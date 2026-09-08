@@ -169,13 +169,13 @@ test('migration - c (non-indexer, frozen at 100) migrates', { skip }, async func
   t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
 })
 
-test('migration - legacyViews are tried in order of preference', { skip }, async function (t) {
+test('migration - only the designated legacy view becomes the view', { skip }, async function (t) {
   const state = {}
   const a = await openFixture(t, 'a', state, { legacyViews: ['not-a-view', LEGACY_VIEW_NAME] })
 
-  t.absent(state.views.get('not-a-view'), 'the preferred name matched nothing')
-  t.alike(a.system.view, state.views.get(LEGACY_VIEW_NAME), 'next name in line became the view')
-  t.is(await messageAt(a, A_CONFIRMED - 1), 'm198')
+  t.absent(state.views.get('not-a-view'), 'the designated name matched nothing')
+  t.ok(state.views.get(LEGACY_VIEW_NAME), 'the other legacy view is still resolved for the handler')
+  t.is(a.system.view.length, 0, 'but it is never adopted as the view: its blocks use a different key')
 })
 
 test('migration - no matching legacy view migrates to an empty view', { skip }, async function (t) {
