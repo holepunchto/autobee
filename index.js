@@ -118,7 +118,6 @@ module.exports = class Autobee extends ReadyResource {
     this._appending = []
     this._draining = null
     this._updating = null
-    this._bootWait = null
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -391,7 +390,6 @@ module.exports = class Autobee extends ReadyResource {
     // rugpull the rest
     await this.store.close()
 
-    if (this._bootWait !== null) this._bootWait.resolve()
     if (this._updating) await this._updating
     if (this._draining) await this._draining
 
@@ -566,10 +564,6 @@ module.exports = class Autobee extends ReadyResource {
   async _bump(force) {
     if (!force && !this._bootGuard.opened) await this._bootGuard.ready()
 
-    // resolve before the bootAll gate: a parked boot-from retries on any bump,
-    // and its drain is the one _bootOnline itself is waiting on
-    if (this._bootWait !== null) this._bootWait.resolve()
-
     if (!force && !this._bootOnlineGuard.opened) await this._bootOnlineGuard.ready()
 
     this.bumping++
@@ -642,7 +636,7 @@ module.exports = class Autobee extends ReadyResource {
     this.stats.drains++
 
     if (this.bootFrom) {
-      const { head = null, legacy = null, wait = false } = this.bootFrom
+      const { head = null, legacy = null } = this.bootFrom
 
       this.bootFrom = null
 
@@ -650,7 +644,7 @@ module.exports = class Autobee extends ReadyResource {
         await this._bootFromSystem(legacy)
       } else if (head) {
         this._wakeup.hint({ key: head.key, length: head.length || 0 })
-        await this._bootFromHead(head, wait)
+        await this._bootFromHead(head)
       }
     }
 
@@ -1385,11 +1379,11 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  async moveTo(head) {
+  async moveTo(head, { timeout = 0 } = {}) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
 
-    const ff = await FastForward.fromHead(this, head, null, { force: true })
+    const ff = await FastForward.fromHead(this, head, null, { force: true, timeout })
     if (ff === null) return null
 
     if (!(await this._runFastForward(ff))) return null
@@ -1408,37 +1402,20 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _bootFromHead(head, wait = false) {
-    try {
-      while (!this._interrupting) {
-        this._bootWait = rrp()
-
-        try {
-          if (await this._bootAttempt(head)) return true
-        } catch (err) {
-          safetyCatch(err)
-        }
-
-        if (!wait || this._interrupting) break
-
-        await this._bootWait.promise
-      }
-    } finally {
-      this._bootWait = null
-    }
-
-    return false
-  }
-
-  async _bootAttempt(head) {
+  async _bootFromHead(head) {
     const timeout = FastForward.DEFAULT_TIMEOUT
 
-    const oplog = await this._resolveOplogHint(head.key, head.length || 0, { timeout })
-    if (oplog === null) return false
+    try {
+      const oplog = await this._resolveOplogHint(head.key, head.length || 0, { timeout })
+      if (oplog === null) return false
 
-    const ff = await FastForward.fromHead(this, oplog, null, { force: true, timeout })
+      const ff = await FastForward.fromHead(this, oplog, null, { force: true, timeout })
 
-    return ff !== null && (await this._runFastForward(ff))
+      return ff !== null && (await this._runFastForward(ff))
+    } catch (err) {
+      safetyCatch(err)
+      return false
+    }
   }
 
   async _runFastForward(ff) {
