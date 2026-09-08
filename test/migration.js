@@ -3,12 +3,11 @@ const IS_BARE = typeof global.Bare !== 'undefined'
 const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
-const Hyperbee = require('hyperbee2')
 const { AutobeeEncryption } = require('autobee-encryption')
 const os = IS_BARE ? null : require('os')
 
 const Autobee = require('../index.js')
-const { AUTOBEE_VERSION } = require('../lib/constants.js')
+const { AUTOBEE_VERSION, LEGACY_AUTOBASE_VERSION } = require('../lib/constants.js')
 const { replicate, sync } = require('./helpers')
 
 const skip = IS_BARE || !['linux', 'darwin'].includes(os.platform())
@@ -36,12 +35,19 @@ async function apply(batch, view, base) {
   }
 }
 
-function migrateInto(store, state, getAuto, baseKey = BASE_KEY) {
-  return async function (views) {
+// autobee picks the view head itself now, so the handler no longer returns
+// one - it runs only once a legacy head is locked in, and by then the legacy
+// view is readable, locally or over the wire
+function migrateHandler(store, state, baseKey = BASE_KEY) {
+  return async function (views, systemHead) {
     state.calls = (state.calls || 0) + 1
+    state.views = views
+    state.systemHead = systemHead
 
     const legacy = views.get(LEGACY_VIEW_NAME)
-    if (!legacy) return null
+    state.length = legacy ? legacy.length : 0
+
+    if (!legacy) return
 
     const legacyCore = store.get({ key: legacy.key })
     await legacyCore.ready()
@@ -49,36 +55,20 @@ function migrateInto(store, state, getAuto, baseKey = BASE_KEY) {
       AutobeeEncryption.getViewEncryption(baseKey, SECRET_KEY, LEGACY_VIEW_NAME)
     )
 
-    const auto = getAuto()
-    const bee = new Hyperbee(store.namespace('migrated-log'), {
-      getEncryptionProvider: auto.getViewEncryption
-    })
-    await bee.ready()
-
-    const w = bee.write()
-    for (let i = 0; i < legacy.length; i++) {
-      const block = await legacyCore.get(i)
-      w.tryPut(indexKey(i), b4a.from(block))
+    try {
+      const block = await legacyCore.get(legacy.length - 1)
+      state.last = JSON.parse(b4a.toString(block))
+    } finally {
+      await legacyCore.close()
     }
-    await w.flush()
-
-    await legacyCore.close()
-
-    state.length = legacy.length
-
-    return bee.head()
   }
-}
-
-function indexKey(i) {
-  return b4a.from('#' + i.toString().padStart(6, '0'))
 }
 
 function makeAutobee(store, state, opts = {}) {
   let auto
   auto = new Autobee(store, BASE_KEY, {
     apply,
-    migrate: migrateInto(store, state, () => auto),
+    migrate: migrateHandler(store, state),
     legacyViews: [LEGACY_VIEW_NAME],
     encrypted: true,
     encryptionKey: SECRET_KEY,
@@ -104,9 +94,23 @@ async function openFixture(t, name, state, opts = {}) {
   return auto
 }
 
+// the migrated view IS the legacy view core, so read it back in place
 async function messageAt(auto, i) {
-  const entry = await auto.view.get(indexKey(i))
-  return entry && JSON.parse(b4a.toString(entry.value))
+  const view = auto.system.view
+  if (!view.key || i >= view.length) return null
+
+  const core = auto.store.get({ key: view.key })
+  await core.ready()
+  await core.setEncryption(
+    AutobeeEncryption.getViewEncryption(auto.key, SECRET_KEY, LEGACY_VIEW_NAME)
+  )
+
+  try {
+    const block = await core.get(i)
+    return block && JSON.parse(b4a.toString(block))
+  } finally {
+    await core.close()
+  }
 }
 
 function localHead(auto) {
@@ -135,8 +139,9 @@ test('migration - a (indexer, frozen fully indexed at 200) migrates', { skip }, 
   const state = {}
   const a = await openFixture(t, 'a', state)
 
-  t.ok(state.calls, 'migrate handler ran')
+  t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
   t.is(state.length, A_CONFIRMED)
+  t.is(state.last, 'm198', 'the handler could read the legacy view')
   t.is(await messageAt(a, A_CONFIRMED - 1), 'm198')
 })
 
@@ -147,8 +152,9 @@ test(
     const state = {}
     const b = await openFixture(t, 'b', state)
 
-    t.ok(state.calls, 'migrate handler ran')
+    t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
     t.is(state.length, B_CONFIRMED)
+    t.is(state.last, 'm198', 'the handler could read the legacy view')
     t.is(await messageAt(b, B_CONFIRMED - 1), 'm198')
   }
 )
@@ -157,9 +163,27 @@ test('migration - c (non-indexer, frozen at 100) migrates', { skip }, async func
   const state = {}
   const c = await openFixture(t, 'c', state)
 
-  t.ok(state.calls, 'migrate handler ran')
+  t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
   t.is(state.length, C_CONFIRMED)
+  t.is(state.last, 'm98', 'the handler could read the legacy view')
   t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+})
+
+test('migration - legacyViews are tried in order of preference', { skip }, async function (t) {
+  const state = {}
+  const a = await openFixture(t, 'a', state, { legacyViews: ['not-a-view', LEGACY_VIEW_NAME] })
+
+  t.absent(state.views.get('not-a-view'), 'the preferred name matched nothing')
+  t.alike(a.system.view, state.views.get(LEGACY_VIEW_NAME), 'next name in line became the view')
+  t.is(await messageAt(a, A_CONFIRMED - 1), 'm198')
+})
+
+test('migration - no matching legacy view migrates to an empty view', { skip }, async function (t) {
+  const state = {}
+  const a = await openFixture(t, 'a', state, { legacyViews: ['not-a-view'] })
+
+  t.is(state.calls, 1, 'migrate handler ran')
+  t.is(a.system.view.length, 0, 'nothing to adopt: the view starts empty')
 })
 
 test(
@@ -183,7 +207,6 @@ test(
     t.ok(ff, 'c fast-forwarded onto b')
 
     await sync(b, c)
-    await done()
 
     for (let i = 0; i < C_CONFIRMED; i++) {
       t.alike(await messageAt(c, i), before[i], `message ${i} unchanged after ff`)
@@ -194,6 +217,8 @@ test(
     }
 
     t.is(await messageAt(c, B_CONFIRMED - 1), 'm198')
+
+    await done()
   }
 )
 
@@ -216,13 +241,14 @@ test(
     await joiner.ready()
 
     await sync(b, joiner)
-    await done()
 
-    t.ok(joinerState.calls, 'ff-triggered migration called the migrate handler')
+    t.is(joinerState.calls, 1, 'ff-triggered migration called the migrate handler once')
     t.is(joinerState.length, B_CONFIRMED)
 
     t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
     await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
+
+    await done()
   }
 )
 
@@ -250,13 +276,66 @@ test(
 
     await joiner.ready()
     await sync(b, joiner)
-    await done()
 
-    t.ok(joinerState.calls, 'boot from the bare legacy key called the migrate handler')
+    t.is(joinerState.calls, 1, 'boot from the bare legacy key called the migrate handler once')
     t.is(joinerState.length, B_CONFIRMED)
 
     t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
     await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
+
+    await done()
+  }
+)
+
+test(
+  'migration - a peer left on a legacy boot record migrates again on restart',
+  { skip: skipFF },
+  async function (t) {
+    const bState = {}
+    const b = await openFixture(t, 'b', bState)
+
+    const systemKey = b4a.from(
+      '6fd1e0b67c3946a8665cbd1f1bca90aad868def590d83f6e6dc8ca64bcd92de6',
+      'hex'
+    )
+
+    const dir = await t.tmp()
+    const joinerStore = new Corestore(dir)
+    const joinerState = {}
+    const joiner = makeAutobee(joinerStore, joinerState, {
+      fastForward: { boot: { key: systemKey } }
+    })
+
+    const done = replicate(b, joiner)
+
+    await joiner.ready()
+    await joiner.flush()
+
+    // it booted onto the legacy head and stops there: b has migrated, but the
+    // joiner has not caught up to b's autobee system
+    t.is(joinerState.calls, 1, 'migrate ran once for the head the joiner booted')
+    t.ok(joiner.system.version <= LEGACY_AUTOBASE_VERSION, 'still on a legacy system')
+
+    await done()
+    await joiner.close()
+    await joinerStore.close()
+
+    // no local autobase storage to re-detect, so the stored legacy boot record
+    // is the only thing that can drive this - and it does, offline
+    const restartStore = new Corestore(dir)
+    const restartState = {}
+    const restarted = makeAutobee(restartStore, restartState)
+    t.teardown(() => restarted.close())
+
+    await restarted.ready()
+
+    t.is(restartState.calls, 1, 'migrate ran again on the restart')
+    t.alike(
+      restarted.system.view,
+      restartState.views.get(LEGACY_VIEW_NAME),
+      'the legacy view is adopted again'
+    )
+    t.is(await messageAt(restarted, B_CONFIRMED - 1), 'm198')
   }
 )
 
@@ -280,7 +359,7 @@ test(
     let joiner
     joiner = new Autobee(joinerStore, bootstrap, {
       apply,
-      migrate: migrateInto(joinerStore, joinerState, () => joiner, bootstrap),
+      migrate: migrateHandler(joinerStore, joinerState, bootstrap),
       legacyViews: [LEGACY_VIEW_NAME],
       encrypted: true,
       encryptionKey: SECRET_KEY,
@@ -327,7 +406,7 @@ test(
     let a
     a = new Autobee(aStore, bootstrap, {
       apply,
-      migrate: migrateInto(aStore, aState, () => a, bootstrap),
+      migrate: migrateHandler(aStore, aState, bootstrap),
       legacyViews: [LEGACY_VIEW_NAME],
       encrypted: true,
       encryptionKey: SECRET_KEY
@@ -336,7 +415,7 @@ test(
 
     await a.ready()
     await a.flush() // the migration boots in the background after ready()
-    t.ok(aState.calls, 'a migrated locally')
+    t.is(aState.calls, 1, 'a migrated locally')
 
     await a.append(JSON.stringify({ noop: 1 }))
     await a.append(JSON.stringify({ noop: 2 }))
@@ -347,7 +426,7 @@ test(
     let joiner
     joiner = new Autobee(joinerStore, bootstrap, {
       apply,
-      migrate: migrateInto(joinerStore, joinerState, () => joiner, bootstrap),
+      migrate: migrateHandler(joinerStore, joinerState, bootstrap),
       preapply: () => {
         preapplies++
       },
@@ -364,16 +443,18 @@ test(
 
     await joiner.ready()
     await sync(a, joiner)
-    await done()
 
-    // migrate may run on legacy candidates along the way, so assert the
-    // outcome instead: the joiner settled on an autobee-format system
+    // the joiner walks several legacy candidates to get here, but migrate
+    // only ever sees the one it locks in
+    t.is(joinerState.calls, 1, 'migrate ran once, on the head the joiner locked in')
     t.is(joiner.system.version, AUTOBEE_VERSION, 'settled on an autobee system')
     t.is(preapplies, 1, 'preapply runs exactly once')
 
     for (let i = 0; i < meta.totalMessages; i++) {
       t.is(await messageAt(joiner, i), meta.messages[i], `message ${i} matches`)
     }
+
+    await done()
   }
 )
 
@@ -394,18 +475,20 @@ test(
     t.ok(ffA, 'c fast-forwarded onto a')
 
     await sync(a, c)
-    await doneA()
 
     t.is(await messageAt(c, A_CONFIRMED - 1), 'm198')
+
+    await doneA()
 
     const bState = {}
     const b = await openFixture(t, 'b', bState)
 
     const doneB = replicate(b, c)
-    await doneB()
 
     t.is(await messageAt(c, B_CONFIRMED - 1), 'm198')
     await sameContent(t, c, b, B_CONFIRMED, 'c vs b')
+
+    await doneB()
   }
 )
 
