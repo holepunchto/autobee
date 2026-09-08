@@ -256,6 +256,44 @@ test(
 )
 
 test(
+  "migration - 2b) a fresh peer boots onto a migrated indexer's autobee head instead of migrating",
+  { skip: skipFF },
+  async function (t) {
+    const bState = {}
+    const b = await openFixture(t, 'b', bState)
+    t.is(bState.calls, 1, 'b migrated locally')
+
+    // b keeps writing after migrating, so its oplog tail announces its autobee system
+    await b.append(JSON.stringify({ noop: 1 }))
+    await b.append(JSON.stringify({ noop: 2 }))
+
+    const legacy = {
+      key: b4a.from('6fd1e0b67c3946a8665cbd1f1bca90aad868def590d83f6e6dc8ca64bcd92de6', 'hex'),
+      length: 0
+    }
+
+    const joinerStore = new Corestore(await t.tmp())
+    const joinerState = {}
+    const joiner = makeAutobee(joinerStore, joinerState, { fastForward: { boot: { legacy } } })
+    t.teardown(() => joiner.close())
+
+    const done = replicate(b, joiner)
+
+    await joiner.ready()
+    await sync(b, joiner)
+
+    t.is(joinerState.calls || 0, 0, "the joiner never migrated: it booted onto b's autobee head")
+    t.is(joiner.system.version, AUTOBEE_VERSION, 'settled on an autobee system')
+    t.alike(joiner.system.view, b.system.view, 'same view as b')
+
+    t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
+    await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
+
+    await done()
+  }
+)
+
+test(
   'migration - 4) a fresh peer boots straight from a bare legacy system key',
   { skip: skipFF },
   async function (t) {
@@ -447,9 +485,9 @@ test(
     await joiner.ready()
     await sync(a, joiner)
 
-    // the joiner walks several legacy candidates to get here, but migrate
-    // only ever sees the one it locks in
-    t.is(joinerState.calls, 1, 'migrate ran once, on the head the joiner locked in')
+    // the gen0 indexers' oplog tails announce their autobee system, so the
+    // joiner fast-forwards straight onto it and never migrates itself
+    t.absent(joinerState.calls, 'joiner fast-forwarded instead of migrating')
     t.is(joiner.system.version, AUTOBEE_VERSION, 'settled on an autobee system')
     t.is(preapplies, 1, 'preapply runs exactly once')
 
