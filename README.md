@@ -247,14 +247,17 @@ Called at flush time to stamp your own oplog (with your view as `target` and a `
 
 ```js
 {
-  head: { key, length },  // oplog head to boot from
-  legacy: { key, length } // pre-2.0 pointer, see below
+  head: { key, length },   // oplog head to boot from
+  legacy: { key, length }, // pre-2.0 pointer, see below
+  wait: false              // park until the head can be read
 }
 ```
 
 Pass one of `head` or `legacy`, not both.
 
-`head` must be a v3 or newer oplog node. `length` is a floor: the key is searched for its latest oplog head at or past it, and the boot lands ungated on the views that head stamps. It is a single attempt: use `moveTo` if you need to retry.
+`head` must be a v3 or newer oplog node. `length` is a floor: the key is searched for its latest oplog head at or past it, and the boot lands ungated on the views that head stamps.
+
+`wait` parks and retries until the head can be read, instead of giving up after one attempt.
 
 `legacy` is the pre-2.0 pointer: a _system_ head whose `0` length resolves from the core. It will be removed, so don't reach for it. A bare `{ key, length }` in place of the whole struct means the same.
 
@@ -264,11 +267,9 @@ Defaults to `true`: only fast-forward onto a head a connected peer can serve who
 
 The check covers the oplog head only, not the system and view cores the fast-forward then reads.
 
-#### `await db.moveTo(head, [options])`
+#### `await db.moveTo(head)`
 
-Fast-forward onto an oplog head, ignoring the usual distance and conservative checks. Resolves `{ to, from }`, or `null` if the head could not be booted.
-
-Pass `{ timeout }` to bound the reads, so a head nobody can serve fails instead of hanging.
+Fast-forward onto an oplog head, ignoring the usual distance and conservative checks. Resolves `{ to, from }`.
 
 ### Encryption
 

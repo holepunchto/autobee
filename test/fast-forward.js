@@ -259,6 +259,38 @@ test('boot from a stale head searches for the latest', async function (t) {
   t.ok(await same(auto1, auto2), 'converged')
 })
 
+test('boot waits for the head when asked to', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'b' + i }))
+
+  let moved = false
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => false,
+    fastForward: {
+      boot: {
+        head: { key: auto1.local.key, length: auto1.local.length },
+        wait: true
+      }
+    }
+  })
+
+  auto2.once('move-to', () => {
+    moved = true
+  })
+
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  t.absent(moved, 'parked while the head cannot be read')
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  t.pass('booted once the head turned up')
+
+  await sync(auto1, auto2)
+})
+
 test('boot from a head above the last flush', async function (t) {
   const auto1 = await create(t)
   for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
