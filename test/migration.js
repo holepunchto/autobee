@@ -175,7 +175,7 @@ test('migration - only the designated legacy view becomes the view', { skip }, a
 
   t.absent(state.views.get('not-a-view'), 'the designated name matched nothing')
   t.ok(state.views.get(LEGACY_VIEW_NAME), 'the other legacy view is still resolved for the handler')
-  t.is(a.system.view.length, 0, 'but it is never adopted as the view: its blocks use a different key')
+  t.is(a.system.view.length, 0, 'it is never adopted as the view: its blocks use a different key')
 })
 
 test('migration - no matching legacy view migrates to an empty view', { skip }, async function (t) {
