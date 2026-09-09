@@ -99,7 +99,7 @@ module.exports = class Autobee extends ReadyResource {
     this.bootFrom = (fastForward && fastForward.boot) || null
 
     // conservative (default on): only fast-forward onto a head someone can serve whole
-    this._conservativeFF = !fastForward || fastForward.conservative !== false
+    this._conservativeFF = !fastForward || !!fastForward.conservative
 
     this.trusted = new TrustedPeers(this, handlers)
 
