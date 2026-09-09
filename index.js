@@ -25,7 +25,7 @@ const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
-const DEFAULT_ACK_THRESHOLD = 64
+const DEFAULT_ACK_THRESHOLD = 32
 const INTERRUPT = new Error('Apply interrupted')
 
 module.exports = class Autobee extends ReadyResource {
