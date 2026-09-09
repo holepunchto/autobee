@@ -64,7 +64,10 @@ test('conservative ff skips a sparse head nobody can serve', async function (t) 
   s1.destroy()
   s2.destroy()
 
-  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    fastForward: { conservative: true }
+  })
 
   const s3 = mirror.replicate(true)
   const s4 = auto2.store.replicate(false)
