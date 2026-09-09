@@ -1298,7 +1298,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     // read before flush clears it
-    const accepted = this.system.isAcked(batch[0].key)
+    const accepted = this.system.touched(batch[0].key)
 
     const changed = await this.system.flush(batch, this._workingBee)
 

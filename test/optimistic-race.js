@@ -47,6 +47,49 @@ test('optimistic - declined when apply neither adds nor acks the writer', async 
   t.is(auto1.system.heads.length, 1, 'declined op is not a head')
 })
 
+test('optimistic - acked but never added writer is recorded as removed', async function (t) {
+  async function apply(nodes, view, host) {
+    for (const node of nodes) {
+      const data = decode(node.value)
+      if (data.ack) host.ackWriter(node.key)
+      const w = view.write()
+      w.tryPut(b4a.from('latest'), node.value)
+      await w.flush()
+    }
+  }
+
+  const auto1 = await create(t, null, { apply })
+  const auto2 = await create(t, auto1.key, { apply })
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto2.append(encode({ msg: 'acked', ack: true }), { optimistic: true })
+
+  const done = replicate(auto1, auto2)
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  await sync(auto1, auto2)
+
+  const info = await auto1.system.get(auto2.local.key)
+  t.ok(info, 'acked writer has a record')
+  t.is(info.length, 1, 'record covers the acked op')
+  t.ok(info.isRemoved, 'acked writer is recorded as removed')
+  t.is(info.maxWeight, 0, 'acked writer was never granted')
+  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'acked', ack: true })
+  t.absent(auto2.writable, 'acked writer is not writable')
+
+  // a later op that is not acked is not applied
+  await auto2.append(encode({ msg: 'unacked' }), { optimistic: true })
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  for (let i = 0; i < 10; i++) {
+    await auto1.update()
+    await auto1.updated()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  done()
+
+  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'acked', ack: true })
+})
+
 test('optimistic - stability test (multiple iterations)', async function (t) {
   t.timeout(60000)
 
