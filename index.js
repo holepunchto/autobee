@@ -68,7 +68,7 @@ module.exports = class Autobee extends ReadyResource {
     this.id = null
     this.bootstrap = null
     this._handlers = handlers
-    this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
+    this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0, diverged: 0 }
 
     const systemStore = this.store.session()
     this.system = new System(this, systemStore, {
@@ -1169,9 +1169,16 @@ module.exports = class Autobee extends ReadyResource {
     node.weight = await resolveWeight(this, node)
     for (const n of batch) n.weight = node.weight
 
-    // if (topo.isLinkingAll(node, this.system.heads)) {
-    //   return { undo: null, view: null, tip: [batch] }
-    // }
+    if (node.hash && this.system.hash) {
+      if (topo.isLinkingAll(node, this.system.heads)) {
+        if (b4a.equals(node.hash, this.system.hash)) {
+          return { undo: null, view: null, tip: [batch] }
+        }
+
+        this.stats.diverged++
+        this.emit('diverged', { node: { key: node.key, length: node.length } })
+      }
+    }
 
     const t = await topo.sort(this, batch)
 
@@ -1317,6 +1324,7 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
+    const hash = this.system.hash
 
     // never stamp before anything we link
     const t = Math.max(this._now(), this.system.timestamp)
@@ -1344,7 +1352,8 @@ module.exports = class Autobee extends ReadyResource {
         lnk,
         optimistic,
         i === 0 ? witness : null,
-        i === 0 ? approvals : null
+        i === 0 ? approvals : null,
+        i === 0 ? hash : null
       )
       batch.push(node)
     }
