@@ -68,7 +68,7 @@ module.exports = class Autobee extends ReadyResource {
     this.id = null
     this.bootstrap = null
     this._handlers = handlers
-    this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0, diverged: 0 }
+    this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
 
     const systemStore = this.store.session()
     this.system = new System(this, systemStore, {
@@ -1169,15 +1169,8 @@ module.exports = class Autobee extends ReadyResource {
     node.weight = await resolveWeight(this, node)
     for (const n of batch) n.weight = node.weight
 
-    if (node.hash && this.system.hash) {
-      if (topo.isLinkingAll(node, this.system.heads)) {
-        if (b4a.equals(node.hash, this.system.hash)) {
-          return { undo: null, view: null, tip: [batch] }
-        }
-
-        this.stats.diverged++
-        this.emit('diverged', { node: { key: node.key, length: node.length } })
-      }
+    if (node.hash && this.system.hash && b4a.equals(node.hash, this.system.hash)) {
+      return { undo: null, view: null, tip: [batch] }
     }
 
     const t = await topo.sort(this, batch)
