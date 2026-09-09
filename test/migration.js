@@ -447,9 +447,9 @@ test(
     await joiner.ready()
     await sync(a, joiner)
 
-    // the joiner walks several legacy candidates to get here, but migrate
-    // only ever sees the one it locks in
-    t.is(joinerState.calls, 1, 'migrate ran once, on the head the joiner locked in')
+    // the joiner crawls the legacy generations, finds an indexer that already
+    // moved to autobee and boots its head, so it never migrates itself
+    t.absent(joinerState.calls, 'the joiner booted autobee instead of migrating')
     t.is(joiner.system.version, AUTOBEE_VERSION, 'settled on an autobee system')
     t.is(preapplies, 1, 'preapply runs exactly once')
 
