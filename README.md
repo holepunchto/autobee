@@ -279,7 +279,7 @@ Pass `{ timeout }` to bound the reads, so a head nobody can serve fails instead 
 
 Peers fast-forward onto the heads of writers they trust, so a trusted writer that has nothing to say still has to stamp its view progress into its own oplog.
 
-Acking does that: an empty node is appended whenever the local writer falls `ackThreshold` (default `64`) flushes behind the system.
+Acking does that: an empty node is appended whenever the local writer falls `ackThreshold` (default `32`) flushes behind the system.
 
 It is enabled for exactly the writers `isTrusted` accepts. The local key is judged when the db opens, after a fast-forward, and after the local writer rotates, so a writer that becomes trusted starts acking without being told to. `setAcking` overrides it until the next of those points.
 

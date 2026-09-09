@@ -64,7 +64,10 @@ test('conservative ff skips a sparse head nobody can serve', async function (t) 
   s1.destroy()
   s2.destroy()
 
-  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    fastForward: { conservative: true }
+  })
 
   const s3 = mirror.replicate(true)
   const s4 = auto2.store.replicate(false)
@@ -318,11 +321,17 @@ test('a fast-forward asks peers to re-announce', async function (t) {
 })
 
 test('candidate views are opened and closed through the handlers', async function (t) {
-  const auto1 = await create(t, {
-    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
-  })
+  // the genesis writer is trusted on boot regardless of the hook, so the head
+  // we want auto2 to treat as an untrusted candidate has to come from a
+  // second writer
+  const auto1 = await create(t)
+  const writer = await create(t, auto1.key)
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  await auto1.append(encode({ addWriter: writer.local.id, weight: 1 }))
+  await replicateAndSync(auto1, writer)
+
+  for (let i = 0; i < 40; i++) await writer.append(encode({ value: 'a' + i }))
+  await replicateAndSync(auto1, writer)
 
   let opens = 0
   let closes = 0
@@ -347,14 +356,16 @@ test('candidate views are opened and closed through the handlers', async functio
       if (reference !== null) {
         seen.push(target && target.wrapped ? 'candidate-wrapped' : 'candidate-raw')
       }
-      return { key: auto1.local.key, length: auto1.local.length }
+      return { key: writer.local.key, length: writer.local.length }
     }
   })
 
-  t.teardown(replicate(auto1, auto2))
+  // the writer has to be around so the conservative ff sees a peer that can
+  // serve its head whole
+  t.teardown(replicate(auto1, writer, auto2))
 
   await new Promise((resolve) => auto2.once('move-to', resolve))
-  await sync(auto1, auto2)
+  await sync(auto1, writer, auto2)
 
   t.ok(seen.includes('candidate-wrapped'), 'mostRecentTrusted got the opened view')
   t.ok(seen.includes('wrapped'), 'close() got the opened view')
