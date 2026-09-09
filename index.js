@@ -1179,6 +1179,10 @@ module.exports = class Autobee extends ReadyResource {
       return true
     }
 
+    // not added and not applicable optimistically: nothing can apply this
+    // batch now, so drop the writer for this drain instead of reselecting it
+    // (a refresh re-adds it once it has been added or has new blocks)
+    w.removePending()
     return true
   }
 
