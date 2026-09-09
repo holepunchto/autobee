@@ -114,7 +114,7 @@ module.exports = class Autobee extends ReadyResource {
     this._localSystemLength = 0
     this._localFlushes = 0
     this._acking = false
-    this._ackThreshold = DEFAULT_ACK_THRESHOLD
+    this._ackThreshold = handlers.ackThreshold || DEFAULT_ACK_THRESHOLD
     this._ackFlushes = -1
     this._localViewStart = 0
     this._localViewLength = 0
@@ -197,11 +197,16 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  setAcking(acking, { threshold = DEFAULT_ACK_THRESHOLD } = {}) {
+  setAcking(acking, { threshold = this._ackThreshold } = {}) {
     this._acking = acking !== false && threshold > 0
     this._ackThreshold = threshold
 
     if (this._acking) this.bumpSoon()
+  }
+
+  async _updateAcking() {
+    if (this._interrupting) return
+    this.setAcking(await this.trusted.isTrusted(this.local.key, this.view))
   }
 
   // network free: only a migration needs peers, so ready() awaits the full
@@ -478,6 +483,8 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this._bootGuard.exit()
+
+    await this._updateAcking()
 
     this.bumpSoon()
 
@@ -947,6 +954,8 @@ module.exports = class Autobee extends ReadyResource {
 
     await this.bootstrap.setUserData('autobee/local', this.local.key)
     await oldLocal.close()
+
+    await this._updateAcking()
 
     // done, soft restart
     this.emit('rotate-local-writer')
@@ -1523,6 +1532,8 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._update(changes, true)
     await this._storeBoot()
+
+    await this._updateAcking()
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
