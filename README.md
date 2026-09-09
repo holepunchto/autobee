@@ -81,6 +81,7 @@ Options:
   optimistic: true,              // allow optimistic writes from unknown writers
   isTrusted (key, reference) {}, // do we trust this writer, see Fast-forward
   mostRecentTrusted (target, reference) {}, // the head we vouch for, see Fast-forward
+  ackThreshold: 32,              // flushes we may fall behind before acking, see Acking
   fastForward: {}                // see Fast-forward
 }
 ```
@@ -161,6 +162,10 @@ Hint that a new writer core is available at `key` with at least `length` entries
 #### `await db.setLocal(key, [options])`
 
 Rotate the local writer to a different key. The new writer takes over as the active oplog.
+
+#### `db.setAcking(acking, [options])`
+
+Override acking, which is otherwise driven by `isTrusted`, see Acking. `options.threshold` defaults to the current threshold.
 
 #### `views = db.views()`
 
@@ -269,6 +274,14 @@ The check covers the oplog head only, not the system and view cores the fast-for
 Fast-forward onto an oplog head, ignoring the usual distance and conservative checks. Resolves `{ to, from }`, or `null` if the head could not be booted.
 
 Pass `{ timeout }` to bound the reads, so a head nobody can serve fails instead of hanging.
+
+### Acking
+
+Peers fast-forward onto the heads of writers they trust, so a trusted writer that has nothing to say still has to stamp its view progress into its own oplog.
+
+Acking does that: an empty node is appended whenever the local writer falls `ackThreshold` (default `64`) flushes behind the system.
+
+It is enabled for exactly the writers `isTrusted` accepts. The local key is judged when the db opens, after a fast-forward, and after the local writer rotates, so a writer that becomes trusted starts acking without being told to. `setAcking` overrides it until the next of those points.
 
 ### Encryption
 
