@@ -1,12 +1,13 @@
 const test = require('brittle')
-const { create, replicate, sync, encode } = require('./helpers')
+const b4a = require('b4a')
+const { create, replicate, sync, encode, decode } = require('./helpers')
 
 test('optimistic - basic flow', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
   await auto1.append(encode({ hello: 'world' }))
-  await auto2.append(encode({ test: 42 }), { optimistic: true })
+  await auto2.append(encode({ test: 42, addWriter: auto2.local.id }), { optimistic: true })
 
   const done = replicate(auto1, auto2)
   await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
@@ -19,6 +20,33 @@ test('optimistic - basic flow', async function (t) {
   t.ok(writerInfo && writerInfo.length >= auto2.local.length, 'optimistic batch processed')
 })
 
+test('optimistic - declined when apply neither adds nor acks the writer', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto2.append(encode({ test: 42 }), { optimistic: true })
+
+  const done = replicate(auto1, auto2)
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+
+  // sync() cannot converge on a declined writer - drain a few rounds instead
+  for (let i = 0; i < 10; i++) {
+    await auto1.update()
+    await auto1.updated()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  done()
+
+  const writerInfo = await auto1.system.get(auto2.local.key)
+  const latest = await auto1.bee.get(b4a.from('latest'))
+
+  t.absent(writerInfo, 'declined writer has no system record')
+  t.alike(decode(latest.value), { hello: 'world' }, 'declined op was rolled back from the view')
+  t.is(auto1.system.heads.length, 1, 'declined op is not a head')
+})
+
 test('optimistic - stability test (multiple iterations)', async function (t) {
   t.timeout(60000)
 
@@ -29,7 +57,7 @@ test('optimistic - stability test (multiple iterations)', async function (t) {
     const auto2 = await create(t, auto1.key)
 
     await auto1.append(encode({ hello: 'world' }))
-    await auto2.append(encode({ test: i }), { optimistic: true })
+    await auto2.append(encode({ test: i, addWriter: auto2.local.id }), { optimistic: true })
 
     const done = replicate(auto1, auto2)
     await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
@@ -53,8 +81,8 @@ test('optimistic - concurrent writers', async function (t) {
   await auto1.append(encode({ hello: 'world' }))
 
   await Promise.all([
-    auto2.append(encode({ test: 2 }), { optimistic: true }),
-    auto3.append(encode({ test: 3 }), { optimistic: true })
+    auto2.append(encode({ test: 2, addWriter: auto2.local.id }), { optimistic: true }),
+    auto3.append(encode({ test: 3, addWriter: auto3.local.id }), { optimistic: true })
   ])
 
   const done1 = replicate(auto1, auto2)
@@ -86,7 +114,7 @@ test('optimistic - multiple batches from one writer', async function (t) {
 
   // Multiple optimistic appends
   for (let i = 0; i < 10; i++) {
-    await auto2.append(encode({ batch: i }), { optimistic: true })
+    await auto2.append(encode({ batch: i, addWriter: auto2.local.id }), { optimistic: true })
   }
 
   const done = replicate(auto1, auto2)

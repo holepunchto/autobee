@@ -207,7 +207,7 @@ test('basic - optimistic', async function (t) {
   const auto2 = await create(t, auto1.key)
 
   await auto1.append(encode({ hello: 'world' }))
-  await auto2.append(encode({ test: 42 }), { optimistic: true })
+  await auto2.append(encode({ test: 42, addWriter: auto2.local.id }), { optimistic: true })
 
   const done = replicate(auto1, auto2)
 

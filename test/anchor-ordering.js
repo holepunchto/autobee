@@ -23,6 +23,8 @@ test('anchor - optimistic node linking an anchor sorts after the anchored node',
       }
 
       if (data.resolve) {
+        // self-verifying op from a non-writer core: accept it without granting
+        host.ackWriter(node.key)
         const pending = await view.get(b4a.from('pending'))
         w.tryPut(b4a.from('resolved'), b4a.from(pending ? 'saw-pending' : 'missed-pending'))
       }

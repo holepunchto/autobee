@@ -1098,6 +1098,7 @@ module.exports = class Autobee extends ReadyResource {
 
     for await (const p of this._servableRequests(standing)) {
       approving.push(fetchApproval.call(this, p.key, p.amount, approvals))
+      if (approving.length === 32) break
     }
 
     if (!approving.length) return null
@@ -1190,19 +1191,19 @@ module.exports = class Autobee extends ReadyResource {
     if (t.view) this._workingBee.move(t.view)
 
     for (const b of t.tip) {
-      let failed = true
+      const optimistic = b[0].optimistic
+      let accepted = false
       try {
-        if (await this.system.canApply(b[0].key, true)) {
-          await this._applyBatch(b, true)
-          failed = false
-        }
-      } catch {}
+        accepted = await this._applyBatch(b, optimistic)
+      } catch (err) {
+        if (!optimistic) throw err
+      }
 
       // only check if batch was successful
       if (b !== batch) continue
 
-      const w = failed ? null : await this.system.get(b[0].key)
-      if (!w || w.length < b[0].length) {
+      // declined: apply threw, or never called addWriter/ackWriter for this writer
+      if (!accepted) {
         this._workingBee.move(rollbackView)
         this.system.bee.move(rollbackSystem)
         await this.system.reset()
@@ -1289,9 +1290,15 @@ module.exports = class Autobee extends ReadyResource {
     if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
       this.stats.applies++
       this._host.applying = batch
-      await this._workingView.apply(userBatch)
-      this._host.applying = null
+      try {
+        await this._workingView.apply(userBatch)
+      } finally {
+        this._host.applying = null
+      }
     }
+
+    // read before flush clears it
+    const accepted = this.system.isAcked(batch[0].key)
 
     const changed = await this.system.flush(batch, this._workingBee)
 
@@ -1307,6 +1314,8 @@ module.exports = class Autobee extends ReadyResource {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }
+
+    return accepted
   }
 
   async _storeBoot() {
