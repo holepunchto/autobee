@@ -81,7 +81,7 @@ Options:
   optimistic: true,              // allow optimistic writes from unknown writers
   isTrusted (key, reference) {}, // do we trust this writer, see Fast-forward
   mostRecentTrusted (target, reference) {}, // the head we vouch for, see Fast-forward
-  ackThreshold: 64,              // flushes we may fall behind before acking, see Acking
+  ackThreshold: 32,              // flushes we may fall behind before acking, see Acking
   fastForward: {}                // see Fast-forward
 }
 ```
