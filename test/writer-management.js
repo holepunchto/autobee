@@ -1,5 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
+const crypto = require('hypercore-crypto')
 const Corestore = require('corestore')
 const Autobee = require('../index.js')
 const encoding = require('../lib/encoding.js')
@@ -765,4 +766,46 @@ test('writer-management - wakeup hint racing setLocal does not track the local c
   }
 
   t.ok(auto.writable, 'rotated local writer is writable')
+})
+
+test('writer-management - unadded local writer with oplog at genesis does not livelock', async function (t) {
+  const keyPair = crypto.keyPair()
+
+  const a = await create(t, null, { keyPair })
+  for (let i = 0; i < 3; i++) await a.append(encode({ i }))
+
+  // synthetic state: the same local writer booted against a bootstrap that
+  // has no entry for it, so the system is at genesis while the local oplog
+  // already has blocks - a batch next() yields but nothing can apply
+  const b = await create(t, crypto.randomBytes(32), { keyPair, fastForward: false })
+  t.ok(b.system.isGenesis(), 'system is at genesis')
+  t.alike(b.local.key, a.local.key, 'same local writer')
+
+  const s1 = a.local.replicate(true)
+  const s2 = b.local.replicate(false)
+  s1.pipe(s2).pipe(s1)
+  t.teardown(() => {
+    s1.destroy()
+    s2.destroy()
+  })
+
+  await b.local.download({ start: 0, end: a.local.length }).done()
+  t.is(b.local.length, a.local.length, 'local oplog replicated')
+
+  // first update ends with a refresh that puts the local writer back in pending
+  await b.update()
+  t.ok(b.writers.localWriter.isPending, 'local writer is pending')
+  t.absent(b.writers.localWriter.isAdded, 'local writer is not added')
+
+  let timer = null
+  const result = await Promise.race([
+    b.update().then(() => 'updated'),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve('timed out'), 2000)
+    })
+  ])
+  clearTimeout(timer)
+
+  t.is(result, 'updated', 'update settles')
+  t.ok(b.system.isGenesis(), 'nothing was applied')
 })
