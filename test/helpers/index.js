@@ -125,6 +125,8 @@ async function create(t, key, opts) {
     encrypted: !!encryptionKey,
     name: '#' + t.tick++,
     bootstrapWeight: 3,
+    // acks are extra timing-dependent blocks, tests opt in explicitly
+    ackThreshold: Infinity,
     apply,
     ...opts
   })
