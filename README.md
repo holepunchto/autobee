@@ -133,6 +133,12 @@ Optionally pass `{ optimistic: true }` to write without waiting to be a confirme
 await db.append(buf, { optimistic: true })
 ```
 
+An optimistic node always reaches `apply`, whoever wrote it, and is always
+recorded afterwards. `apply` decides what it does: call `host.addWriter` to
+grant the writer, or do nothing to leave it unwritable. An op `apply` does not
+accept must be handled in `apply` (ie. ignored) - throwing is a bug, as for any
+other node, and closes the db.
+
 #### `await db.update()`
 
 Trigger a new apply cycle. Useful after replication to process new data.
@@ -216,7 +222,8 @@ Remove a writer by public key (Buffer or hex string).
 
 #### `host.ackWriter(key)`
 
-Acknowledge a writer without changing their permissions.
+Deprecated, a no-op. Optimistic nodes are always recorded once applied, whether
+or not apply acks the writer. Kept so existing apply functions keep working.
 
 #### `host.interrupt(reason)`
 

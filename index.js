@@ -690,10 +690,7 @@ module.exports = class Autobee extends ReadyResource {
             break // revaluate conditions...
           }
 
-          if (await this._bumpPendingWriters()) {
-            this._needsUpdate = true
-            continue
-          }
+          if (await this._bumpPendingWriters()) continue
 
           if (!(await this._appendAck())) break
           this._needsUpdate = true
@@ -1156,7 +1153,10 @@ module.exports = class Autobee extends ReadyResource {
     if (!local && this._catchupMigratedNodes !== null) {
       const updated = await this._bumpMigratedWriters()
       this._catchupMigratedNodes = null
-      if (updated) return true
+      if (updated) {
+        this._needsUpdate = true
+        return true
+      }
     }
 
     // apply the best next node to keep the prefix stable
@@ -1165,64 +1165,17 @@ module.exports = class Autobee extends ReadyResource {
 
     const { writer: w, batch } = next
 
-    // an optimistic batch from a writer that is not (or no longer) added gets a
-    // shot at apply and is rolled back unless apply adds or acks the writer
-    if (this.optimistic && batch[0].optimistic && (!w.isAdded || w.isRemoved)) {
-      if (await this._optimisticBatch(batch)) {
-        w.notify(batch)
-        return true
-      }
+    const optimistic = this.optimistic && batch[0].optimistic
 
-      if (!(w.isRemoved && w.hasReferrals())) {
-        w.removePending()
-        return true
-      }
-
-      // declined, but other writers link to it: fall through and process it
-      // like any other node from a removed writer
-    }
-
-    if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
+    if (optimistic || w.isAdded || (w.isRemoved && w.hasReferrals())) {
       await this._processBatch(batch)
-      w.notify(batch)
+    } else {
+      w.removePending()
       return true
     }
 
-    // not added and not applicable optimistically: nothing can apply this
-    // batch now, so drop the writer for this drain instead of reselecting it
-    // (a refresh re-adds it once it has been added or has new blocks)
-    w.removePending()
-    return true
-  }
-
-  async _optimisticBatch(batch) {
-    const rollbackSystem = this.system.bee.head()
-    const rollbackView = this._workingBee.head()
-
-    const t = await this.prepareBatch(batch)
-    if (t.view) this._workingBee.move(t.view)
-
-    for (const b of t.tip) {
-      const optimistic = b[0].optimistic
-      let accepted = false
-      try {
-        accepted = await this._applyBatch(b, optimistic)
-      } catch (err) {
-        if (!optimistic) throw err
-      }
-
-      // only check if batch was successful
-      if (b !== batch) continue
-
-      // declined: apply threw, or never called addWriter/ackWriter for this writer
-      if (!accepted) {
-        this._workingBee.move(rollbackView)
-        this.system.bee.move(rollbackSystem)
-        await this.system.reset()
-        return false
-      }
-    }
-
+    w.notify(batch)
+    this._needsUpdate = true
     return true
   }
 
@@ -1309,8 +1262,10 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    // read before flush clears it
-    const accepted = this.system.touched(batch[0].key)
+    // an optimistic node is always consumed: record its length and, unless apply
+    // granted the writer, record the writer as removed so that only its
+    // optimistic nodes reach apply
+    if (optimistic) await this.system.ackWriter(batch[0].key)
 
     const changed = await this.system.flush(batch, this._workingBee)
 
@@ -1326,8 +1281,6 @@ module.exports = class Autobee extends ReadyResource {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
     }
-
-    return accepted
   }
 
   async _storeBoot() {
@@ -1426,7 +1379,7 @@ module.exports = class Autobee extends ReadyResource {
   async _flushLocal() {
     // pull any available local nodes in before flushing
     while (!this._interrupting && (await this._bumpPendingWriters({ local: true }))) {
-      this._needsUpdate = true
+      // a bump that applied a batch flags the update itself
     }
 
     const flushed = await this.writers.flushLocal({

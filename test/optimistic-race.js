@@ -20,7 +20,7 @@ test('optimistic - basic flow', async function (t) {
   t.ok(writerInfo && writerInfo.length >= auto2.local.length, 'optimistic batch processed')
 })
 
-test('optimistic - declined when apply neither adds nor acks the writer', async function (t) {
+test('optimistic - unacked op from an unknown writer is consumed', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
@@ -29,8 +29,74 @@ test('optimistic - declined when apply neither adds nor acks the writer', async 
 
   const done = replicate(auto1, auto2)
   await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  await sync(auto1, auto2)
 
-  // sync() cannot converge on a declined writer - drain a few rounds instead
+  done()
+
+  const info = await auto1.system.get(auto2.local.key)
+  const latest = await auto1.bee.get(b4a.from('latest'))
+
+  t.ok(info, 'writer has a system record')
+  t.is(info.length, 1, 'record covers the op')
+  t.ok(info.isRemoved, 'writer is recorded as removed')
+  t.is(info.maxWeight, 0, 'writer was never granted')
+  t.alike(decode(latest.value), { test: 42 }, 'apply ran and its effects were kept')
+  t.absent(auto2.writable, 'writer is not writable')
+})
+
+test('optimistic - apply throwing on an optimistic op is fatal like any other node', async function (t) {
+  async function apply(nodes, view, host) {
+    for (const node of nodes) {
+      const data = decode(node.value)
+      if (data.boom) throw new Error('apply bug')
+      const w = view.write()
+      w.tryPut(b4a.from('latest'), node.value)
+      await w.flush()
+    }
+  }
+
+  // only the reader has the buggy apply, so the writer stays up to replicate
+  const auto1 = await create(t, null, { apply })
+  const auto2 = await create(t, auto1.key)
+
+  const errors = []
+  auto1.on('error', (err) => errors.push(err))
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto2.append(encode({ boom: true }), { optimistic: true })
+
+  const done = replicate(auto1, auto2)
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  for (let i = 0; i < 50 && !auto1.closing; i++) {
+    await auto1.update()
+    await auto1.updated()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  done()
+
+  // apply is deterministic and total - a throw is a bug, not a decline, and
+  // there is no rollback path for optimistic nodes
+  t.ok(auto1.closing, 'a throwing apply closes the db')
+  t.is(errors.length, 1, 'and surfaces the error')
+  t.is(errors[0].message, 'apply bug')
+})
+
+test('optimistic - non-optimistic follow-up from a consumed writer does not apply', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ hello: 'world' }))
+
+  // the optimistic op never grants the writer, so the plain op behind it must
+  // stay out of apply. appended before the writer learns it is not writable
+  await auto2.append(encode({ msg: 'optimistic' }), { optimistic: true })
+  await auto2.append(encode({ msg: 'plain' }))
+
+  const done = replicate(auto1, auto2)
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+
+  // sync() cannot converge on a node that never applies - drain a few rounds instead
   for (let i = 0; i < 10; i++) {
     await auto1.update()
     await auto1.updated()
@@ -39,12 +105,10 @@ test('optimistic - declined when apply neither adds nor acks the writer', async 
 
   done()
 
-  const writerInfo = await auto1.system.get(auto2.local.key)
-  const latest = await auto1.bee.get(b4a.from('latest'))
-
-  t.absent(writerInfo, 'declined writer has no system record')
-  t.alike(decode(latest.value), { hello: 'world' }, 'declined op was rolled back from the view')
-  t.is(auto1.system.heads.length, 1, 'declined op is not a head')
+  const info = await auto1.system.get(auto2.local.key)
+  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'optimistic' })
+  t.is(info.length, 1, 'only the optimistic op was recorded')
+  t.ok(info.isRemoved, 'writer is recorded as removed')
 })
 
 test('optimistic - acked but never added writer is recorded as removed', async function (t) {
@@ -76,18 +140,16 @@ test('optimistic - acked but never added writer is recorded as removed', async f
   t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'acked', ack: true })
   t.absent(auto2.writable, 'acked writer is not writable')
 
-  // a later op that is not acked is rolled back
+  // a later op that is not acked is consumed all the same
   await auto2.append(encode({ msg: 'unacked' }), { optimistic: true })
   await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
-  for (let i = 0; i < 10; i++) {
-    await auto1.update()
-    await auto1.updated()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
+  await sync(auto1, auto2)
 
   done()
 
-  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'acked', ack: true })
+  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'unacked' })
+  t.is((await auto1.system.get(auto2.local.key)).length, 2, 'unacked op recorded')
+  t.absent(auto2.writable, 'still not writable')
 })
 
 test('optimistic - acked writer can keep sending acked ops', async function (t) {
@@ -124,19 +186,16 @@ test('optimistic - acked writer can keep sending acked ops', async function (t) 
   t.absent(auto2.writable, 'still not writable')
   t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'second', ack: true })
 
-  // and an unacked one is still rolled back
+  // and an unacked one is consumed too, the ack makes no difference
   await auto2.append(encode({ msg: 'unacked' }), { optimistic: true })
   await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
-  for (let i = 0; i < 10; i++) {
-    await auto1.update()
-    await auto1.updated()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
+  await sync(auto1, auto2)
 
   done()
 
-  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'second', ack: true })
-  t.is((await auto1.system.get(auto2.local.key)).length, 2, 'unacked op not recorded')
+  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'unacked' })
+  t.is((await auto1.system.get(auto2.local.key)).length, 3, 'unacked op recorded')
+  t.absent(auto2.writable, 'still not writable')
 })
 
 test('optimistic - removed writer can re-add itself optimistically', async function (t) {
