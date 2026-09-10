@@ -1,15 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
-const Autobee = require('../index.js')
-const {
-  create,
-  replicate,
-  replicateAndSync,
-  sync,
-  encode,
-  decode,
-  encryptionKey
-} = require('./helpers')
+const { create, replicate, replicateAndSync, sync, encode, decode } = require('./helpers')
 
 test('optimistic - basic flow', async function (t) {
   const auto1 = await create(t)
@@ -96,20 +87,17 @@ test('optimistic - non-optimistic follow-up from a consumed writer does not appl
   const auto2 = await create(t, auto1.key)
 
   await auto1.append(encode({ hello: 'world' }))
+
+  // the optimistic op never grants the writer, so the plain op behind it must
+  // stay out of apply. appended before the writer learns it is not writable
   await auto2.append(encode({ msg: 'optimistic' }), { optimistic: true })
+  await auto2.append(encode({ msg: 'plain' }))
 
   const done = replicate(auto1, auto2)
   await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
-  await sync(auto1, auto2)
 
-  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'optimistic' })
-
-  // the writer was never granted, so a plain node from it stays out of apply
-  await auto2.local.append(
-    Autobee.encodeValue(encode({ msg: 'plain' }), { encrypted: !!encryptionKey })
-  )
-  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
-  for (let i = 0; i < 5; i++) {
+  // sync() cannot converge on a node that never applies - drain a few rounds instead
+  for (let i = 0; i < 10; i++) {
     await auto1.update()
     await auto1.updated()
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -117,7 +105,10 @@ test('optimistic - non-optimistic follow-up from a consumed writer does not appl
 
   done()
 
+  const info = await auto1.system.get(auto2.local.key)
   t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'optimistic' })
+  t.is(info.length, 1, 'only the optimistic op was recorded')
+  t.ok(info.isRemoved, 'writer is recorded as removed')
 })
 
 test('optimistic - acked but never added writer is recorded as removed', async function (t) {
