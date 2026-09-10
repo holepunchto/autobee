@@ -134,6 +134,7 @@ module.exports = class Autobee extends ReadyResource {
     this._now = handlers.now || Date.now // overridable for clock-drift tests
     this._preapply = handlers.preapply || null
     this._preApplied = false
+    this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
     this._needsUpdate = false
@@ -440,7 +441,11 @@ module.exports = class Autobee extends ReadyResource {
     const v = oplog.op.views.view
     if (!v) return null
 
-    return new ApplyView(this.bee.checkout({ key: v.key, length: v.start + v.length }), this)
+    return this.openView({ key: v.key, length: v.start + v.length })
+  }
+
+  openView(head) {
+    return new ApplyView(this.bee.checkout({ key: head.key, length: head.length }), this)
   }
 
   openCore(key) {
