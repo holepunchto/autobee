@@ -1,6 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
-const { create, replicate, sync, encode, decode } = require('./helpers')
+const { create, replicate, replicateAndSync, sync, encode, decode } = require('./helpers')
 
 test('optimistic - basic flow', async function (t) {
   const auto1 = await create(t)
@@ -76,7 +76,7 @@ test('optimistic - acked but never added writer is recorded as removed', async f
   t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'acked', ack: true })
   t.absent(auto2.writable, 'acked writer is not writable')
 
-  // a later op that is not acked is not applied
+  // a later op that is not acked is rolled back
   await auto2.append(encode({ msg: 'unacked' }), { optimistic: true })
   await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
   for (let i = 0; i < 10; i++) {
@@ -88,6 +88,84 @@ test('optimistic - acked but never added writer is recorded as removed', async f
   done()
 
   t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'acked', ack: true })
+})
+
+test('optimistic - acked writer can keep sending acked ops', async function (t) {
+  async function apply(nodes, view, host) {
+    for (const node of nodes) {
+      const data = decode(node.value)
+      if (data.ack) host.ackWriter(node.key)
+      const w = view.write()
+      w.tryPut(b4a.from('latest'), node.value)
+      await w.flush()
+    }
+  }
+
+  const auto1 = await create(t, null, { apply })
+  const auto2 = await create(t, auto1.key, { apply })
+
+  await auto1.append(encode({ hello: 'world' }))
+  await auto2.append(encode({ msg: 'first', ack: true }), { optimistic: true })
+
+  const done = replicate(auto1, auto2)
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  await sync(auto1, auto2)
+
+  t.ok((await auto1.system.get(auto2.local.key)).isRemoved, 'acked writer is recorded as removed')
+
+  // same core, later on: another acked op is applied too
+  await auto2.append(encode({ msg: 'second', ack: true }), { optimistic: true })
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  await sync(auto1, auto2)
+
+  const info = await auto1.system.get(auto2.local.key)
+  t.is(info.length, 2, 'record covers the second op')
+  t.ok(info.isRemoved, 'still not a writer')
+  t.absent(auto2.writable, 'still not writable')
+  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'second', ack: true })
+
+  // and an unacked one is still rolled back
+  await auto2.append(encode({ msg: 'unacked' }), { optimistic: true })
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  for (let i = 0; i < 10; i++) {
+    await auto1.update()
+    await auto1.updated()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  done()
+
+  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), { msg: 'second', ack: true })
+  t.is((await auto1.system.get(auto2.local.key)).length, 2, 'unacked op not recorded')
+})
+
+test('optimistic - removed writer can re-add itself optimistically', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+  t.ok(auto2.writable, 'auto2 is writable')
+
+  await auto1.append(encode({ removeWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+  t.absent(auto2.writable, 'auto2 was removed')
+
+  // an optimistic op from the removed writer that re-adds it is accepted
+  await auto2.append(encode({ msg: 'back', addWriter: auto2.local.id }), { optimistic: true })
+  const done = replicate(auto1, auto2)
+  await auto1.wakeup({ key: auto2.local.key, length: auto2.local.length })
+  await sync(auto1, auto2)
+
+  done()
+
+  const info = await auto1.system.get(auto2.local.key)
+  t.absent(info.isRemoved, 'writer is added again')
+  t.ok(auto2.writable, 'auto2 is writable again')
+  t.alike(decode((await auto1.bee.get(b4a.from('latest'))).value), {
+    msg: 'back',
+    addWriter: auto2.local.id
+  })
 })
 
 test('optimistic - stability test (multiple iterations)', async function (t) {

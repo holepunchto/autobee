@@ -1165,17 +1165,25 @@ module.exports = class Autobee extends ReadyResource {
 
     const { writer: w, batch } = next
 
-    if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
-      await this._processBatch(batch)
-      w.notify(batch)
-      return true
-    }
+    // an optimistic batch from a writer that is not (or no longer) added gets a
+    // shot at apply and is rolled back unless apply adds or acks the writer
+    if (this.optimistic && batch[0].optimistic && (!w.isAdded || w.isRemoved)) {
+      if (await this._optimisticBatch(batch)) {
+        w.notify(batch)
+        return true
+      }
 
-    if (this.optimistic && !w.isRemoved && batch[0].optimistic) {
-      if (!(await this._optimisticBatch(batch))) {
+      if (!(w.isRemoved && w.hasReferrals())) {
         w.removePending()
         return true
       }
+
+      // declined, but other writers link to it: fall through and process it
+      // like any other node from a removed writer
+    }
+
+    if (w.isAdded || (w.isRemoved && w.hasReferrals())) {
+      await this._processBatch(batch)
       w.notify(batch)
       return true
     }
