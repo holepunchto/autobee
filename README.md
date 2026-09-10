@@ -81,6 +81,7 @@ Options:
   optimistic: true,              // allow optimistic writes from unknown writers
   isTrusted (key, reference) {}, // do we trust this writer, see Fast-forward
   mostRecentTrusted (target, reference) {}, // the head we vouch for, see Fast-forward
+  warmup (view) {},              // prepare a candidate view, see Fast-forward
   ackThreshold: 32,              // flushes we may fall behind before acking, see Acking
   fastForward: {}                // see Fast-forward
 }
@@ -247,6 +248,14 @@ Positive answers are cached until an undo rewinds the view, and the default is `
 Return the oplog head you most recently vouched for, given the `target` view being considered.
 
 Called at flush time to stamp your own oplog (with your view as `target` and a `null` reference), and again per candidate during discovery.
+
+#### `warmup(view)`
+
+Prepare a candidate `view` before the fast-forward onto it is applied.
+
+Called as soon as the candidate's view head is known, and runs alongside the block downloads the fast-forward is already doing rather than after them. Throw or reject to reject the candidate: the fast-forward is abandoned and the usual apply path catches up instead.
+
+`view` is opened and closed through the `open` and `close` handlers, so don't build or close a db of your own.
 
 #### `fastForward.boot`
 

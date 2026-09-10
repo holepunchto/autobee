@@ -516,3 +516,167 @@ test('boots offline after a fast-forward', async function (t) {
   await auto3.update()
   t.is(await dump(auto3), expected, 'view intact after the offline boot')
 })
+
+test('warmup runs against the candidate view during fast-forward', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const seen = []
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    async warmup(view) {
+      const clock = await view.get(b4a.from('clock'))
+      seen.push({
+        clock: clock === null ? -1 : Number(b4a.toString(clock.value)),
+        fastForwards: auto2.stats.fastForwards
+      })
+    }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  await sync(auto1, auto2)
+
+  t.ok(seen.length > 0, 'warmup ran')
+  t.ok(seen[0].clock > 0, 'warmup read the candidate view, not the local one')
+  t.is(seen[0].fastForwards, 0, 'warmup ran before the fast-forward was applied')
+  t.is(auto2.stats.fastForwards, 1, 'the fast-forward landed')
+})
+
+test('a failing warmup rejects the fast-forward candidate', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  let attempts = 0
+  let moved = false
+
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    async warmup(view) {
+      attempts++
+      await view.get(b4a.from('clock'))
+      throw new Error('warmup failed')
+    }
+  })
+
+  auto2.on('move-to', () => {
+    moved = true
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await sync(auto1, auto2)
+
+  t.ok(attempts > 0, 'warmup was attempted')
+  t.absent(moved, 'the fast-forward candidate was rejected')
+  t.is(auto2.stats.fastForwards, 0, 'no fast-forward landed')
+  t.ok(await same(auto1, auto2), 'the view caught up by applying instead')
+})
+
+test('the warmup view is opened and closed through the handlers', async function (t) {
+  const auto1 = await create(t, {
+    mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
+  })
+
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  let opens = 0
+  let closes = 0
+  let wrapped = false
+
+  const auto2 = await create(t, auto1.key, {
+    open(bee) {
+      opens++
+      return {
+        bee,
+        wrapped: true,
+        get: (k) => bee.get(k),
+        write: (opts) => bee.write(opts)
+      }
+    },
+    close() {
+      closes++
+    },
+    isTrusted: () => true,
+    async warmup(view) {
+      wrapped = !!(view && view.wrapped)
+      await view.get(b4a.from('clock'))
+    }
+  })
+
+  t.teardown(replicate(auto1, auto2))
+
+  await new Promise((resolve) => auto2.once('move-to', resolve))
+  await sync(auto1, auto2)
+
+  t.ok(wrapped, 'warmup got the opened view')
+  t.ok(opens > 2, 'a warmup view was opened as well as the main and working views')
+  t.is(opens - closes, 2, 'the warmup view was closed again')
+})
+
+test('cancelling a fast-forward cancels the warmup reads', async function (t) {
+  t.timeout(60000)
+
+  const auto1 = await create(t)
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  let onStarted = null
+  const started = new Promise((resolve) => {
+    onStarted = resolve
+  })
+
+  let state = 'pending'
+  let unreplicate = null
+
+  const auto2 = await create(t, auto1.key, {
+    fastForward: false,
+    isTrusted: () => true,
+    async warmup(view) {
+      // cut the transport first, so the read below can never be served
+      await unreplicate()
+      onStarted()
+
+      try {
+        await view.get(b4a.from('clock'))
+        state = 'resolved'
+      } catch (err) {
+        state = 'rejected:' + err.code
+        throw err
+      }
+    }
+  })
+
+  unreplicate = replicate(auto1, auto2)
+
+  const oplog = auto2.openCore(auto1.local.key)
+  await oplog.get(auto1.local.length - 1)
+  await oplog.close()
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = await FastForward.fromHead(auto2, head, null, { force: true, timeout: 5000 })
+  t.ok(ff, 'the fast-forward candidate was accepted')
+
+  const running = ff.run()
+
+  await started
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  t.is(state, 'pending', 'the warmup read is in flight and cannot be served')
+
+  const started_at = Date.now()
+  await ff.close()
+  const elapsed = Date.now() - started_at
+
+  t.comment('ff.close() took ' + elapsed + 'ms')
+  t.ok(elapsed < 3000, 'close did not wait out the blocked warmup')
+  t.is(state, 'rejected:REQUEST_CANCELLED', 'closing the view cancelled the warmup read')
+
+  t.absent(await running, 'the cancelled fast-forward produced no result')
+})
