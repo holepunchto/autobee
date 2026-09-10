@@ -1149,8 +1149,6 @@ module.exports = class Autobee extends ReadyResource {
     return this.system.flushes - this._ackFlushes
   }
 
-  // returns true if a batch was consumed or dropped, ie. if there may be more
-  // to do. flags _needsUpdate itself when a batch was actually applied
   async _bumpPendingWriters({ local = false } = {}) {
     if (!local && this._catchupMigratedNodes !== null) {
       const updated = await this._bumpMigratedWriters()
@@ -1167,19 +1165,11 @@ module.exports = class Autobee extends ReadyResource {
 
     const { writer: w, batch } = next
 
-    // an optimistic node is self-verifying: apply decides what, if anything, it
-    // does and every peer runs that same decision, so it is applied and consumed
-    // like any other node, whoever wrote it. declining it would leave it dangling
-    // in its core, reselected on every refresh
     const optimistic = this.optimistic && batch[0].optimistic
 
     if (optimistic || w.isAdded || (w.isRemoved && w.hasReferrals())) {
       await this._processBatch(batch)
     } else {
-      // not added and not applicable optimistically: nothing can apply this
-      // batch now, so drop the writer for this drain instead of reselecting it
-      // (a refresh re-adds it once it has been added or has new blocks).
-      // nothing changed, so no update is flagged
       w.removePending()
       return true
     }
