@@ -206,7 +206,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _updateAcking() {
     if (this._interrupting) return
-    this.setAcking(await this.trusted.isTrusted(this.local.key, this.view))
+    this.setAcking(await this.trusted.isTrusted(this.local.key, this._workingView.view))
   }
 
   // network free: only a migration needs peers, so ready() awaits the full
@@ -290,7 +290,7 @@ module.exports = class Autobee extends ReadyResource {
     if (local) {
       result.writers.push(this.local.key)
 
-      if (await this.trusted.isTrusted(this.local.key, this.view)) {
+      if (await this.trusted.isTrusted(this.local.key, this._workingView.view)) {
         const localViews = await this.writers.localWriter.views()
         for (const { key } of localViews) {
           views.set(b4a.toString(key, 'hex'), key)
