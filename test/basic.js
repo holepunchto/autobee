@@ -394,4 +394,13 @@ test('cores - what a mirror should pin', async function (t) {
   // replay-only bases write everything locally, so all mode adds nothing new
   const everything = await auto2.cores({ wait: true, all: true })
   t.alike(everything.views, mirror.views, 'no foreign refs without a fast-forward')
+
+  // a joiner with nothing trusted to anchor on still pins the bootstrap
+  const auto3 = await create(t, auto1.key, {
+    mostRecentTrusted: () => null
+  })
+
+  const anchorless = await auto3.cores({ wait: true })
+  t.alike(anchorless.writers, [auto3.local.key, auto1.key], 'no trusted head pins the bootstrap')
+  t.is(anchorless.views.length, 0, 'but no views')
 })

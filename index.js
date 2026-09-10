@@ -314,6 +314,12 @@ module.exports = class Autobee extends ReadyResource {
         result.writers.push(head.key)
       }
 
+      // nothing trusted to anchor on: pin the bootstrap so a mirror still
+      // has a bootable entrypoint for this room
+      if (views.size === 0 && !b4a.equals(this.bootstrap.key, this.local.key)) {
+        result.writers.push(this.bootstrap.key)
+      }
+
       if (all) {
         const [viewCores, systemCores] = await Promise.all([
           this.bee.cores({ local: false }),
