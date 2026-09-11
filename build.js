@@ -46,6 +46,10 @@ auto.register({
       name: 'pending',
       type: 'bool',
       array: true
+    },
+    {
+      name: 'hash',
+      type: 'fixed8'
     }
   ]
 })
@@ -490,6 +494,10 @@ auto.register({
     {
       name: 'value',
       type: 'buffer'
+    },
+    {
+      name: 'hash',
+      type: 'fixed8'
     }
   ]
 })

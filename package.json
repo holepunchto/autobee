@@ -35,7 +35,8 @@
     "ready-guard": "^1.0.0",
     "ready-resource": "^1.2.0",
     "resolve-reject-promise": "^1.1.0",
-    "safety-catch": "^1.0.3"
+    "safety-catch": "^1.0.3",
+    "sodium-native": "^5.1.0"
   },
   "devDependencies": {
     "brittle": "^4.1.0",

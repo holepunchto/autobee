@@ -22,6 +22,7 @@ async function runTests() {
   await import('./migration.js')
   await import('./optimistic-race.js')
   await import('./perf.js')
+  await import('./rolling-hash.js')
   await import('./updates.js')
   await import('./view-consistency.js')
   await import('./view-range.js')

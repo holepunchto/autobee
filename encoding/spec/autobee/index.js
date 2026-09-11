@@ -494,13 +494,14 @@ const encoding18 = {
     c.uint.preencode(state, m.flushes)
     encoding22.preencode(state, m.view)
     encoding18_3.preencode(state, m.heads)
-    state.end++ // max flag is 2 so always one byte
+    state.end++ // max flag is 4 so always one byte
 
     if (m.indexers) encoding18_4.preencode(state, m.indexers)
     if (m.pending) encoding18_5.preencode(state, m.pending)
+    if (m.hash) c.fixed8.preencode(state, m.hash)
   },
   encode(state, m) {
-    const flags = (m.indexers ? 1 : 0) | (m.pending ? 2 : 0)
+    const flags = (m.indexers ? 1 : 0) | (m.pending ? 2 : 0) | (m.hash ? 4 : 0)
 
     c.uint.encode(state, m.timestamp)
     c.uint.encode(state, m.flushes)
@@ -510,6 +511,7 @@ const encoding18 = {
 
     if (m.indexers) encoding18_4.encode(state, m.indexers)
     if (m.pending) encoding18_5.encode(state, m.pending)
+    if (m.hash) c.fixed8.encode(state, m.hash)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -526,7 +528,8 @@ const encoding18 = {
       view: r2,
       heads: r3,
       indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null,
-      pending: (flags & 2) !== 0 ? encoding18_5.decode(state) : null
+      pending: (flags & 2) !== 0 ? encoding18_5.decode(state) : null,
+      hash: (flags & 4) !== 0 ? c.fixed8.decode(state) : null
     }
   }
 }
@@ -1215,9 +1218,19 @@ const encoding37_6 = c.array(encoding36)
 // @autobee/oplog-message-v4
 const encoding37 = {
   preencode(state, m) {
+    const flags =
+      (m.batch ? 1 : 0) |
+      (m.views ? 2 : 0) |
+      (m.trusted ? 4 : 0) |
+      (m.witness ? 8 : 0) |
+      (m.approvals ? 16 : 0) |
+      (m.optimistic ? 32 : 0) |
+      (m.value ? 64 : 0) |
+      (m.hash ? 128 : 0)
+
     c.uint.preencode(state, m.timestamp)
     encoding37_1.preencode(state, m.links)
-    state.end++ // max flag is 64 so always one byte
+    c.uint.preencode(state, flags)
 
     if (m.batch) encoding24.preencode(state, m.batch)
     if (m.views) encoding25.preencode(state, m.views)
@@ -1225,6 +1238,7 @@ const encoding37 = {
     if (m.witness) encoding35.preencode(state, m.witness)
     if (m.approvals) encoding37_6.preencode(state, m.approvals)
     if (m.value) c.buffer.preencode(state, m.value)
+    if (m.hash) c.fixed8.preencode(state, m.hash)
   },
   encode(state, m) {
     const flags =
@@ -1234,7 +1248,8 @@ const encoding37 = {
       (m.witness ? 8 : 0) |
       (m.approvals ? 16 : 0) |
       (m.optimistic ? 32 : 0) |
-      (m.value ? 64 : 0)
+      (m.value ? 64 : 0) |
+      (m.hash ? 128 : 0)
 
     c.uint.encode(state, m.timestamp)
     encoding37_1.encode(state, m.links)
@@ -1246,6 +1261,7 @@ const encoding37 = {
     if (m.witness) encoding35.encode(state, m.witness)
     if (m.approvals) encoding37_6.encode(state, m.approvals)
     if (m.value) c.buffer.encode(state, m.value)
+    if (m.hash) c.fixed8.encode(state, m.hash)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -1263,7 +1279,8 @@ const encoding37 = {
       witness: (flags & 8) !== 0 ? encoding35.decode(state) : null,
       approvals: (flags & 16) !== 0 ? encoding37_6.decode(state) : null,
       optimistic: (flags & 32) !== 0,
-      value: (flags & 64) !== 0 ? c.buffer.decode(state) : null
+      value: (flags & 64) !== 0 ? c.buffer.decode(state) : null,
+      hash: (flags & 128) !== 0 ? c.fixed8.decode(state) : null
     }
   }
 }

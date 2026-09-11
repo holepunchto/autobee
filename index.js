@@ -1196,9 +1196,14 @@ module.exports = class Autobee extends ReadyResource {
     node.weight = await resolveWeight(this, node)
     for (const n of batch) n.weight = node.weight
 
-    // if (topo.isLinkingAll(node, this.system.heads)) {
-    //   return { undo: null, view: null, tip: [batch] }
-    // }
+    if (
+      node.hash &&
+      this.system.hash &&
+      b4a.equals(node.hash, this.system.hash) &&
+      topo.isLinkingAll(node, this.system.heads)
+    ) {
+      return { undo: null, view: null, tip: [batch] }
+    }
 
     const t = await topo.sort(this, batch)
 
@@ -1352,6 +1357,7 @@ module.exports = class Autobee extends ReadyResource {
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
+    const hash = this.system.hash
 
     // never stamp before anything we link
     const t = Math.max(this._now(), this.system.timestamp)
@@ -1379,7 +1385,8 @@ module.exports = class Autobee extends ReadyResource {
         lnk,
         optimistic,
         i === 0 ? witness : null,
-        i === 0 ? approvals : null
+        i === 0 ? approvals : null,
+        i === 0 ? hash : null
       )
       batch.push(node)
     }
