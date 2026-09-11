@@ -1173,7 +1173,7 @@ module.exports = class Autobee extends ReadyResource {
       node.hash &&
       this.system.hash &&
       b4a.equals(node.hash, this.system.hash) &&
-      topo.isLinkingAll(node, this.system.heads, { explicit: true })
+      topo.isLinkingAll(node, this.system.heads)
     ) {
       return { undo: null, view: null, tip: [batch] }
     }
