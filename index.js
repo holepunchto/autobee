@@ -1169,7 +1169,12 @@ module.exports = class Autobee extends ReadyResource {
     node.weight = await resolveWeight(this, node)
     for (const n of batch) n.weight = node.weight
 
-    if (node.hash && this.system.hash && b4a.equals(node.hash, this.system.hash)) {
+    if (
+      node.hash &&
+      this.system.hash &&
+      b4a.equals(node.hash, this.system.hash) &&
+      topo.isLinkingAll(node, this.system.heads, { explicit: true })
+    ) {
       return { undo: null, view: null, tip: [batch] }
     }
 
