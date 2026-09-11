@@ -106,6 +106,8 @@ module.exports = class Autobee extends ReadyResource {
     this.ff = null
     this.fastForwarding = null
     this.fastForwardTo = null
+    this._ffCandidates = new Map()
+    this._ffSearching = null
 
     this._workingBee = bee
     this._workingView = new ApplyView(this._workingBee, this)
@@ -413,6 +415,7 @@ module.exports = class Autobee extends ReadyResource {
     // rugpull the rest
     await this.store.close()
 
+    if (this._ffSearching) await this._ffSearching
     if (this._updating) await this._updating
     if (this._draining) await this._draining
 
@@ -802,20 +805,54 @@ module.exports = class Autobee extends ReadyResource {
     const hints = await this._applyWakeupHints()
     if (!hints.length) return
 
+    this._queueFastForward(hints)
+  }
+
+  _queueFastForward(hints) {
     if (!this._ffEnabled) return
+
+    for (const { key, length } of hints) {
+      if (length === 0) continue
+
+      const hex = b4a.toString(key, 'hex')
+      const previous = this._ffCandidates.get(hex)
+      if (previous === undefined || previous < length) this._ffCandidates.set(hex, length)
+    }
+
+    if (!this._ffCandidates.size || this._ffSearching !== null) return
 
     // a scheduled fast-forward is applied by the drain before we look again
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return
     if (this._interrupting || this.closing || this.bootFrom) return
 
+    this._ffSearching = this._searchFastForward().finally(() => {
+      this._ffSearching = null
+    })
+  }
+
+  async _searchFastForward() {
     try {
-      const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
+      while (this._ffCandidates.size) {
+        if (this.fastForwardTo !== null || this.fastForwarding !== null) return
+        if (this._interrupting || this.closing || this.bootFrom) return
 
-      const ff = await FastForward.fromHeads(this, heads, {
-        timeout: FastForward.DEFAULT_TIMEOUT
-      })
+        const hints = flushCandidates(this._ffCandidates)
 
-      if (ff !== null) await this._runFastForward(ff)
+        const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
+
+        const ff = await FastForward.fromHeads(this, heads, {
+          timeout: FastForward.DEFAULT_TIMEOUT
+        })
+
+        if (ff === null) continue
+
+        if (this._interrupting || this.closing) {
+          await ff.close()
+          return
+        }
+
+        if (await this._runFastForward(ff)) return
+      }
     } catch (err) {
       safetyCatch(err)
     }
@@ -1430,7 +1467,7 @@ module.exports = class Autobee extends ReadyResource {
     const ff = await FastForward.fromHead(this, head, null, { force: true, timeout })
     if (ff === null) return null
 
-    if (!(await this._runFastForward(ff))) return null
+    if (!(await this._runFastForward(ff, { force: true }))) return null
 
     return this.ff.promise
   }
@@ -1439,7 +1476,7 @@ module.exports = class Autobee extends ReadyResource {
   async _bootFromSystem(system) {
     try {
       const ff = new FastForward(this, system, { timeout: FastForward.DEFAULT_TIMEOUT })
-      return await this._runFastForward(ff)
+      return await this._runFastForward(ff, { force: true })
     } catch (err) {
       safetyCatch(err)
       return false
@@ -1455,14 +1492,14 @@ module.exports = class Autobee extends ReadyResource {
 
       const ff = await FastForward.fromHead(this, oplog, null, { force: true, timeout })
 
-      return ff !== null && (await this._runFastForward(ff))
+      return ff !== null && (await this._runFastForward(ff, { force: true }))
     } catch (err) {
       safetyCatch(err)
       return false
     }
   }
 
-  async _runFastForward(ff) {
+  async _runFastForward(ff, { force = false } = {}) {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) {
       await ff.close()
       return false
@@ -1471,11 +1508,14 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwarding = ff
 
     const result = await ff.run()
+    const flushes = ff.system.flushes
     await ff.close()
 
     if (this.fastForwarding === ff) this.fastForwarding = null
 
     if (!result) return false
+
+    if (!force && flushes - this.system.flushes < FastForward.MIN_GAP) return false
 
     this.fastForwardTo = result
     this.ff = rrp()
@@ -1516,7 +1556,7 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwardTo = null
 
     // process any wakeup while fast-forward itself was in flight
-    await this._applyWakeupHints()
+    this._queueFastForward(await this._applyWakeupHints())
     await this.writers.refresh()
 
     // we moved, so ask our peers to tell us their heads again
@@ -1550,6 +1590,18 @@ function getBootOption(boot) {
   asserts.assert(!(boot.head && boot.legacy), 'Boot from either a head or a legacy pointer')
 
   return boot
+}
+
+function flushCandidates(candidates) {
+  const hints = []
+
+  for (const [hex, length] of candidates) {
+    hints.push({ key: b4a.from(hex, 'hex'), length })
+  }
+
+  candidates.clear()
+
+  return hints
 }
 
 function noop() {}
