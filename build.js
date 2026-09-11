@@ -49,7 +49,7 @@ auto.register({
     },
     {
       name: 'hash',
-      type: 'buffer'
+      type: 'fixed8'
     }
   ]
 })
@@ -497,7 +497,7 @@ auto.register({
     },
     {
       name: 'hash',
-      type: 'buffer'
+      type: 'fixed8'
     }
   ]
 })

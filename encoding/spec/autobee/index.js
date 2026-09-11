@@ -498,7 +498,7 @@ const encoding18 = {
 
     if (m.indexers) encoding18_4.preencode(state, m.indexers)
     if (m.pending) encoding18_5.preencode(state, m.pending)
-    if (m.hash) c.buffer.preencode(state, m.hash)
+    if (m.hash) c.fixed8.preencode(state, m.hash)
   },
   encode(state, m) {
     const flags = (m.indexers ? 1 : 0) | (m.pending ? 2 : 0) | (m.hash ? 4 : 0)
@@ -511,7 +511,7 @@ const encoding18 = {
 
     if (m.indexers) encoding18_4.encode(state, m.indexers)
     if (m.pending) encoding18_5.encode(state, m.pending)
-    if (m.hash) c.buffer.encode(state, m.hash)
+    if (m.hash) c.fixed8.encode(state, m.hash)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -529,7 +529,7 @@ const encoding18 = {
       heads: r3,
       indexers: (flags & 1) !== 0 ? encoding18_4.decode(state) : null,
       pending: (flags & 2) !== 0 ? encoding18_5.decode(state) : null,
-      hash: (flags & 4) !== 0 ? c.buffer.decode(state) : null
+      hash: (flags & 4) !== 0 ? c.fixed8.decode(state) : null
     }
   }
 }
@@ -1238,7 +1238,7 @@ const encoding37 = {
     if (m.witness) encoding35.preencode(state, m.witness)
     if (m.approvals) encoding37_6.preencode(state, m.approvals)
     if (m.value) c.buffer.preencode(state, m.value)
-    if (m.hash) c.buffer.preencode(state, m.hash)
+    if (m.hash) c.fixed8.preencode(state, m.hash)
   },
   encode(state, m) {
     const flags =
@@ -1261,7 +1261,7 @@ const encoding37 = {
     if (m.witness) encoding35.encode(state, m.witness)
     if (m.approvals) encoding37_6.encode(state, m.approvals)
     if (m.value) c.buffer.encode(state, m.value)
-    if (m.hash) c.buffer.encode(state, m.hash)
+    if (m.hash) c.fixed8.encode(state, m.hash)
   },
   decode(state) {
     const v = c.uint.decode(state)
@@ -1280,7 +1280,7 @@ const encoding37 = {
       approvals: (flags & 16) !== 0 ? encoding37_6.decode(state) : null,
       optimistic: (flags & 32) !== 0,
       value: (flags & 64) !== 0 ? c.buffer.decode(state) : null,
-      hash: (flags & 128) !== 0 ? c.buffer.decode(state) : null
+      hash: (flags & 128) !== 0 ? c.fixed8.decode(state) : null
     }
   }
 }
