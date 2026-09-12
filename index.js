@@ -1238,10 +1238,11 @@ module.exports = class Autobee extends ReadyResource {
 
       await this._applyBatch(batch, batch[0].optimistic)
 
-      this.writers.triggers.trigger(
-        b4a.toString(batch[0].key, 'hex'),
-        batch[batch.length - 1].length
-      )
+      // trigger any upstream writer waiting for this batch early
+      const id = b4a.toString(batch[0].key, 'hex')
+      const length = batch[batch.length - 1].length
+
+      this.writers.triggers.trigger(id, length)
     }
   }
 
