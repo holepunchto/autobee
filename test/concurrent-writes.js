@@ -45,7 +45,7 @@ test('three-way fork and merge', async function (t) {
 })
 
 // Previously hung with the isLinkingAll fast path disabled: sort() kept deciding a
-// non-productive undo for a node linking a lighter entry, and applyBacklog requeued it
+// non-productive undo for a node linking a lighter entry, and _processBatch requeued it
 // forever. Fixed by the addSorted index/undo shared-prefix detection (a reorder that
 // reproduces the same positions is a no-op) plus per-node immutable weight witnesses
 // (lib/witness.js) removing the stale-weight inputs that caused the repositioning

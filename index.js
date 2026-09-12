@@ -1218,16 +1218,17 @@ module.exports = class Autobee extends ReadyResource {
     return t
   }
 
-  async applyBacklog(batches) {
-    const queue = batches.slice()
+  async _processBatch(batch) {
+    // a stack: the tip is pushed in reverse so it pops in order
+    const stack = [batch]
 
-    while (queue.length) {
-      const batch = queue.shift()
+    while (stack.length) {
+      const batch = stack.pop()
       const t = await this.prepareBatch(batch)
 
       if (t.view) {
         this._workingBee.move(t.view)
-        queue.unshift(...t.tip)
+        for (let i = t.tip.length - 1; i >= 0; i--) stack.push(t.tip[i])
         continue
       }
 
@@ -1242,10 +1243,6 @@ module.exports = class Autobee extends ReadyResource {
         batch[batch.length - 1].length
       )
     }
-  }
-
-  async _processBatch(batch) {
-    await this.applyBacklog([batch])
   }
 
   async _applyBatch(batch, optimistic) {
