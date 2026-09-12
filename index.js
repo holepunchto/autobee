@@ -828,7 +828,7 @@ module.exports = class Autobee extends ReadyResource {
 
     for (const { key, length } of hints) {
       if (length === 0) continue
-      promises.push(this._resolveOplogHint(key, length, timeout ? { timeout } : null))
+      promises.push(this._resolveOplogHint(key, length, { timeout }))
     }
 
     const ops = await Promise.all(promises)
@@ -867,7 +867,7 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _getOplog(key, length, opts = null) {
+  async _getOplog(key, length, opts) {
     const core = this.openCore(key)
 
     try {
@@ -878,10 +878,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // reads on a core the caller owns, so a walk does not churn a session per step
-  async readOplog(core, length, opts = null) {
+  async readOplog(core, length, { timeout = 0 } = {}) {
     await core.ready()
-
-    const { timeout } = opts === null ? {} : opts
 
     const target = length >= 0 ? length : core.length
     if (target === 0) return null
