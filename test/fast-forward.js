@@ -42,49 +42,31 @@ test.skip('fast-forward - simple', async function (t) {
   t.alike(node.value, encode({ value: 'a999' }))
 })
 
-test('conservative ff skips a sparse head nobody can serve', async function (t) {
-  const dir = await t.tmp()
+test('conservative ff skips a view nobody holds whole', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 100; i++) {
     await auto1.append(encode({ value: 'a' + i }))
   }
 
-  // a mirror holding only the head block never advertises the head whole
-  const mirror = new Corestore(dir + '/mirror', { manifestVersion: 2 })
-  t.teardown(() => mirror.close())
-
-  const copy = mirror.get({ key: auto1.local.key })
-  await copy.ready()
-
-  const s1 = auto1.store.replicate(true)
-  const s2 = mirror.replicate(false)
-  s1.pipe(s2).pipe(s1)
-  await copy.get(auto1.local.length - 1)
-  s1.destroy()
-  s2.destroy()
-
   const auto2 = await create(t, auto1.key, {
     isTrusted: () => true,
     fastForward: { conservative: true }
   })
 
-  const s3 = mirror.replicate(true)
-  const s4 = auto2.store.replicate(false)
-  s3.pipe(s4).pipe(s3)
-  const oplog = auto2.openCore(auto1.local.key)
-  await oplog.get(auto1.local.length - 1)
-  s3.destroy()
-  s4.destroy()
-  await oplog.close()
+  // the only peer serves the oplog and system whole, but a view with a hole
+  t.teardown(await sparseViewMirror(t, auto1, auto2))
 
   const head = { key: auto1.local.key, length: auto1.local.length }
   const ff = await FastForward.fromHead(auto2, head, null)
 
-  t.absent(ff, 'the fast-forward was skipped')
+  t.ok(ff, 'the oplog head is not gated')
+  t.ok(ff.conservative, 'the ff carries the conservative flag')
+
+  t.absent(await ff.run(), 'the fast-forward was skipped at the final check')
 })
 
-test('conservative: false attempts the sparse head', async function (t) {
+test('conservative: false lands on the sparse view', async function (t) {
   const auto1 = await create(t)
 
   for (let i = 0; i < 100; i++) {
@@ -96,18 +78,17 @@ test('conservative: false attempts the sparse head', async function (t) {
     fastForward: { conservative: false }
   })
 
-  // fetch just the head block, then cut the transport
-  const unreplicate = replicate(auto1, auto2)
-  const oplog = auto2.openCore(auto1.local.key)
-  await oplog.get(auto1.local.length - 1)
-  await unreplicate()
-  await oplog.close()
+  t.teardown(await sparseViewMirror(t, auto1, auto2))
 
   const head = { key: auto1.local.key, length: auto1.local.length }
   const ff = await FastForward.fromHead(auto2, head, null)
 
-  t.ok(ff, 'the ff was attempted instead of skipped')
-  await ff.close()
+  t.ok(ff, 'the ff was attempted')
+  t.absent(ff.conservative, 'the ff is not conservative')
+
+  const result = await ff.run()
+  t.ok(result, 'the ff landed despite the hole in the view')
+  t.alike(result.head, auto1.system.bee.head())
 })
 
 test('conservative ff proceeds once a connected peer advertises the head whole', async function (t) {
@@ -747,3 +728,44 @@ test('warmup reads time out with the fast-forward timeout', async function (t) {
   t.is(state, 'rejected:REQUEST_TIMEOUT', 'the warmup read timed out instead of hanging')
   t.ok(elapsed >= 900, 'the read waited out the fast-forward timeout')
 })
+
+// a corestore that holds the oplog and system whole, and the view minus its
+// first block, connected to auto2 - so nobody advertises the view contiguous
+async function sparseViewMirror(t, auto1, auto2) {
+  const dir = await t.tmp()
+  const mirror = new Corestore(dir + '/mirror', { manifestVersion: 2 })
+  t.teardown(() => mirror.close())
+
+  const system = auto1.system.bee.head()
+  const view = auto1.system.view
+
+  const oplogCopy = mirror.get({ key: auto1.local.key })
+  const systemCopy = mirror.get({ key: system.key })
+  const viewCopy = mirror.get({ key: view.key })
+  await Promise.all([oplogCopy.ready(), systemCopy.ready(), viewCopy.ready()])
+
+  const s1 = auto1.store.replicate(true)
+  const s2 = mirror.replicate(false)
+  s1.pipe(s2).pipe(s1)
+
+  await oplogCopy.download({ start: 0, end: auto1.local.length }).done()
+  await systemCopy.download({ start: 0, end: system.length }).done()
+  await viewCopy.download({ start: 1, end: view.length }).done()
+
+  t.ok(view.length > 1, 'the view has more than one block')
+  t.is(viewCopy.contiguousLength, 0, 'the mirror has a hole at the start of the view')
+  t.is(systemCopy.contiguousLength, system.length, 'the mirror holds the system whole')
+
+  s1.destroy()
+  s2.destroy()
+  await Promise.all([oplogCopy.close(), systemCopy.close(), viewCopy.close()])
+
+  const s3 = mirror.replicate(true)
+  const s4 = auto2.store.replicate(false)
+  s3.pipe(s4).pipe(s3)
+
+  return () => {
+    s3.destroy()
+    s4.destroy()
+  }
+}

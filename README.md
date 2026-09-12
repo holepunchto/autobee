@@ -285,9 +285,9 @@ Pass one of `head` or `legacy`, not both.
 
 #### `fastForward.conservative`
 
-Defaults to `true`: only fast-forward onto a head a connected peer can serve whole.
+Defaults to `true`: only fast-forward once the system and view lengths the head stamps are held whole, either locally or by a connected peer.
 
-The check covers the oplog head only, not the system and view cores the fast-forward then reads.
+The check runs at the end of the fast-forward, after the system has booted and the view head has been fetched, so a sparse view nobody can serve is skipped instead of landed on.
 
 #### `await db.moveTo(head, [options])`
 

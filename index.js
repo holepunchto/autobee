@@ -98,8 +98,8 @@ module.exports = class Autobee extends ReadyResource {
     // oplog head to boot from: migrates or fast-forwards depending on its version
     this.bootFrom = (fastForward && fastForward.boot) || null
 
-    // conservative (default on): only fast-forward onto a head someone can serve whole
-    this._conservativeFF = !fastForward || !!fastForward.conservative
+    // conservative (default on): only fast-forward onto a system and view held whole
+    this._conservativeFF = fastForward === null || fastForward.conservative !== false
 
     this.trusted = new TrustedPeers(this, handlers)
 
@@ -881,13 +881,10 @@ module.exports = class Autobee extends ReadyResource {
   async readOplog(core, length, opts = null) {
     await core.ready()
 
-    const { conservative = false, timeout } = opts === null ? {} : opts
+    const { timeout } = opts === null ? {} : opts
 
     const target = length >= 0 ? length : core.length
     if (target === 0) return null
-
-    // conservative: only proceed when a connected peer can serve the head whole
-    if (conservative && core.remoteContiguousLength < target) return null
 
     const buf = await core.get(target - 1, { timeout })
     if (buf === null) return null
