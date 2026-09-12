@@ -256,13 +256,17 @@ Return the oplog head you most recently vouched for, given the `target` view bei
 
 Called at flush time to stamp your own oplog (with your view as `target` and a `null` reference), and again per candidate during discovery.
 
+During discovery `target` is a view opened for the candidate, and reads through it carry the fast-forward's timeout. Anything else the hook awaits is unbounded, so if it reaches beyond that view, put a timeout on it: the candidate waits on the hook, and so does closing it.
+
 #### `warmup(view)`
 
 Prepare a candidate `view` before the fast-forward onto it is applied.
 
 Called as soon as the candidate's view head is known, and runs alongside the block downloads the fast-forward is already doing rather than after them. Throw or reject to reject the candidate: the fast-forward is abandoned and the usual apply path catches up instead.
 
-`view` is opened and closed through the `open` and `close` handlers, so don't build or close a db of your own.
+`view` is opened and closed through the `open` and `close` handlers, so don't build or close a db of your own. Reads through it carry the fast-forward's timeout, so a warmup that needs blocks nobody serves fails the candidate instead of hanging.
+
+Only reads through `view` are bounded. Anything else the handler awaits, such as other cores or your own network calls, is up to you to time out: the fast-forward waits on the handler, and an abandoned candidate cannot finish closing until it returns.
 
 #### `fastForward.boot`
 
