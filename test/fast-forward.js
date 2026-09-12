@@ -167,6 +167,11 @@ test('ff onto a trusted head keeps the untrusted tip pending', async function (t
     })
   })
 
+  // wake auto3 on the tip ourselves: the ff has to find the writer already
+  // there, and auto2's own announce can land after the ff has applied - the
+  // idle writer was gc'd, so a late announce shows up as a closed writer
+  await auto3.wakeup({ key: auto2.local.key, length: auto2.local.length })
+
   await replicateAndSync(auto1, auto2, auto3)
 
   try {
