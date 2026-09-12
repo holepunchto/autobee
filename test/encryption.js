@@ -118,7 +118,12 @@ function markersFor(auto, value) {
 
 test('encryption - unencrypted blocks carry the plaintext (control for the markers)', async function (t) {
   const anchoring = anchoringApply()
-  const auto = await create(t, null, { apply: anchoring.apply })
+  // explicitly unencrypted, so the control still holds under --encrypt-all
+  const auto = await create(t, null, {
+    apply: anchoring.apply,
+    encryptionKey: null,
+    encrypted: false
+  })
 
   const value = encode({ hello: 'world' })
   await auto.append(value)
