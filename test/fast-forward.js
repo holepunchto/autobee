@@ -691,3 +691,59 @@ test('cancelling a fast-forward cancels the warmup reads', async function (t) {
 
   t.absent(await running, 'the cancelled fast-forward produced no result')
 })
+
+test('warmup reads time out with the fast-forward timeout', async function (t) {
+  t.timeout(60000)
+
+  const auto1 = await create(t)
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  let state = 'pending'
+  let readStarted = 0
+
+  const auto2 = await create(t, auto1.key, {
+    fastForward: false,
+    isTrusted: () => true,
+    async warmup(view) {
+      readStarted = Date.now()
+      try {
+        // written once in an early batch and never rewritten, so it lives in a block nobody serves
+        await view.get(b4a.from('#000001'))
+        state = 'resolved'
+      } catch (err) {
+        state = 'rejected:' + err.code
+        throw err
+      }
+    }
+  })
+
+  // fetch everything the fast-forward itself reads, then cut the transport before it starts
+  // so the warmup read is the only thing left that needs the network
+  const unreplicate = replicate(auto1, auto2)
+
+  const oplog = auto2.openCore(auto1.local.key)
+  await oplog.get(auto1.local.length - 1)
+  await oplog.close()
+
+  const system = auto2.store.get({ key: auto1.system.bee.core.key })
+  await system.download({ start: 0, end: auto1.system.bee.core.length }).done()
+  await system.close()
+
+  const view = auto2.store.get({ key: auto1.view.core.key })
+  await view.get(auto1.view.core.length - 1)
+  await view.close()
+
+  await unreplicate()
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = await FastForward.fromHead(auto2, head, null, { force: true, timeout: 1000 })
+  t.ok(ff, 'the fast-forward candidate was accepted')
+
+  t.absent(await ff.run(), 'the fast-forward produced no result')
+  t.ok(ff.failed, 'the fast-forward failed')
+
+  const elapsed = Date.now() - readStarted
+  t.comment('warmup read took ' + elapsed + 'ms')
+  t.is(state, 'rejected:REQUEST_TIMEOUT', 'the warmup read timed out instead of hanging')
+  t.ok(elapsed >= 900, 'the read waited out the fast-forward timeout')
+})

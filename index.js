@@ -437,15 +437,17 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // the view an oplog head points at, opened and closed through the handlers
-  openViewAt(oplog) {
+  openViewAt(oplog, { timeout } = {}) {
     const v = oplog.op.views.view
     if (!v) return null
 
-    return this.openView({ key: v.key, length: v.start + v.length })
+    return this.openView({ key: v.key, length: v.start + v.length }, { timeout })
   }
 
-  openView(head) {
-    return new ApplyView(this.bee.checkout({ key: head.key, length: head.length }), this)
+  // timeout bounds every hypercore read done through the view, defaults to the main bee's
+  openView(head, { timeout } = {}) {
+    const bee = this.bee.checkout({ key: head.key, length: head.length, timeout })
+    return new ApplyView(bee, this)
   }
 
   openCore(key) {
