@@ -4,6 +4,7 @@ const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 const { AutobeeEncryption } = require('autobee-encryption')
+const uncaughts = require('uncaughts')
 const os = IS_BARE ? null : require('os')
 
 const Autobee = require('../index.js')
@@ -492,6 +493,73 @@ test(
     await sameContent(t, c, b, B_CONFIRMED, 'c vs b')
 
     await doneB()
+  }
+)
+
+// b's legacy system boots at 211 flushes and sits at 263 once its 52 migrated
+// nodes are applied - a must be MIN_FF_GAP (32) past that to be an ff candidate
+const A_FF_TARGET_FLUSHES = 300
+
+test(
+  'migration - a wakeup fast-forward waits for the migrated catchup to apply',
+  { skip: skipFF },
+  async function (t) {
+    const aState = {}
+    const a = await openFixture(t, 'a', aState)
+
+    for (let i = 0; a.system.flushes < A_FF_TARGET_FLUSHES; i++) {
+      await a.append(JSON.stringify({ msg: 'post-' + i }))
+      await a.update()
+      await a.updated()
+    }
+
+    const bDir = await t.tmp()
+    await copyFixture(t, 'b', bDir)
+
+    const bStore = new Corestore(bDir, { allowBackup: true })
+    const bState = {}
+    const b = makeAutobee(bStore, bState)
+
+    // a failing migrating drain crashes the process rather than rejecting
+    // ready() or flush(), so capture that instead of listening for an error
+    const crashes = []
+    let oncrash = null
+    const crashed = new Promise((resolve) => {
+      oncrash = (err) => {
+        crashes.push(err)
+        resolve()
+      }
+    })
+    uncaughts.on(oncrash)
+
+    const done = replicate(a, b)
+    t.teardown(done)
+    t.teardown(() => b.close())
+
+    // stays registered until b is down, a crashed b keeps throwing while closing
+    t.teardown(() => uncaughts.off(oncrash))
+
+    // a hint for a's head is queued before the migrating boot drains, as a boot
+    // hint would be - the ff it produces must not jump ahead of the catchup
+    b.hintWakeup(localHead(a))
+
+    await b.ready()
+
+    // once b has crashed and closed neither flush() nor sync() settle, so
+    // race them against the crash instead of hanging
+    await Promise.race([b.flush().then(() => sync(a, b)), crashed])
+    t.is(crashes.length, 0, 'the migrating drain did not crash')
+    if (crashes.length) return
+
+    t.is(bState.calls, 1, 'b migrated')
+    t.is(b.stats.fastForwards, 1, 'b still fast-forwarded onto a')
+
+    const me = await b.system.get(b.local.key)
+    t.is(me.length, b.local.length, 'the migrated tail made it into the system')
+    t.absent(await b.local.getUserData('autobase/boot'), 'the legacy boot record is cleared')
+
+    t.is(await messageAt(b, B_CONFIRMED - 1), 'm198')
+    t.is(b.system.view.length, a.system.view.length, 'b landed on the same view as a')
   }
 )
 

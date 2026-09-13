@@ -810,6 +810,13 @@ module.exports = class Autobee extends ReadyResource {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) return
     if (this._interrupting || this.closing || this.bootFrom) return
 
+    // the migrated legacy nodes have to land on the legacy system before we
+    // move off it - requeue the hints so the ff is retried once they applied
+    if (this._catchupMigratedNodes !== null) {
+      this._wakeup.hint(hints)
+      return
+    }
+
     try {
       const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
