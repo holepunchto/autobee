@@ -629,3 +629,70 @@ test('migration - legacy weights survive a v4 flush', { skip }, async function (
   if (writer) t.ok(writer.isIndexer, 'a migrated indexer still reads as an indexer')
   else t.pass('b has no open session in this fixture')
 })
+
+// synthetic catchup - the fixture's writers already sit in sort order so it
+// never rebases, this covers the ordering the fixture cannot
+test('migration - catchup applies in sort order, not legacy INFO order', function (t) {
+  const { CatchupOrder } = require('../lib/migrations.js')
+
+  const low = b4a.alloc(32).fill(1)
+  const mid = b4a.alloc(32).fill(2)
+  const high = b4a.alloc(32).fill(3)
+  const outside = b4a.alloc(32).fill(9)
+
+  const node = (key, length, links = [], weight = 0) => ({
+    key,
+    length,
+    links,
+    weight,
+    timestamp: 0
+  })
+
+  // legacy INFO order: high first, then mid twice, then low. low is the
+  // indexer (weight 2) so it sorts first, mid:6 links to low:4 so it has to
+  // wait, high links to a writer outside the catchup and is ready straight away
+  const batches = [
+    [node(high, 10, [{ key: outside, length: 3 }])],
+    [node(mid, 5)],
+    [node(mid, 6, [{ key: low, length: 4 }])],
+    [node(low, 3), node(low, 4)]
+  ]
+
+  const weights = new Map([
+    [b4a.toString(low, 'hex'), 2],
+    [b4a.toString(mid, 'hex'), 1],
+    [b4a.toString(high, 'hex'), 1]
+  ])
+
+  const order = new CatchupOrder(batches)
+  const applied = []
+
+  while (order.size) {
+    const candidates = order.candidates()
+    for (const batch of candidates) batch[0].weight = weights.get(b4a.toString(batch[0].key, 'hex'))
+
+    if (applied.length === 0) {
+      t.is(candidates.length, 3, 'mid:6 is held back behind mid:5 and low:4')
+    }
+
+    const best = order.pick(candidates)
+    applied.push(best[0].key[0] + ':' + best[best.length - 1].length)
+    order.shift(best)
+  }
+
+  t.alike(applied, ['1:4', '2:5', '2:6', '3:10'], 'weight first, then key, links respected')
+})
+
+test('migration - catchup with a dangling link throws instead of applying out of order', function (t) {
+  const { CatchupOrder } = require('../lib/migrations.js')
+
+  const a = b4a.alloc(32).fill(1)
+  const b = b4a.alloc(32).fill(2)
+
+  const order = new CatchupOrder([
+    [{ key: a, length: 2, links: [{ key: b, length: 5 }], weight: 0, timestamp: 0 }],
+    [{ key: b, length: 3, links: [{ key: a, length: 2 }], weight: 0, timestamp: 0 }]
+  ])
+
+  t.exception(() => order.candidates(), /unresolvable links/)
+})

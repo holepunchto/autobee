@@ -1032,19 +1032,35 @@ module.exports = class Autobee extends ReadyResource {
     return anchor
   }
 
+  // see CatchupOrder - sort order instead of legacy INFO order, so the catchup
+  // does not rebase on itself
   async _bumpMigratedWriters() {
+    const order = new migrations.CatchupOrder(this._catchupMigratedNodes)
     const opened = new Set()
     let updated = false
 
     for (const batch of this._catchupMigratedNodes) {
-      await this._processBatch(batch)
-      updated = true
       for (const node of batch) {
         if (node.from) opened.add(node.from)
       }
     }
 
-    for (const core of opened) await core.close()
+    try {
+      while (order.size) {
+        const candidates = order.candidates()
+        // recomputed per step - prepareBatch does the same right after
+        for (const batch of candidates) batch[0].weight = await resolveWeight(this, batch[0])
+
+        const best = order.pick(candidates)
+        await this._processBatch(best)
+        updated = true
+
+        order.shift(best)
+      }
+    } finally {
+      for (const core of opened) await core.close()
+    }
+
     return updated
   }
 
