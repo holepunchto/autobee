@@ -46,6 +46,7 @@
     "prettier": "^3.8.1",
     "prettier-config-holepunch": "^2.0.0",
     "protomux-wakeup": "^2.9.0",
-    "replication-simulator": "^3.0.0"
+    "replication-simulator": "^3.0.0",
+    "uncaughts": "^1.1.3"
   }
 }
