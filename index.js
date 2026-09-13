@@ -1032,10 +1032,8 @@ module.exports = class Autobee extends ReadyResource {
     return anchor
   }
 
-  // the catchup arrives in legacy INFO order, which has nothing to do with our
-  // sort order. dry-run the linearizer over it and apply in the order it settles
-  // in, so nothing is undone. weights are fixed for the whole catchup - legacy
-  // nodes carry no witness and the legacy apply cannot promote a writer
+  // apply in linearizer order so the catchup never undoes. weights are fixed,
+  // legacy nodes carry no witness
   async _bumpMigratedWriters() {
     const opened = new Set()
     let updated = false

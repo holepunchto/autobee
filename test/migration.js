@@ -630,8 +630,7 @@ test('migration - legacy weights survive a v4 flush', { skip }, async function (
   else t.pass('b has no open session in this fixture')
 })
 
-// synthetic catchup - the fixture's writers already sit in sort order so it
-// never rebases, this covers the ordering the fixture cannot
+// the fixture's writers already sit in sort order, so this is synthetic
 test('migration - catchup is applied in linearizer order, not legacy INFO order', function (t) {
   const topo = require('../lib/topo.js')
 
@@ -648,9 +647,7 @@ test('migration - catchup is applied in linearizer order, not legacy INFO order'
     witness: null
   })
 
-  // legacy INFO order. mid:1 sorts before high:1 by key and is ready first, so a
-  // greedy pick applies it first - but low:1 links high:1 and outranks mid:1, so
-  // the linearizer pulls high:1 ahead of mid:1 and a greedy order rebases mid:1
+  // low:1 links high:1 and outranks mid:1, so high:1 is pulled ahead of mid:1
   const batches = [
     [node(high, 1)],
     [node(mid, 1)],
@@ -666,7 +663,7 @@ test('migration - catchup is applied in linearizer order, not legacy INFO order'
 test('migration - linearized catchup never rebases on itself', function (t) {
   const topo = require('../lib/topo.js')
 
-  // eight writers, each node links the peer heads its writer happened to see
+  // eight writers with random link lag
   let seed = 7
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff
 
@@ -696,7 +693,7 @@ test('migration - linearized catchup never rebases on itself', function (t) {
   const order = topo.linearize(batches)
   t.is(order.length, batches.length, 'every batch is handed out once')
 
-  // replaying the order one batch at a time must settle every batch at the tail
+  // every prefix must be stable
   let undos = 0
   for (let i = 1; i < order.length; i++) {
     const again = topo.linearize(order.slice(0, i + 1))
@@ -711,10 +708,7 @@ test('migration - linearized catchup never rebases on itself', function (t) {
   t.is(undos, 0, 'no prefix is reordered by a later batch')
 })
 
-// autobase computed heads after adding the previous node, so every node in a
-// legacy batch links its own predecessor. the inflater used to take a link as
-// proof of a batch start and returned only the head, so a reorder saw the
-// batch without its real links and without its first values
+// legacy batch nodes link their predecessor, a link is not a batch start
 test('migration - a legacy batch inflates whole when its nodes link their predecessor', async function (t) {
   const topo = require('../lib/topo.js')
   const encoding = require('../lib/encoding.js')
@@ -736,8 +730,7 @@ test('migration - a legacy batch inflates whole when its nodes link their predec
       trace: null
     })
 
-  // 1: earlier single node. 2-4: one batch, remaining count 3,2,1, where 3 and 4
-  // link the node before them as autobase did
+  // 2-4 is one batch, remaining count 3,2,1
   await core.append([
     legacy([{ key: other, length: 1 }], 1, 'a'),
     legacy([{ key: other, length: 2 }], 3, 'b'),
@@ -755,8 +748,7 @@ test('migration - a legacy batch inflates whole when its nodes link their predec
   t.is(batch[0].length, 2, 'starts at the first node of the batch')
   t.alike(batch[0].links, [{ key: other, length: 2 }], 'the real links sit on the start node')
 
-  // a legacy fast-forward never fetched the block before the batch - the walk
-  // must take the miss as the boundary instead of waiting on the network
+  // the block before the batch may be missing after a legacy ff
   await core.clear(0)
   t.is(await core.has(0), false, 'the block before the batch is gone')
 
