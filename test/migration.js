@@ -710,3 +710,61 @@ test('migration - linearized catchup never rebases on itself', function (t) {
 
   t.is(undos, 0, 'no prefix is reordered by a later batch')
 })
+
+// autobase computed heads after adding the previous node, so every node in a
+// legacy batch links its own predecessor. the inflater used to take a link as
+// proof of a batch start and returned only the head, so a reorder saw the
+// batch without its real links and without its first values
+test('migration - a legacy batch inflates whole when its nodes link their predecessor', async function (t) {
+  const topo = require('../lib/topo.js')
+  const encoding = require('../lib/encoding.js')
+
+  const store = new Corestore(await t.tmp())
+  const core = store.get({ name: 'legacy-writer' })
+  await core.ready()
+  t.teardown(() => store.close())
+
+  const other = b4a.alloc(32).fill(9)
+
+  const legacy = (heads, batch, value) =>
+    encoding.encodeOplog({
+      version: 2,
+      node: { heads, batch, value: b4a.from(value) },
+      checkpoint: null,
+      digest: null,
+      optimistic: false,
+      trace: null
+    })
+
+  // 1: earlier single node. 2-4: one batch, remaining count 3,2,1, where 3 and 4
+  // link the node before them as autobase did
+  await core.append([
+    legacy([{ key: other, length: 1 }], 1, 'a'),
+    legacy([{ key: other, length: 2 }], 3, 'b'),
+    legacy([{ key: core.key, length: 2 }], 2, 'c'),
+    legacy([{ key: core.key, length: 3 }], 1, 'd')
+  ])
+
+  const { batch } = await topo.getOplogBatch(null, core, 4, 1, 0)
+
+  t.alike(
+    batch.map((n) => b4a.toString(n.value)),
+    ['b', 'c', 'd'],
+    'the whole batch, not just the head'
+  )
+  t.is(batch[0].length, 2, 'starts at the first node of the batch')
+  t.alike(batch[0].links, [{ key: other, length: 2 }], 'the real links sit on the start node')
+
+  // a legacy fast-forward never fetched the block before the batch - the walk
+  // must take the miss as the boundary instead of waiting on the network
+  await core.clear(0)
+  t.is(await core.has(0), false, 'the block before the batch is gone')
+
+  const again = await topo.getOplogBatch(null, core, 4, 1, 0)
+
+  t.alike(
+    again.batch.map((n) => b4a.toString(n.value)),
+    ['b', 'c', 'd'],
+    'the batch still inflates whole without the block before it'
+  )
+})
