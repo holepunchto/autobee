@@ -630,7 +630,6 @@ test('migration - legacy weights survive a v4 flush', { skip }, async function (
   else t.pass('b has no open session in this fixture')
 })
 
-// the fixture's writers already sit in sort order, so this is synthetic
 test('migration - catchup is applied in linearizer order, not legacy INFO order', function (t) {
   const topo = require('../lib/topo.js')
 
