@@ -1032,10 +1032,11 @@ module.exports = class Autobee extends ReadyResource {
     return anchor
   }
 
-  // see CatchupOrder - sort order instead of legacy INFO order, so the catchup
-  // does not rebase on itself
+  // the catchup arrives in legacy INFO order, which has nothing to do with our
+  // sort order. dry-run the linearizer over it and apply in the order it settles
+  // in, so nothing is undone. weights are fixed for the whole catchup - legacy
+  // nodes carry no witness and the legacy apply cannot promote a writer
   async _bumpMigratedWriters() {
-    const order = new migrations.CatchupOrder(this._catchupMigratedNodes)
     const opened = new Set()
     let updated = false
 
@@ -1046,16 +1047,14 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     try {
-      while (order.size) {
-        const candidates = order.candidates()
-        // recomputed per step - prepareBatch does the same right after
-        for (const batch of candidates) batch[0].weight = await resolveWeight(this, batch[0])
+      for (const batch of this._catchupMigratedNodes) {
+        const weight = await resolveWeight(this, batch[0])
+        for (const node of batch) node.weight = weight
+      }
 
-        const best = order.pick(candidates)
-        await this._processBatch(best)
+      for (const batch of topo.linearize(this._catchupMigratedNodes)) {
+        await this._processBatch(batch)
         updated = true
-
-        order.shift(best)
       }
     } finally {
       for (const core of opened) await core.close()
