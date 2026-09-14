@@ -21,6 +21,7 @@ async function runTests() {
   await import('./links.js')
   await import('./migration.js')
   await import('./optimistic-race.js')
+  await import('./passive-weights.js')
   await import('./perf.js')
   await import('./triggers.js')
   await import('./untrusted-writers.js')
