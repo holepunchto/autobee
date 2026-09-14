@@ -1184,8 +1184,13 @@ module.exports = class Autobee extends ReadyResource {
     const heads = this.system.heads.slice()
     if (!heads.length) return false
 
+    const promises = []
     for (const head of heads) {
-      if (!(await this.trusted.isTrusted(head.key, this._workingView.view))) return false
+      promises.push(this.trusted.isTrusted(head.key, this._workingView.view))
+    }
+
+    for (const isTrusted of await Promise.all(promises)) {
+      if (!isTrusted) return false
     }
 
     return true
