@@ -1187,22 +1187,22 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    // apply the best next node to keep the prefix stable
-    const next = await this.writers.nextPendingNode({ local })
-    if (next === null) return false
+    const next = await this.writers.nextBatches({ local })
+    if (next.length === 0) return false
 
-    const { writer: w, batch } = next
+    const batches = next.map((n) => n.batch)
 
-    const optimistic = this.optimistic && batch[0].optimistic
-
-    if (optimistic || w.isAdded || (w.isRemoved && w.hasReferrals())) {
-      await this._processBatch(batch)
-    } else {
-      w.removePending()
-      return true
+    // linearize sorts on weight, so pin it first like prepareBatch will
+    for (const batch of batches) {
+      const weight = await resolveWeight(this, batch[0])
+      for (const node of batch) node.weight = weight
     }
 
-    w.notify(batch)
+    // apply in the order they settle so the round never undoes against itself
+    for (const batch of topo.linearize(batches)) {
+      await this._processBatch(batch)
+    }
+
     this._needsUpdate = true
     return true
   }
