@@ -69,7 +69,15 @@ module.exports = class Autobee extends ReadyResource {
     this.id = null
     this.bootstrap = null
     this._handlers = handlers
-    this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
+    this.stats = {
+      undos: 0,
+      fastForwards: 0,
+      drains: 0,
+      applies: 0,
+      appends: 0,
+      writersOpened: 0,
+      writersClosed: 0
+    }
 
     const systemStore = this.store.session()
     this.system = new System(this, systemStore, {
@@ -205,9 +213,13 @@ module.exports = class Autobee extends ReadyResource {
     if (this._acking) this.bumpSoon()
   }
 
+  isLocalTrusted() {
+    return this.trusted.isTrusted(this.local.key, this._workingView.view)
+  }
+
   async _updateAcking() {
     if (this._interrupting) return
-    this.setAcking(await this.trusted.isTrusted(this.local.key, this._workingView.view))
+    this.setAcking(await this.isLocalTrusted())
   }
 
   // network free: only a migration needs peers, so ready() awaits the full
