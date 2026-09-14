@@ -1170,13 +1170,24 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.writers.writable) return false
 
     if (this.writers.localWriter.pending !== null) return false
-
     if ((await this._flushesBehind()) < this._ackThreshold) return false
+    if (await this._allHeadsTrusted()) return false
 
     const links = this.system.getLinks(this.local.key)
     const t = Math.max(this._now(), this.system.timestamp)
 
     this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null)
+    return true
+  }
+
+  async _allHeadsTrusted() {
+    const heads = this.system.heads.slice()
+    if (!heads.length) return false
+
+    for (const head of heads) {
+      if (!(await this.trusted.isTrusted(head.key, this._workingView.view))) return false
+    }
+
     return true
   }
 
