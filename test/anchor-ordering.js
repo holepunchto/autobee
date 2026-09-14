@@ -82,7 +82,7 @@ test('anchor - optimistic node linking an anchor sorts after the anchored node',
   )
 })
 
-test('anchor - createAnchor emits an anchor event with the open anchor core', async function (t) {
+test('anchor - createAnchor emits an anchor event with the anchored node', async function (t) {
   t.plan(6)
 
   async function apply(nodes, view, host) {
@@ -99,13 +99,13 @@ test('anchor - createAnchor emits an anchor event with the open anchor core', as
 
   const emitted = { anchor: null }
 
-  a.on('anchor', function (anchor, core) {
+  a.on('anchor', function (anchor, anchored) {
     emitted.anchor = anchor
     t.ok(b4a.isBuffer(anchor.key), 'anchor has a key')
     t.is(anchor.length, 1, 'anchor core has one block')
-    t.ok(b4a.equals(core.key, anchor.key), 'core matches the anchor key')
-    t.is(core.length, 1, 'core is populated when emitted')
-    t.absent(core.closed, 'core is still open when emitted')
+    t.ok(b4a.equals(anchored.key, a.local.key), 'anchored node is on the local writer')
+    t.is(anchored.length, 2, 'anchored node is the anchor op')
+    t.absent(b4a.equals(anchored.key, anchor.key), 'anchored node is not the anchor core')
   })
 
   await a.append(encode({ setup: true }))
