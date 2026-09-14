@@ -1039,7 +1039,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const anchor = { key: core.key, length: core.length }
 
-    this.emit('anchor', core)
+    this.emit('anchor', anchor, core)
 
     await core.close()
 
