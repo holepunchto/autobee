@@ -1188,19 +1188,26 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const next = await this.writers.nextBatches({ local })
-    if (next.length === 0) return false
+    if (next.batches.length === 0) return false
 
-    const batches = next.map((n) => n.batch)
+    const batches = next.batches.map((n) => n.batch)
 
-    // linearize sorts on weight, so pin it first like prepareBatch will
+    // linearize sorts on weight. a citation earlier in the round is not in the
+    // record yet, so carry the round's weight forward
+    const weights = new Map()
+
     for (const batch of batches) {
-      const weight = await resolveWeight(this, batch[0])
+      const id = b4a.toString(batch[0].key, 'hex')
+      const weight = Math.max(await resolveWeight(this, batch[0]), weights.get(id) || 0)
+      weights.set(id, weight)
       for (const node of batch) node.weight = weight
     }
 
-    // apply in the order they settle so the round never undoes against itself
+    // apply in settle order so the round never undoes against itself. only the
+    // first is safe while the writer set is still settling
     for (const batch of topo.linearize(batches)) {
       await this._processBatch(batch)
+      if (!next.settled) break
     }
 
     this._needsUpdate = true
