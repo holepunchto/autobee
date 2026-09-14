@@ -1,7 +1,8 @@
 const test = require('brittle')
 const crypto = require('hypercore-crypto')
 const ID = require('hypercore-id-encoding')
-const { create, replicateAndSync, encode } = require('./helpers')
+const b4a = require('b4a')
+const { create, replicate, replicateAndSync, sync, same, encode } = require('./helpers')
 
 function randomWriters(n) {
   const keys = []
@@ -52,4 +53,55 @@ test('untrusted-writers - a trusted peer opens past the limit', async function (
   await auto2.close()
 
   t.is(auto2.stats.writersClosed, auto2.stats.writersOpened, 'every opened writer is closed')
+})
+
+test('untrusted-writers - a stalled mirror fast-forwards once the admin moves on', async function (t) {
+  const admin = await create(t, {
+    mostRecentTrusted: () => ({ key: admin.local.key, length: admin.local.length })
+  })
+
+  const writers = []
+  for (let i = 0; i < 4; i++) writers.push(await create(t, admin.key))
+
+  for (const w of writers) await admin.append(encode({ addWriter: w.local.id }))
+  await replicateAndSync(admin, ...writers)
+
+  for (const w of writers) await w.append(encode({ msg: 'from ' + w.local.id }))
+  await replicateAndSync(admin, ...writers)
+
+  await admin.append(encode({ msg: 'links them all' }))
+
+  // trust nothing at first so the mirror applies rather than fast-forwards
+  let trustAdmin = false
+  const mirror = await create(t, admin.key, {
+    isTrusted: (key) => trustAdmin && b4a.equals(key, admin.local.key),
+    maxUntrustedWriters: 3
+  })
+
+  const done = replicate(admin, mirror)
+
+  for (let i = 0; i < 5; i++) {
+    await mirror.update()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+
+  t.ok(mirror.writers.size <= 3, 'the mirror is at its limit')
+  t.ok((await length(mirror, admin.local.key)) < admin.local.length, 'and stalled behind the admin')
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no fast-forward')), 10_000)
+    mirror.once('move-to', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  trustAdmin = true
+  for (let i = 0; i < 40; i++) await admin.append(encode({ value: 'fix ' + i }))
+
+  await t.execution(moved, 'the mirror fast-forwarded')
+  await sync(admin, mirror)
+  await done()
+
+  t.ok(await same(admin, mirror), 'the mirror converged on the admin')
 })
