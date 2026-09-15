@@ -80,15 +80,13 @@ function makeAutobee(store, state, opts = {}) {
   return auto
 }
 
-async function openFixture(t, name, state, { prepare = null, onstore = null, ...opts } = {}) {
+async function openFixture(t, name, state, { prepare = null, ...opts } = {}) {
   const dir = await t.tmp()
   await copyFixture(t, name, dir)
 
   if (prepare) await prepare(dir)
 
   const store = new Corestore(dir, { allowBackup: true })
-  if (onstore) await onstore(store)
-
   const auto = makeAutobee(store, state, opts)
 
   t.teardown(() => auto.close())
@@ -222,7 +220,8 @@ test(
     const aDir = await t.tmp()
     await copyFixture(t, 'a', aDir)
 
-    // a stands in for the indexers, serving the probe and the boot
+    // a stands in for the indexers serving the probe. the boot itself runs
+    // offline: the head has to be one c holds
     const aStore = new Corestore(aDir, { allowBackup: true })
     t.teardown(() => aStore.close())
 
@@ -236,16 +235,15 @@ test(
       }
     }
 
+    let fork = 0
+
     const c = await openFixture(t, 'c', state, {
-      onstore(store) {
-        t.teardown(peer(store))
-      },
       async prepare(dir) {
         const sys = await openLegacySystem(dir)
         const { main, batch, systemLength } = sys
 
         // regroup c's tail [member, INFO, member, INFO] as [member, member, INFO]
-        const fork = main.length
+        fork = main.length
         t.is(systemLength, fork + 2, 'boot record sits past the first tail INFO')
         t.ok(!isLegacyInfo(await batch.get(fork)), 'tail starts with a member')
         t.ok(isLegacyInfo(await batch.get(fork + 1)), 'then an INFO')
@@ -272,6 +270,60 @@ test(
       }
     })
 
+    t.is(state.systemHead.length, fork, 'booted from the last INFO both sessions share')
+    t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
+    t.is(state.length, C_CONFIRMED)
+    t.is(state.last, 'm98', 'the handler could read the legacy view')
+    t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+  }
+)
+
+// the same probe on a batch that agrees with the indexers: the fetched INFO is
+// a valid head, so booting moves up to it
+test(
+  'migration - c boots from a fetched indexer INFO block when its batch agrees with it',
+  { skip },
+  async function (t) {
+    const state = {}
+
+    const aDir = await t.tmp()
+    await copyFixture(t, 'a', aDir)
+
+    const aStore = new Corestore(aDir, { allowBackup: true })
+    t.teardown(() => aStore.close())
+
+    let fork = 0
+
+    const c = await openFixture(t, 'c', state, {
+      async prepare(dir) {
+        const sys = await openLegacySystem(dir)
+        const { main, batch } = sys
+
+        fork = main.length
+        t.ok(isLegacyInfo(await batch.get(fork + 1)), 'the tail has an INFO at fork + 1')
+
+        const s1 = sys.store.replicate(true)
+        const s2 = aStore.replicate(false)
+        s1.pipe(s2).pipe(s1)
+
+        try {
+          await main.get(fork)
+          t.ok(
+            isLegacyInfo(await main.get(fork + 1)),
+            'fetched the indexer INFO and the block before it'
+          )
+        } finally {
+          s1.destroy()
+          s2.destroy()
+        }
+
+        t.ok(fork + 2 > batch.signedLength, 'it sits past the batch dependency')
+
+        await sys.close()
+      }
+    })
+
+    t.is(state.systemHead.length, fork + 2, 'booted from the fetched INFO')
     t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
     t.is(state.length, C_CONFIRMED)
     t.is(state.last, 'm98', 'the handler could read the legacy view')
@@ -285,6 +337,7 @@ test(
   { skip },
   async function (t) {
     const state = {}
+    let shared = 0
 
     const c = await openFixture(t, 'c', state, {
       async prepare(dir) {
@@ -301,10 +354,12 @@ test(
         await batch.truncate(systemLength)
         await batch.append([info, member, info])
 
+        shared = batch.signedLength
         await sys.close()
       }
     })
 
+    t.is(state.systemHead.length, shared, 'booted from the last INFO both sessions share')
     t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
     t.is(state.length, C_CONFIRMED)
     t.is(state.last, 'm98', 'the handler could read the legacy view')
