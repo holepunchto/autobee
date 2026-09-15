@@ -502,6 +502,10 @@ auto.register({
     {
       name: 'weight',
       type: 'uint'
+    },
+    {
+      name: 'drift',
+      type: 'uint'
     }
   ]
 })
