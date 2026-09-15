@@ -67,9 +67,9 @@ function migrateHandler(store, state, baseKey = BASE_KEY) {
   }
 }
 
-function makeAutobee(store, state, opts = {}) {
+function makeAutobee(store, state, { key = BASE_KEY, ...opts } = {}) {
   let auto
-  auto = new Autobee(store, BASE_KEY, {
+  auto = new Autobee(store, key, {
     apply,
     migrate: migrateHandler(store, state),
     legacyViews: [LEGACY_VIEW_NAME],
@@ -207,6 +207,28 @@ test('migration - c (non-indexer, frozen at 100) migrates', { skip }, async func
   t.is(state.length, C_CONFIRMED)
   t.is(state.last, 'm98', 'the handler could read the legacy view')
   t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+})
+
+// legacy autobase stored the referrer on the local core, so a keyless open
+// resolves the same base - it has to find the legacy storage just the same
+test('migration - a keyless open of legacy storage still migrates', { skip }, async function (t) {
+  for (const name of ['a', 'c']) {
+    const dir = await t.tmp()
+    await copyFixture(t, name, dir)
+
+    const store = new Corestore(dir, { allowBackup: true })
+    const state = {}
+    const auto = makeAutobee(store, state, { key: null })
+    t.teardown(() => auto.close())
+
+    await auto.ready()
+    await auto.flush()
+
+    t.alike(auto.key, BASE_KEY, `${name}: resolved the base key from the referrer`)
+    t.is(state.calls, 1, `${name}: migrate handler ran once`)
+    t.is(state.last, name === 'c' ? 'm98' : 'm198', `${name}: the legacy view was migrated`)
+    t.absent(await auto.local.getUserData('autobase/boot'), `${name}: legacy boot record cleared`)
+  }
 })
 
 // a diverged legacy peer's batch session disagrees with the signed core below
