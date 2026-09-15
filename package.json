@@ -30,7 +30,7 @@
     "hyperbee2": "^2.16.0",
     "hypercore": "^11.33.2",
     "hypercore-id-encoding": "^1.3.0",
-    "hyperschema": "^1.25.0",
+    "hyperschema": "^1.26.1",
     "read-write-mutexify": "^2.1.0",
     "ready-guard": "^1.0.0",
     "ready-resource": "^1.2.0",
