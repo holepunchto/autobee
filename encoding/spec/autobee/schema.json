@@ -1032,6 +1032,11 @@
           "name": "hash",
           "type": "fixed8",
           "version": 1
+        },
+        {
+          "name": "weight",
+          "type": "uint",
+          "version": 1
         }
       ]
     }
