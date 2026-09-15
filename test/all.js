@@ -29,6 +29,7 @@ async function runTests() {
   await import('./view-consistency.js')
   await import('./view-range.js')
   await import('./wakeup.js')
+  await import('./weight-hint.js')
   await import('./wire-compat.js')
   await import('./witness.js')
   await import('./writer-management.js')
