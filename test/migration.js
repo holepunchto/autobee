@@ -9,6 +9,8 @@ const os = IS_BARE ? null : require('os')
 
 const Autobee = require('../index.js')
 const { AUTOBEE_VERSION, LEGACY_AUTOBASE_VERSION } = require('../lib/constants.js')
+const encoding = require('../lib/encoding.js')
+const { decodeBlock } = require('hyperbee2/lib/encoding.js')
 const { replicate, sync } = require('./helpers')
 
 const skip = IS_BARE || !['linux', 'darwin'].includes(os.platform())
@@ -78,9 +80,11 @@ function makeAutobee(store, state, opts = {}) {
   return auto
 }
 
-async function openFixture(t, name, state, opts = {}) {
+async function openFixture(t, name, state, { prepare = null, ...opts } = {}) {
   const dir = await t.tmp()
   await copyFixture(t, name, dir)
+
+  if (prepare) await prepare(dir)
 
   const store = new Corestore(dir, { allowBackup: true })
   const auto = makeAutobee(store, state, opts)
@@ -160,6 +164,41 @@ test(
   }
 )
 
+// the legacy system core of a fixture dir: signed main + local batch session
+async function openLegacySystem(dir) {
+  const store = new Corestore(dir, { allowBackup: true })
+  const local = store.get({ name: 'local' })
+  await local.ready()
+
+  const record = encoding.decodeAutobaseBootRecord(await local.getUserData('autobase/boot'))
+  const encryptionKey = await local.getUserData('autobase/encryption')
+
+  const main = store.get({ key: record.key, encryption: null })
+  await main.ready()
+  await AutobeeEncryption.setSystemEncryption(BASE_KEY, encryptionKey, main)
+
+  const batch = main.session({ name: 'batch', writable: true })
+  await batch.ready()
+
+  return {
+    store,
+    main,
+    batch,
+    systemLength: record.systemLength,
+    async close() {
+      await batch.close()
+      await main.close()
+      await local.close()
+      await store.close()
+    }
+  }
+}
+
+function isLegacyInfo(block) {
+  const { key } = decodeBlock(block).keys[0]
+  return key[0] === 0x00 && key[1] === 0x00
+}
+
 test('migration - c (non-indexer, frozen at 100) migrates', { skip }, async function (t) {
   const state = {}
   const c = await openFixture(t, 'c', state)
@@ -169,6 +208,164 @@ test('migration - c (non-indexer, frozen at 100) migrates', { skip }, async func
   t.is(state.last, 'm98', 'the handler could read the legacy view')
   t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
 })
+
+// a diverged legacy peer's batch session disagrees with the signed core below
+// its boot record, and a fast-forward probe leaves one indexer INFO block there
+test(
+  'migration - c migrates when a fast-forward probe left an indexer INFO block above a diverged batch',
+  { skip },
+  async function (t) {
+    const state = {}
+
+    const aDir = await t.tmp()
+    await copyFixture(t, 'a', aDir)
+
+    // a stands in for the indexers serving the probe. the boot itself runs
+    // offline: the head has to be one c holds
+    const aStore = new Corestore(aDir, { allowBackup: true })
+    t.teardown(() => aStore.close())
+
+    function peer(store) {
+      const s1 = store.replicate(true)
+      const s2 = aStore.replicate(false)
+      s1.pipe(s2).pipe(s1)
+      return () => {
+        s1.destroy()
+        s2.destroy()
+      }
+    }
+
+    let fork = 0
+
+    const c = await openFixture(t, 'c', state, {
+      async prepare(dir) {
+        const sys = await openLegacySystem(dir)
+        const { main, batch, systemLength } = sys
+
+        // regroup c's tail [member, INFO, member, INFO] as [member, member, INFO]
+        fork = main.length
+        t.is(systemLength, fork + 2, 'boot record sits past the first tail INFO')
+        t.ok(!isLegacyInfo(await batch.get(fork)), 'tail starts with a member')
+        t.ok(isLegacyInfo(await batch.get(fork + 1)), 'then an INFO')
+        t.ok(!isLegacyInfo(await batch.get(fork + 2)), 'then a member')
+        t.ok(isLegacyInfo(await batch.get(fork + 3)), 'then an INFO')
+
+        const tail = [await batch.get(fork), await batch.get(fork + 2), await batch.get(fork + 3)]
+        await batch.truncate(fork)
+        await batch.append(tail)
+
+        // the probe fetches the indexers' INFO at fork + 1
+        const unpeer = peer(sys.store)
+
+        try {
+          t.ok(isLegacyInfo(await main.get(fork + 1)), 'probe fetched an indexer INFO')
+        } finally {
+          unpeer()
+        }
+
+        t.ok(main.length >= systemLength, 'main core upgraded past the boot record')
+        t.absent(await main.get(fork, { wait: false }), 'but the block before it was never fetched')
+
+        await sys.close()
+      }
+    })
+
+    t.is(state.systemHead.length, fork, 'booted from the last INFO both sessions share')
+    t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
+    t.is(state.length, C_CONFIRMED)
+    t.is(state.last, 'm98', 'the handler could read the legacy view')
+    t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+  }
+)
+
+// the same probe on a batch that agrees with the indexers: the fetched INFO is
+// a valid head, so booting moves up to it
+test(
+  'migration - c boots from a fetched indexer INFO block when its batch agrees with it',
+  { skip },
+  async function (t) {
+    const state = {}
+
+    const aDir = await t.tmp()
+    await copyFixture(t, 'a', aDir)
+
+    const aStore = new Corestore(aDir, { allowBackup: true })
+    t.teardown(() => aStore.close())
+
+    let fork = 0
+
+    const c = await openFixture(t, 'c', state, {
+      async prepare(dir) {
+        const sys = await openLegacySystem(dir)
+        const { main, batch } = sys
+
+        fork = main.length
+        t.ok(isLegacyInfo(await batch.get(fork + 1)), 'the tail has an INFO at fork + 1')
+
+        const s1 = sys.store.replicate(true)
+        const s2 = aStore.replicate(false)
+        s1.pipe(s2).pipe(s1)
+
+        try {
+          await main.get(fork)
+          t.ok(
+            isLegacyInfo(await main.get(fork + 1)),
+            'fetched the indexer INFO and the block before it'
+          )
+        } finally {
+          s1.destroy()
+          s2.destroy()
+        }
+
+        t.ok(fork + 2 > batch.signedLength, 'it sits past the batch dependency')
+
+        await sys.close()
+      }
+    })
+
+    t.is(state.systemHead.length, fork + 2, 'booted from the fetched INFO')
+    t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
+    t.is(state.length, C_CONFIRMED)
+    t.is(state.last, 'm98', 'the handler could read the legacy view')
+    t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+  }
+)
+
+// legacy addHead drops a replayed node below its head but still flushes the INFO
+test(
+  'migration - c migrates over a legacy INFO block that no member block precedes',
+  { skip },
+  async function (t) {
+    const state = {}
+    let shared = 0
+
+    const c = await openFixture(t, 'c', state, {
+      async prepare(dir) {
+        const sys = await openLegacySystem(dir)
+        const { batch, systemLength } = sys
+
+        // replay c's tail [member, INFO] as [INFO, member, INFO]
+        const member = await batch.get(systemLength)
+        const info = await batch.get(systemLength + 1)
+
+        t.ok(!isLegacyInfo(member), 'tail starts with a member')
+        t.ok(isLegacyInfo(info), 'then an INFO')
+
+        await batch.truncate(systemLength)
+        await batch.append([info, member, info])
+
+        shared = batch.signedLength
+        await sys.close()
+      }
+    })
+
+    t.is(state.systemHead.length, shared, 'booted from the last INFO both sessions share')
+    t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
+    t.is(state.length, C_CONFIRMED)
+    t.is(state.last, 'm98', 'the handler could read the legacy view')
+    t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+  }
+)
 
 test('migration - only the designated legacy view becomes the view', { skip }, async function (t) {
   const state = {}
