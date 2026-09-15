@@ -69,7 +69,15 @@ module.exports = class Autobee extends ReadyResource {
     this.id = null
     this.bootstrap = null
     this._handlers = handlers
-    this.stats = { undos: 0, fastForwards: 0, drains: 0, applies: 0, appends: 0 }
+    this.stats = {
+      undos: 0,
+      fastForwards: 0,
+      drains: 0,
+      applies: 0,
+      appends: 0,
+      writersOpened: 0,
+      writersClosed: 0
+    }
 
     const systemStore = this.store.session()
     this.system = new System(this, systemStore, {
@@ -119,7 +127,6 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewStart = 0
     this._localViewLength = 0
 
-    this._appending = []
     this._draining = null
     this._updating = null
 
@@ -171,6 +178,10 @@ module.exports = class Autobee extends ReadyResource {
     return this.writers ? this.writers.localWriter.isIndexer : false
   }
 
+  get appending() {
+    return this.writers ? this.writers.localWriter.appending : false
+  }
+
   get writable() {
     return this.writers ? this.writers.writable : false
   }
@@ -205,9 +216,13 @@ module.exports = class Autobee extends ReadyResource {
     if (this._acking) this.bumpSoon()
   }
 
+  isLocalTrusted() {
+    return this.trusted.isTrusted(this.local.key, this._workingView.view)
+  }
+
   async _updateAcking() {
     if (this._interrupting) return
-    this.setAcking(await this.trusted.isTrusted(this.local.key, this._workingView.view))
+    this.setAcking(await this.isLocalTrusted())
   }
 
   // network free: only a migration needs peers, so ready() awaits the full
@@ -1027,24 +1042,39 @@ module.exports = class Autobee extends ReadyResource {
 
     const anchor = { key: core.key, length: core.length }
 
+    this.emit('anchor', anchor, { key, length })
+
     await core.close()
 
     return anchor
   }
 
+  // apply in linearizer order so the catchup never undoes. weights are fixed,
+  // legacy nodes carry no witness
   async _bumpMigratedWriters() {
     const opened = new Set()
     let updated = false
 
     for (const batch of this._catchupMigratedNodes) {
-      await this._processBatch(batch)
-      updated = true
       for (const node of batch) {
         if (node.from) opened.add(node.from)
       }
     }
 
-    for (const core of opened) await core.close()
+    try {
+      for (const batch of this._catchupMigratedNodes) {
+        const weight = await resolveWeight(this, batch[0])
+        for (const node of batch) node.weight = weight
+      }
+
+      for (const batch of topo.linearize(this._catchupMigratedNodes)) {
+        await this._processBatch(batch)
+        updated = true
+      }
+    } finally {
+      for (const core of opened) await core.close()
+    }
+
     return updated
   }
 
@@ -1145,13 +1175,29 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.writers.writable) return false
 
     if (this.writers.localWriter.pending !== null) return false
-
     if ((await this._flushesBehind()) < this._ackThreshold) return false
+    if (await this._allHeadsTrusted()) return false
 
     const links = this.system.getLinks(this.local.key)
     const t = Math.max(this._now(), this.system.timestamp)
 
     this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null)
+    return true
+  }
+
+  async _allHeadsTrusted() {
+    const heads = this.system.heads.slice()
+    if (!heads.length) return false
+
+    const promises = []
+    for (const head of heads) {
+      promises.push(this.trusted.isTrusted(head.key, this._workingView.view))
+    }
+
+    for (const isTrusted of await Promise.all(promises)) {
+      if (!isTrusted) return false
+    }
+
     return true
   }
 

@@ -9,6 +9,8 @@ const os = IS_BARE ? null : require('os')
 
 const Autobee = require('../index.js')
 const { AUTOBEE_VERSION, LEGACY_AUTOBASE_VERSION } = require('../lib/constants.js')
+const encoding = require('../lib/encoding.js')
+const { decodeBlock } = require('hyperbee2/lib/encoding.js')
 const { replicate, sync } = require('./helpers')
 
 const skip = IS_BARE || !['linux', 'darwin'].includes(os.platform())
@@ -78,9 +80,11 @@ function makeAutobee(store, state, { key = BASE_KEY, ...opts } = {}) {
   return auto
 }
 
-async function openFixture(t, name, state, opts = {}) {
+async function openFixture(t, name, state, { prepare = null, ...opts } = {}) {
   const dir = await t.tmp()
   await copyFixture(t, name, dir)
+
+  if (prepare) await prepare(dir)
 
   const store = new Corestore(dir, { allowBackup: true })
   const auto = makeAutobee(store, state, opts)
@@ -160,6 +164,41 @@ test(
   }
 )
 
+// the legacy system core of a fixture dir: signed main + local batch session
+async function openLegacySystem(dir) {
+  const store = new Corestore(dir, { allowBackup: true })
+  const local = store.get({ name: 'local' })
+  await local.ready()
+
+  const record = encoding.decodeAutobaseBootRecord(await local.getUserData('autobase/boot'))
+  const encryptionKey = await local.getUserData('autobase/encryption')
+
+  const main = store.get({ key: record.key, encryption: null })
+  await main.ready()
+  await AutobeeEncryption.setSystemEncryption(BASE_KEY, encryptionKey, main)
+
+  const batch = main.session({ name: 'batch', writable: true })
+  await batch.ready()
+
+  return {
+    store,
+    main,
+    batch,
+    systemLength: record.systemLength,
+    async close() {
+      await batch.close()
+      await main.close()
+      await local.close()
+      await store.close()
+    }
+  }
+}
+
+function isLegacyInfo(block) {
+  const { key } = decodeBlock(block).keys[0]
+  return key[0] === 0x00 && key[1] === 0x00
+}
+
 test('migration - c (non-indexer, frozen at 100) migrates', { skip }, async function (t) {
   const state = {}
   const c = await openFixture(t, 'c', state)
@@ -191,6 +230,164 @@ test('migration - a keyless open of legacy storage still migrates', { skip }, as
     t.absent(await auto.local.getUserData('autobase/boot'), `${name}: legacy boot record cleared`)
   }
 })
+
+// a diverged legacy peer's batch session disagrees with the signed core below
+// its boot record, and a fast-forward probe leaves one indexer INFO block there
+test(
+  'migration - c migrates when a fast-forward probe left an indexer INFO block above a diverged batch',
+  { skip },
+  async function (t) {
+    const state = {}
+
+    const aDir = await t.tmp()
+    await copyFixture(t, 'a', aDir)
+
+    // a stands in for the indexers serving the probe. the boot itself runs
+    // offline: the head has to be one c holds
+    const aStore = new Corestore(aDir, { allowBackup: true })
+    t.teardown(() => aStore.close())
+
+    function peer(store) {
+      const s1 = store.replicate(true)
+      const s2 = aStore.replicate(false)
+      s1.pipe(s2).pipe(s1)
+      return () => {
+        s1.destroy()
+        s2.destroy()
+      }
+    }
+
+    let fork = 0
+
+    const c = await openFixture(t, 'c', state, {
+      async prepare(dir) {
+        const sys = await openLegacySystem(dir)
+        const { main, batch, systemLength } = sys
+
+        // regroup c's tail [member, INFO, member, INFO] as [member, member, INFO]
+        fork = main.length
+        t.is(systemLength, fork + 2, 'boot record sits past the first tail INFO')
+        t.ok(!isLegacyInfo(await batch.get(fork)), 'tail starts with a member')
+        t.ok(isLegacyInfo(await batch.get(fork + 1)), 'then an INFO')
+        t.ok(!isLegacyInfo(await batch.get(fork + 2)), 'then a member')
+        t.ok(isLegacyInfo(await batch.get(fork + 3)), 'then an INFO')
+
+        const tail = [await batch.get(fork), await batch.get(fork + 2), await batch.get(fork + 3)]
+        await batch.truncate(fork)
+        await batch.append(tail)
+
+        // the probe fetches the indexers' INFO at fork + 1
+        const unpeer = peer(sys.store)
+
+        try {
+          t.ok(isLegacyInfo(await main.get(fork + 1)), 'probe fetched an indexer INFO')
+        } finally {
+          unpeer()
+        }
+
+        t.ok(main.length >= systemLength, 'main core upgraded past the boot record')
+        t.absent(await main.get(fork, { wait: false }), 'but the block before it was never fetched')
+
+        await sys.close()
+      }
+    })
+
+    t.is(state.systemHead.length, fork, 'booted from the last INFO both sessions share')
+    t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
+    t.is(state.length, C_CONFIRMED)
+    t.is(state.last, 'm98', 'the handler could read the legacy view')
+    t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+  }
+)
+
+// the same probe on a batch that agrees with the indexers: the fetched INFO is
+// a valid head, so booting moves up to it
+test(
+  'migration - c boots from a fetched indexer INFO block when its batch agrees with it',
+  { skip },
+  async function (t) {
+    const state = {}
+
+    const aDir = await t.tmp()
+    await copyFixture(t, 'a', aDir)
+
+    const aStore = new Corestore(aDir, { allowBackup: true })
+    t.teardown(() => aStore.close())
+
+    let fork = 0
+
+    const c = await openFixture(t, 'c', state, {
+      async prepare(dir) {
+        const sys = await openLegacySystem(dir)
+        const { main, batch } = sys
+
+        fork = main.length
+        t.ok(isLegacyInfo(await batch.get(fork + 1)), 'the tail has an INFO at fork + 1')
+
+        const s1 = sys.store.replicate(true)
+        const s2 = aStore.replicate(false)
+        s1.pipe(s2).pipe(s1)
+
+        try {
+          await main.get(fork)
+          t.ok(
+            isLegacyInfo(await main.get(fork + 1)),
+            'fetched the indexer INFO and the block before it'
+          )
+        } finally {
+          s1.destroy()
+          s2.destroy()
+        }
+
+        t.ok(fork + 2 > batch.signedLength, 'it sits past the batch dependency')
+
+        await sys.close()
+      }
+    })
+
+    t.is(state.systemHead.length, fork + 2, 'booted from the fetched INFO')
+    t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
+    t.is(state.length, C_CONFIRMED)
+    t.is(state.last, 'm98', 'the handler could read the legacy view')
+    t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+  }
+)
+
+// legacy addHead drops a replayed node below its head but still flushes the INFO
+test(
+  'migration - c migrates over a legacy INFO block that no member block precedes',
+  { skip },
+  async function (t) {
+    const state = {}
+    let shared = 0
+
+    const c = await openFixture(t, 'c', state, {
+      async prepare(dir) {
+        const sys = await openLegacySystem(dir)
+        const { batch, systemLength } = sys
+
+        // replay c's tail [member, INFO] as [INFO, member, INFO]
+        const member = await batch.get(systemLength)
+        const info = await batch.get(systemLength + 1)
+
+        t.ok(!isLegacyInfo(member), 'tail starts with a member')
+        t.ok(isLegacyInfo(info), 'then an INFO')
+
+        await batch.truncate(systemLength)
+        await batch.append([info, member, info])
+
+        shared = batch.signedLength
+        await sys.close()
+      }
+    })
+
+    t.is(state.systemHead.length, shared, 'booted from the last INFO both sessions share')
+    t.is(state.calls, 1, 'migrate handler ran once, on the head we booted')
+    t.is(state.length, C_CONFIRMED)
+    t.is(state.last, 'm98', 'the handler could read the legacy view')
+    t.is(await messageAt(c, C_CONFIRMED - 1), 'm98')
+  }
+)
 
 test('migration - only the designated legacy view becomes the view', { skip }, async function (t) {
   const state = {}
@@ -650,4 +847,134 @@ test('migration - legacy weights survive a v4 flush', { skip }, async function (
   const writer = a.writers.active.get(b4a.toString(after.b.key, 'hex'))
   if (writer) t.ok(writer.isIndexer, 'a migrated indexer still reads as an indexer')
   else t.pass('b has no open session in this fixture')
+})
+
+test('migration - catchup is applied in linearizer order, not legacy INFO order', function (t) {
+  const topo = require('../lib/topo.js')
+
+  const low = b4a.alloc(32).fill(1)
+  const mid = b4a.alloc(32).fill(2)
+  const high = b4a.alloc(32).fill(3)
+
+  const node = (key, length, links = []) => ({
+    key,
+    length,
+    links,
+    weight: 1,
+    timestamp: 0,
+    witness: null
+  })
+
+  // low:1 links high:1 and outranks mid:1, so high:1 is pulled ahead of mid:1
+  const batches = [
+    [node(high, 1)],
+    [node(mid, 1)],
+    [node(low, 1, [{ key: high, length: 1 }])],
+    [node(low, 2, [{ key: mid, length: 1 }])]
+  ]
+
+  const order = topo.linearize(batches).map((b) => b[0].key[0] + ':' + b[0].length)
+
+  t.alike(order, ['3:1', '1:1', '2:1', '1:2'], 'causal past is pulled ahead of outranked heads')
+})
+
+test('migration - linearized catchup never rebases on itself', function (t) {
+  const topo = require('../lib/topo.js')
+
+  // eight writers with random link lag
+  let seed = 7
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff
+
+  const W = 8
+  const keys = []
+  for (let i = 0; i < W; i++) keys.push(b4a.alloc(32).fill(i + 1))
+
+  const heads = new Array(W).fill(0)
+  const seen = keys.map(() => new Array(W).fill(0))
+  const batches = []
+
+  for (let r = 0; r < 40; r++) {
+    for (let i = 0; i < W; i++) {
+      const links = []
+      for (let j = 0; j < W; j++) {
+        if (j === i) continue
+        if (rnd() > 0.5) seen[i][j] = heads[j]
+        if (seen[i][j] > 0) links.push({ key: keys[j], length: seen[i][j] })
+      }
+      heads[i]++
+      batches.push([
+        { key: keys[i], length: heads[i], links, weight: 1, timestamp: 0, witness: null }
+      ])
+    }
+  }
+
+  const order = topo.linearize(batches)
+  t.is(order.length, batches.length, 'every batch is handed out once')
+
+  // every prefix must be stable
+  let undos = 0
+  for (let i = 1; i < order.length; i++) {
+    const again = topo.linearize(order.slice(0, i + 1))
+    for (let j = 0; j <= i; j++) {
+      if (again[j] !== order[j]) {
+        undos++
+        break
+      }
+    }
+  }
+
+  t.is(undos, 0, 'no prefix is reordered by a later batch')
+})
+
+// legacy batch nodes link their predecessor, a link is not a batch start
+test('migration - a legacy batch inflates whole when its nodes link their predecessor', async function (t) {
+  const topo = require('../lib/topo.js')
+  const encoding = require('../lib/encoding.js')
+
+  const store = new Corestore(await t.tmp())
+  const core = store.get({ name: 'legacy-writer' })
+  await core.ready()
+  t.teardown(() => store.close())
+
+  const other = b4a.alloc(32).fill(9)
+
+  const legacy = (heads, batch, value) =>
+    encoding.encodeOplog({
+      version: 2,
+      node: { heads, batch, value: b4a.from(value) },
+      checkpoint: null,
+      digest: null,
+      optimistic: false,
+      trace: null
+    })
+
+  // 2-4 is one batch, remaining count 3,2,1
+  await core.append([
+    legacy([{ key: other, length: 1 }], 1, 'a'),
+    legacy([{ key: other, length: 2 }], 3, 'b'),
+    legacy([{ key: core.key, length: 2 }], 2, 'c'),
+    legacy([{ key: core.key, length: 3 }], 1, 'd')
+  ])
+
+  const { batch } = await topo.getOplogBatch(null, core, 4, 1, 0)
+
+  t.alike(
+    batch.map((n) => b4a.toString(n.value)),
+    ['b', 'c', 'd'],
+    'the whole batch, not just the head'
+  )
+  t.is(batch[0].length, 2, 'starts at the first node of the batch')
+  t.alike(batch[0].links, [{ key: other, length: 2 }], 'the real links sit on the start node')
+
+  // the block before the batch may be missing after a legacy ff
+  await core.clear(0)
+  t.is(await core.has(0), false, 'the block before the batch is gone')
+
+  const again = await topo.getOplogBatch(null, core, 4, 1, 0)
+
+  t.alike(
+    again.batch.map((n) => b4a.toString(n.value)),
+    ['b', 'c', 'd'],
+    'the batch still inflates whole without the block before it'
+  )
 })

@@ -81,3 +81,34 @@ test('anchor - optimistic node linking an anchor sorts after the anchored node',
     'resolve op sorted after the node its anchor pins'
   )
 })
+
+test('anchor - createAnchor emits an anchor event with the anchored node', async function (t) {
+  t.plan(6)
+
+  async function apply(nodes, view, host) {
+    for (const node of nodes) {
+      const data = decode(node.value)
+      if (!data.anchor) continue
+
+      const anchor = await host.createAnchor(node.key, node.length)
+      t.alike(anchor, emitted.anchor, 'event carries the returned anchor')
+    }
+  }
+
+  const a = await create(t, null, { apply })
+
+  const emitted = { anchor: null }
+
+  a.on('anchor', function (anchor, anchored) {
+    emitted.anchor = anchor
+    t.ok(b4a.isBuffer(anchor.key), 'anchor has a key')
+    t.is(anchor.length, 1, 'anchor core has one block')
+    t.ok(b4a.equals(anchored.key, a.local.key), 'anchored node is on the local writer')
+    t.is(anchored.length, 2, 'anchored node is the anchor op')
+    t.absent(b4a.equals(anchored.key, anchor.key), 'anchored node is not the anchor core')
+  })
+
+  await a.append(encode({ setup: true }))
+  await a.append(encode({ anchor: true }))
+  await a.updated()
+})

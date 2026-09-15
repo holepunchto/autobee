@@ -24,7 +24,10 @@ test('acking - untrusted writer never acks', async function (t) {
 
 test('acking - appends a null node once we fall behind', async function (t) {
   const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key, { ackThreshold: 4 })
+  const auto2 = await create(t, auto1.key, {
+    ackThreshold: 4,
+    isTrusted: (key) => !b4a.equals(key, auto1.local.key)
+  })
 
   await auto1.append(encode({ addWriter: auto2.local.id }))
   await replicateAndSync(auto1, auto2)
@@ -60,7 +63,10 @@ test('acking - appends a null node once we fall behind', async function (t) {
 
 test('acking - stops acking when toggled off', async function (t) {
   const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key, { ackThreshold: 2 })
+  const auto2 = await create(t, auto1.key, {
+    ackThreshold: 2,
+    isTrusted: (key) => !b4a.equals(key, auto1.local.key)
+  })
 
   await auto1.append(encode({ addWriter: auto2.local.id }))
   await replicateAndSync(auto1, auto2)
@@ -84,6 +90,33 @@ test('acking - stops acking when toggled off', async function (t) {
   }
 
   t.is(auto2.local.length, acked, 'no acks after disabling')
+})
+
+test('acking - never acks when every head is trusted', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key, { ackThreshold: 1 })
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ msg: 'hello' }))
+  await replicateAndSync(auto1, auto2)
+
+  t.ok(auto2._acking, 'acking is enabled')
+
+  const length = auto2.local.length
+  const flushes = auto2.flushes
+
+  for (let i = 0; i < 10; i++) {
+    await auto1.append(encode({ msg: 'msg' + i }))
+    await replicateAndSync(auto1, auto2)
+  }
+
+  t.ok(auto2.flushes - flushes >= 1, 'fell behind the threshold')
+  t.is(auto2.local.length, length, 'no acks appended')
+
+  const oplog = await auto2.writers.getLatestLocalOplog()
+  t.ok(oplog.views.flushes < auto2.flushes, 'local views are stale')
 })
 
 test('acking - non writer never acks', async function (t) {
