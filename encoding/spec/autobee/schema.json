@@ -1032,6 +1032,16 @@
           "name": "hash",
           "type": "fixed8",
           "version": 1
+        },
+        {
+          "name": "weight",
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "drift",
+          "type": "uint",
+          "version": 1
         }
       ]
     }

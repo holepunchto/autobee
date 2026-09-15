@@ -215,7 +215,6 @@ const OplogMessageV1 = {
     throw new Error('Encoding not supported')
   },
   decode(state) {
-    c.uint.decode(state) // version
     const maxSupportedVersion = c.uint.decode(state)
 
     const flags = c.uint.decode(state)
@@ -246,7 +245,6 @@ const OplogMessageV0 = {
     throw new Error('Encoding not supported')
   },
   decode(state) {
-    c.uint.decode(state) // version
     const flags = c.uint.decode(state)
 
     const isCheckpointer = (flags & 1) !== 0
@@ -329,7 +327,8 @@ function oplogLegacyMap(m) {
     witness: null,
     approvals: null,
     optimistic: m.optimistic,
-    value: m.value
+    value: m.value,
+    drift: 0
   }
 }
 
