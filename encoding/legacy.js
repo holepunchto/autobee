@@ -276,7 +276,6 @@ const SystemWriterV0 = {
     throw new Error('Encoding not supported')
   },
   decode(state) {
-    state.start-- // Undo the hack to nest this in a versioned struct w/o a version
     const flags = c.uint.decode(state)
 
     return {

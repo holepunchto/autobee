@@ -108,12 +108,13 @@ const encoding4 = {
     if (m.recoveries) c.uint.encode(state, m.recoveries)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const r0 = c.fixed32.decode(state)
     const r1 = c.uint.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      version: 0,
+      version: v,
       key: r0,
       systemLength: r1,
       indexersUpdated: (flags & 1) !== 0,
@@ -158,18 +159,18 @@ const encoding5 = {
     }
   },
   decode(state) {
+    const start = state.start
     const v = c.uint.decode(state)
+    state.start = start
     switch (v) {
       case 0: {
         const decoded = encoding3.decode(state)
-        decoded.version = v
         return decoded
       }
       case 1:
       case 2:
       case 3: {
         const decoded = encoding4.decode(state)
-        decoded.version = v
         return decoded
       }
       default:
@@ -376,11 +377,12 @@ const encoding14 = {
     if (m.trace) encoding14_4.encode(state, m.trace)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const r0 = encoding9.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      version: 0,
+      version: v,
       node: r0,
       checkpoint: (flags & 1) !== 0 ? encoding14_1.decode(state) : null,
       digest: (flags & 2) !== 0 ? encoding14_2.decode(state) : null,
@@ -410,6 +412,7 @@ const encoding15 = {
     encoding1.encode(state, m.views)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
     const r1 = encoding15_1.decode(state)
     const r2 = encoding1.decode(state)
@@ -417,7 +420,7 @@ const encoding15 = {
     const r4 = encoding1.decode(state)
 
     return {
-      version: 0,
+      version: v,
       members: r0,
       pendingIndexers: r1,
       indexers: r2,
@@ -457,6 +460,7 @@ const encoding16 = {
     if (m.entropy) c.fixed32.encode(state, m.entropy)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
     const r1 = encoding16_1.decode(state)
     const r2 = encoding1.decode(state)
@@ -466,7 +470,7 @@ const encoding16 = {
     const flags = c.uint.decode(state)
 
     return {
-      version: 0,
+      version: v,
       members: r0,
       pendingIndexers: r1,
       indexers: r2,
@@ -510,6 +514,7 @@ const encoding18 = {
     if (m.hash) c.fixed8.encode(state, m.hash)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
     const r1 = c.uint.decode(state)
     const r2 = encoding22.decode(state)
@@ -517,7 +522,7 @@ const encoding18 = {
     const flags = c.uint.decode(state)
 
     return {
-      version: 0,
+      version: v,
       timestamp: r0,
       flushes: r1,
       view: r2,
@@ -568,23 +573,22 @@ const encoding19 = {
     }
   },
   decode(state) {
+    const start = state.start
     const v = c.uint.decode(state)
+    state.start = start
     switch (v) {
       case 0:
       case 1: {
         const decoded = encoding15.decode(state)
-        decoded.version = v
         const map = external0.infoLegacyMap
         return map(decoded)
       }
       case 2: {
         const decoded = encoding16.decode(state)
-        decoded.version = v
         return decoded
       }
       case 3: {
         const decoded = encoding18.decode(state)
-        decoded.version = v
         return decoded
       }
       default:
@@ -621,10 +625,11 @@ const encoding20 = {
     if (m.timestamp) c.int.encode(state, m.timestamp)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      version: 0,
+      version: v,
       isRemoved: (flags & 1) !== 0,
       isOplog: (flags & 2) !== 0,
       weight: c.uint.decode(state),
@@ -681,25 +686,24 @@ const encoding21 = {
     }
   },
   decode(state) {
+    const start = state.start
     const v = c.uint.decode(state)
+    state.start = start
     switch (v) {
       case 0:
       case 1:
       case 2:
       case 3: {
         const decoded = encoding17.decode(state)
-        decoded.version = v
         const map = external0.memberLegacyMap
         return map(decoded)
       }
       case 4: {
         const decoded = encoding20.decode(state)
-        decoded.version = v
         return decoded
       }
       case 5: {
         const decoded = encoding34.decode(state)
-        decoded.version = v
         return decoded
       }
       default:
@@ -949,12 +953,13 @@ const encoding29 = {
     if (m.trusted) encoding29_8.encode(state, m.trusted)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
     const r1 = encoding29_1.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      version: 0,
+      version: v,
       timestamp: r0,
       links: r1,
       batch: (flags & 1) !== 0 ? encoding24.decode(state) : null,
@@ -1017,32 +1022,29 @@ const encoding30 = {
     }
   },
   decode(state) {
+    const start = state.start
     const v = c.uint.decode(state)
+    state.start = start
     switch (v) {
       case 0: {
         const decoded = encoding12.decode(state)
-        decoded.version = v
         return decoded
       }
       case 1: {
         const decoded = encoding13.decode(state)
-        decoded.version = v
         return decoded
       }
       case 2: {
         const decoded = encoding14.decode(state)
-        decoded.version = v
         return decoded
       }
       case 3: {
         const decoded = encoding29.decode(state)
-        decoded.version = v
         const map = external0.oplogLegacyMap
         return map(decoded)
       }
       case 4: {
         const decoded = encoding37.decode(state)
-        decoded.version = v
         return decoded
       }
       default:
@@ -1152,10 +1154,11 @@ const encoding34 = {
     c.uint.encode(state, m.timestamp)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      version: 0,
+      version: v,
       isRemoved: (flags & 1) !== 0,
       isOplog: (flags & 2) !== 0,
       isGenesis: (flags & 4) !== 0,
@@ -1261,12 +1264,13 @@ const encoding37 = {
     if (m.hash) c.fixed8.encode(state, m.hash)
   },
   decode(state) {
+    const v = c.uint.decode(state)
     const r0 = c.uint.decode(state)
     const r1 = encoding37_1.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      version: 0,
+      version: v,
       timestamp: r0,
       links: r1,
       batch: (flags & 1) !== 0 ? encoding24.decode(state) : null,
