@@ -93,7 +93,6 @@
     {
       "name": "boot-record",
       "namespace": "autobase-compat",
-      "framed": false,
       "versions": [
         {
           "type": "@autobase-compat/boot-record-v0",
@@ -446,7 +445,6 @@
     {
       "name": "system-info",
       "namespace": "autobee",
-      "framed": false,
       "versions": [
         {
           "type": "@autobase-compat/info-v1",
@@ -530,7 +528,6 @@
     {
       "name": "system-writer",
       "namespace": "autobee",
-      "framed": false,
       "versions": [
         {
           "type": "@autobase-compat/member",
@@ -781,7 +778,6 @@
     {
       "name": "oplog",
       "namespace": "autobee",
-      "framed": false,
       "versions": [
         {
           "type": "@autobase-compat/oplog-message-v0",

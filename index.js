@@ -127,6 +127,7 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewStart = 0
     this._localViewLength = 0
 
+    this._appending = []
     this._draining = null
     this._updating = null
 
@@ -176,10 +177,6 @@ module.exports = class Autobee extends ReadyResource {
 
   get isIndexer() {
     return this.writers ? this.writers.localWriter.isIndexer : false
-  }
-
-  get appending() {
-    return this.writers ? this.writers.localWriter.appending : false
   }
 
   get writable() {
