@@ -402,6 +402,10 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _teardown() {
+    // Ensure drain processsing has completed
+    if (this._updating) await this._updating
+    if (this._draining) await this._draining
+
     try {
       await ApplyView.close(this.view, this)
     } catch (err) {
@@ -427,9 +431,6 @@ module.exports = class Autobee extends ReadyResource {
 
     // rugpull the rest
     await this.store.close()
-
-    if (this._updating) await this._updating
-    if (this._draining) await this._draining
 
     // let in-flight writer adds finish
     try {
