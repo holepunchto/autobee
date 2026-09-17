@@ -1034,7 +1034,7 @@
           "version": 1
         },
         {
-          "name": "weight",
+          "name": "weightHint",
           "type": "uint",
           "version": 1
         },

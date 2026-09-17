@@ -1224,7 +1224,7 @@ const encoding37 = {
       (m.optimistic ? 32 : 0) |
       (m.value ? 64 : 0) |
       (m.hash ? 128 : 0) |
-      (m.weight ? 256 : 0) |
+      (m.weightHint ? 256 : 0) |
       (m.drift ? 512 : 0)
 
     c.uint.preencode(state, m.timestamp)
@@ -1238,7 +1238,7 @@ const encoding37 = {
     if (m.approvals) encoding37_6.preencode(state, m.approvals)
     if (m.value) c.buffer.preencode(state, m.value)
     if (m.hash) c.fixed8.preencode(state, m.hash)
-    if (m.weight) c.uint.preencode(state, m.weight)
+    if (m.weightHint) c.uint.preencode(state, m.weightHint)
     if (m.drift) c.uint.preencode(state, m.drift)
   },
   encode(state, m) {
@@ -1251,7 +1251,7 @@ const encoding37 = {
       (m.optimistic ? 32 : 0) |
       (m.value ? 64 : 0) |
       (m.hash ? 128 : 0) |
-      (m.weight ? 256 : 0) |
+      (m.weightHint ? 256 : 0) |
       (m.drift ? 512 : 0)
 
     c.uint.encode(state, m.timestamp)
@@ -1265,7 +1265,7 @@ const encoding37 = {
     if (m.approvals) encoding37_6.encode(state, m.approvals)
     if (m.value) c.buffer.encode(state, m.value)
     if (m.hash) c.fixed8.encode(state, m.hash)
-    if (m.weight) c.uint.encode(state, m.weight)
+    if (m.weightHint) c.uint.encode(state, m.weightHint)
     if (m.drift) c.uint.encode(state, m.drift)
   },
   decode(state) {
@@ -1285,7 +1285,7 @@ const encoding37 = {
       optimistic: (flags & 32) !== 0,
       value: (flags & 64) !== 0 ? c.buffer.decode(state) : null,
       hash: (flags & 128) !== 0 ? c.fixed8.decode(state) : null,
-      weight: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
+      weightHint: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
       drift: (flags & 512) !== 0 ? c.uint.decode(state) : 0
     }
   }

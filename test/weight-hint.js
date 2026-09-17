@@ -5,7 +5,7 @@ const encoding = require('../lib/encoding.js')
 async function hints(auto, from = 0) {
   const out = []
   for (let seq = from; seq < auto.local.length; seq++) {
-    out.push(encoding.decodeOplog(await auto.local.get(seq)).weight)
+    out.push(encoding.decodeOplog(await auto.local.get(seq)).weightHint)
   }
   return out
 }
@@ -84,7 +84,7 @@ test('weight hint - absent on nodes that predate the field', async function (t) 
   await a.updated()
 
   const oplog = encoding.decodeOplog(await a.local.get(0))
-  delete oplog.weight
+  delete oplog.weightHint
 
-  t.is(encoding.decodeOplog(encoding.encodeOplog(oplog)).weight, 0, 'decodes as zero')
+  t.is(encoding.decodeOplog(encoding.encodeOplog(oplog)).weightHint, 0, 'decodes as zero')
 })

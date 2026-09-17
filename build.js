@@ -500,7 +500,7 @@ auto.register({
       type: 'fixed8'
     },
     {
-      name: 'weight',
+      name: 'weightHint',
       type: 'uint'
     },
     {
