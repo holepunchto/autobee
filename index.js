@@ -18,7 +18,7 @@ const FastForward = require('./lib/fast-forward.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
-const { ActiveWriters } = require('./lib/writers.js')
+const { ActiveWriters, isUserOp } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
@@ -1309,8 +1309,7 @@ module.exports = class Autobee extends ReadyResource {
         }
       }
 
-      // compat: autobase nodes may be null (legacy null decodes to 0-length buffer)
-      if (node.value && node.value.length) userBatch.push(node)
+      if (isUserOp(node)) userBatch.push(node)
     }
 
     if (this._hasApply && (await this.system.canApply(batch[0].key, optimistic))) {
