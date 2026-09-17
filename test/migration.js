@@ -956,3 +956,75 @@ test('migration - a legacy batch inflates whole when its nodes link their predec
     'the batch still inflates whole without the block before it'
   )
 })
+
+// a boot record does not imply the system core holds any blocks locally: a
+// peer that joined by key and appended optimistically before it ever synced
+// drains with nothing indexed, so its record names the derived system key at
+// systemLength 0 over a zero length core
+test(
+  'migration - a peer whose boot record names a system core it holds no blocks of',
+  { skip },
+  async function (t) {
+    const fixture = path.join(
+      __dirname,
+      'fixtures/migration/autobase-no-system-blocks-v7.28.1-linux'
+    )
+    const meta = JSON.parse(await fs.readFile(path.join(fixture, 'meta.json')))
+    const bootstrap = b4a.from(meta.bootstrap, 'hex')
+
+    t.is(meta.empty.systemLength, 0, 'the fixture boot record is at systemLength 0')
+    t.is(meta.empty.local, 0, 'and the core it names holds no blocks')
+
+    function openPeer(dir, state) {
+      const store = new Corestore(dir, { allowBackup: true })
+
+      const auto = new Autobee(store, bootstrap, {
+        apply,
+        migrate: migrateHandler(store, state, bootstrap),
+        legacyViews: [LEGACY_VIEW_NAME],
+        encrypted: true,
+        encryptionKey: SECRET_KEY
+      })
+      t.teardown(() => auto.close())
+
+      return auto
+    }
+
+    const eDir = await t.tmp()
+    await fs.cp(path.join(fixture, 'e'), eDir, { recursive: true })
+
+    const eState = {}
+    const e = openPeer(eDir, eState)
+
+    await e.ready()
+    await e.flush()
+
+    t.absent(eState.calls, 'there was no legacy head to migrate')
+    t.is(e.system.flushes, 0, 'booted on an empty system rather than asserting')
+    t.absent(e.system.view.key, 'and adopted no legacy view')
+
+    // and it is a working base - a migrates its own legacy storage and e
+    // catches up from it
+    const aDir = await t.tmp()
+    await fs.cp(path.join(fixture, 'a'), aDir, { recursive: true })
+
+    const aState = {}
+    const a = openPeer(aDir, aState)
+
+    await a.ready()
+    await a.flush()
+
+    t.is(aState.calls, 1, 'a migrated its legacy storage')
+
+    const done = replicate(a, e)
+
+    t.ok(await e.moveTo(localHead(a)), 'e fast-forwarded onto the migrated head')
+    await sync(a, e)
+
+    for (let i = 0; i < meta.viewLength; i++) {
+      t.is(await messageAt(e, i), meta.messages[i], `message ${i} matches`)
+    }
+
+    await done()
+  }
+)
