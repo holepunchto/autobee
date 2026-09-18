@@ -178,6 +178,34 @@ Override acking, which is otherwise driven by `isTrusted`, see Acking. `options.
 
 Returns the current system and view core positions. Used for replication coordination.
 
+#### `nodes = await db.replay()`
+
+The whole oplog in linearized order, oldest first. The nodes are the same objects `apply` receives.
+
+Nodes that cannot be read from local storage are returned as `null` rather than dropped, so you can tell an incomplete replay from a short one. A peer that has fast-forwarded past its oldest history returns a suffix of the linearization with `null` markers at the front.
+
+This costs one serial storage read per flush in the history, so it is a debugging and testing aid, not something to call on a hot path. Two peers that have applied the same nodes must return identical output.
+
+#### `nodes = await db.replayLast(n, [options])`
+
+The last `n` nodes of `replay()`, without rewinding the whole history to get there.
+
+```js
+for (const node of await db.replayLast(10)) {
+  console.log(node.key.toString('hex'), node.length, node.value)
+}
+```
+
+`options.filter` selects which nodes count towards `n`. It defaults to `Autobee.isUserOp`, so acks are skipped and the walk keeps rewinding until it has found `n` real ops. Pass `Autobee.isAnyOp` (or `null`) for everything.
+
+```js
+await db.replayLast(10, { filter: Autobee.isAnyOp })
+```
+
+A custom filter is never called with a `null` marker - those are always kept, and count towards `n`. A history with no matching nodes costs a full `replay()`, since there is no way to know that without looking.
+
+Note that `node.core` is already closed by the time you get it. Use `db.openCore(node.key)` to read blocks off a writer.
+
 #### `Autobee.isAutobee(val)`
 
 Returns `true` if `val` is an Autobee instance.
@@ -326,6 +354,14 @@ Encode a value into an Autobee block with optional metadata.
 #### `value = Autobee.decodeValue(buf, [opts])`
 
 Decode an Autobee block back to its value.
+
+#### `Autobee.isUserOp(node)`
+
+`true` if `node` carries an op for `apply`. Acks carry no value, so they are not user ops. The default `filter` for `db.replayLast`.
+
+#### `Autobee.isAnyOp(node)`
+
+Always `true`. Pass as `db.replayLast`'s `filter` to include acks.
 
 #### `Autobee.GENESIS`
 
