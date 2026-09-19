@@ -1216,9 +1216,10 @@ module.exports = class Autobee extends ReadyResource {
     if (await this._allHeadsTrusted()) return false
 
     const links = this.system.getLinks(this.local.key)
-    const t = Math.max(this._now(), this.system.timestamp)
+    const now = this._now()
+    const t = Math.max(now, this.system.timestamp)
 
-    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null)
+    this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null, null, null, t - now)
     return true
   }
 
@@ -1444,8 +1445,10 @@ module.exports = class Autobee extends ReadyResource {
     const links = this.system.getLinks(this.local.key)
     const hash = this.system.hash
 
-    // never stamp before anything we link
-    const t = Math.max(this._now(), this.system.timestamp)
+    // never stamp before anything we link, but record how far our clock lagged
+    const now = this._now()
+    const t = Math.max(now, this.system.timestamp)
+    const drift = t - now
     const batch = []
 
     const rec = await this.system.get(this.local.key)
@@ -1471,7 +1474,8 @@ module.exports = class Autobee extends ReadyResource {
         optimistic,
         i === 0 ? witness : null,
         i === 0 ? approvals : null,
-        i === 0 ? hash : null
+        i === 0 ? hash : null,
+        drift
       )
       batch.push(node)
     }
