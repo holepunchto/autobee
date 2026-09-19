@@ -203,7 +203,7 @@ test('ff onto a trusted head keeps the untrusted tip pending', async function (t
 test('boot from a head ignores trust', async function (t) {
   const auto1 = await create(t)
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const auto2 = await create(t, auto1.key, {
     isTrusted: () => false,
@@ -224,11 +224,11 @@ test('boot from a head ignores trust', async function (t) {
 test('boot from a stale head searches for the latest', async function (t) {
   const auto1 = await create(t)
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const stale = { key: auto1.local.key, length: 4 }
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'b' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'b' + i }))
 
   const block = await auto1.local.get(auto1.local.length - 1)
   const { views } = encoding.decodeOplog(block)
@@ -250,7 +250,7 @@ test('boot from a stale head searches for the latest', async function (t) {
 
 test('boot from a head above the last flush', async function (t) {
   const auto1 = await create(t)
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   // a batch: only its last node carries views, so mid-batch is not a flush head
   await auto1.append([encode({ value: 'x' }), encode({ value: 'y' }), encode({ value: 'z' })])
@@ -280,7 +280,7 @@ test('a fast-forward asks peers to re-announce', async function (t) {
     mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
   })
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const auto2 = await create(t, auto1.key, { isTrusted: () => true })
 
@@ -316,7 +316,7 @@ test('candidate views are opened and closed through the handlers', async functio
   await auto1.append(encode({ addWriter: writer.local.id, weight: 1 }))
   await replicateAndSync(auto1, writer)
 
-  for (let i = 0; i < 40; i++) await writer.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await writer.append(encode({ value: 'a' + i }))
   await replicateAndSync(auto1, writer)
 
   let opens = 0
@@ -365,7 +365,7 @@ test('candidate views are opened and closed through the handlers', async functio
 
 test('boot from a legacy pointer', async function (t) {
   const auto1 = await create(t)
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   // legacy pointers carry no length, which the boot resolves itself
   const { key } = auto1.system.bee.head()
@@ -387,7 +387,7 @@ test('boot from a legacy pointer', async function (t) {
 
 test('a bare key boots as a legacy pointer', async function (t) {
   const auto1 = await create(t)
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const { key } = auto1.system.bee.head()
 
@@ -406,7 +406,7 @@ test('boot from an unservable head gives up after the timeout', async function (
   t.timeout(60000)
 
   const auto1 = await create(t)
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const head = { key: auto1.local.key, length: auto1.local.length }
 
@@ -463,7 +463,7 @@ test('boots offline after a fast-forward', async function (t) {
   t.timeout(60000)
 
   const auto1 = await create(t)
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const storage = await t.tmp()
   const auto2 = await create(t, auto1.key, {
@@ -519,7 +519,7 @@ test('warmup runs against the candidate view during fast-forward', async functio
     mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
   })
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const seen = []
 
@@ -550,7 +550,7 @@ test('a failing warmup rejects the fast-forward candidate', async function (t) {
     mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
   })
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   let attempts = 0
   let moved = false
@@ -583,7 +583,7 @@ test('the warmup view is opened and closed through the handlers', async function
     mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
   })
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   let opens = 0
   let closes = 0

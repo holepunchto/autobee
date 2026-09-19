@@ -1563,7 +1563,8 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!result) return false
 
-    if (!force && flushes - this.system.flushes < FastForward.MIN_GAP) return false
+    // apply ran while we searched, only drop it if it no longer moves us forward
+    if (!force && flushes <= this.system.flushes) return false
 
     this.fastForwardTo = result
     this.ff = rrp()

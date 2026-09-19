@@ -136,7 +136,7 @@ test('acking - re-evaluated after a fast-forward', async function (t) {
     mostRecentTrusted: () => ({ key: auto1.local.key, length: auto1.local.length })
   })
 
-  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
 
   let trustSelf = false
   const auto2 = await create(t, auto1.key, {
