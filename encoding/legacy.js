@@ -328,6 +328,7 @@ function oplogLegacyMap(m) {
     approvals: null,
     optimistic: m.optimistic,
     value: m.value,
+    weightHint: 0,
     drift: 0
   }
 }
