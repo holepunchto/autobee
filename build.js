@@ -498,6 +498,14 @@ auto.register({
     {
       name: 'hash',
       type: 'fixed8'
+    },
+    {
+      name: 'weightHint',
+      type: 'uint'
+    },
+    {
+      name: 'drift',
+      type: 'uint'
     }
   ]
 })
