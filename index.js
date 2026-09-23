@@ -5,6 +5,7 @@ const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const rrp = require('resolve-reject-promise')
+const Signal = require('signal-promise')
 const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('autobee-encryption')
 const AutobeeWakeup = require('autobee-wakeup')
 const Hypercore = require('hypercore')
@@ -12,6 +13,7 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
+const { DEFAULT_MANIFEST_VERSION } = require('./lib/constants.js')
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const FastForward = require('./lib/fast-forward.js')
@@ -26,6 +28,7 @@ const migrations = require('./lib/migrations.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const DEFAULT_ACK_THRESHOLD = 32
+const BOOT_NETWORK_TIMEOUT = 5000
 const INTERRUPT = new Error('Apply interrupted')
 
 module.exports = class Autobee extends ReadyResource {
@@ -116,6 +119,9 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwardTo = null
     this._ffCandidates = new Map()
     this._ffSearching = null
+    this._bumpSignal = new Signal()
+    this._networkBooted = false
+    this._networkBooting = false
 
     this._workingBee = bee
     this._workingView = new ApplyView(this._workingBee, this)
@@ -143,6 +149,7 @@ module.exports = class Autobee extends ReadyResource {
     this._now = handlers.now || Date.now // overridable for clock-drift tests
     this._preapply = handlers.preapply || null
     this._preApplied = false
+    this._reindexed = false
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
@@ -205,7 +212,8 @@ module.exports = class Autobee extends ReadyResource {
     await 1
     const result = await this._prebooting
     return {
-      name: 'autobee/' + result.local.id + '/' + name,
+      name: 'autobee/' + result.local.id + '/view/' + name,
+      manifestVersion: DEFAULT_MANIFEST_VERSION,
       encryption: name === 'system' ? this.getSystemEncryption() : this.getViewEncryption(),
       inflightRange: [256, 512]
     }
@@ -380,6 +388,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    this._bumpSignal.notify()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -583,6 +592,11 @@ module.exports = class Autobee extends ReadyResource {
     this._localFlushes = this.system.flushes
   }
 
+  async _isReindexing() {
+    if (this._networkBooted || !this._ffEnabled || this._migrating) return false
+    return !(await this._isReindexed())
+  }
+
   async _bootOnline() {
     if (!this._bootOnlineGuard.enter()) return
 
@@ -607,6 +621,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   bumpSoon() {
+    this._bumpSignal.notify()
     this._bump(false).catch(safetyCatch)
   }
 
@@ -668,6 +683,58 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('error', err)
   }
 
+  async compactMaybe() {
+    if (!this.writers.writable) return 0
+
+    if (await this._isReindexed()) return 0
+
+    const view = await this._reindexBee(this._workingBee)
+    if (view > 0) this.bee.move(this._workingBee.head())
+
+    const system = await this._reindexBee(this.system.bee)
+
+    if (view + system > 0) this._reindexed = true
+
+    return view + system
+  }
+
+  async _isReindexed() {
+    const head = this.system.bee.head()
+    if (head === null) return true
+    if (await this._shouldReindex(head.key)) return false
+
+    const view = this.system.view
+    if (!view || !view.key) return true
+    return !(await this._shouldReindex(view.key))
+  }
+
+  async _reindexBee(bee) {
+    const head = bee.head()
+    const local = bee.context.local
+    if (head === null) return 0
+    if ((await this._shouldReindex(local.key)) && local.length > 0) return 0
+    if (!(await this._shouldReindex(head.key))) return 0
+
+    return bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)))
+  }
+
+  async _shouldReindex(key, { unknown = false, length = 0, timeout = 0 } = {}) {
+    const core = this.store.get({ key, active: false })
+
+    try {
+      await core.ready()
+
+      if (core.manifest === null && length > 0) {
+        await core.get(length - 1, { raw: true, timeout }).catch(safetyCatch)
+      }
+
+      if (core.manifest === null) return unknown
+      return core.manifest.version > 1 && core.manifest.version < DEFAULT_MANIFEST_VERSION
+    } finally {
+      await core.close()
+    }
+  }
+
   // one-shot user gate: nothing applies until the host has resolved whatever
   // state apply depends on (e.g. legacy views recorded by a migration)
   async _runPreApply() {
@@ -688,6 +755,7 @@ module.exports = class Autobee extends ReadyResource {
       const { head = null, legacy = null } = this.bootFrom
 
       this.bootFrom = null
+      this._networkBooted = true
 
       if (legacy) {
         await this._bootFromSystem(legacy)
@@ -695,7 +763,13 @@ module.exports = class Autobee extends ReadyResource {
         this._wakeup.hint({ key: head.key, length: head.length || 0 })
         await this._bootFromHead(head)
       }
+    } else if (await this._isReindexing()) {
+      this._networkBooted = true
+      await this._bootFromNetwork()
     }
+
+    // preferably get a peer's compacted view during bootFrom
+    if (this.fastForwardTo === null) await this.compactMaybe()
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
@@ -865,6 +939,7 @@ module.exports = class Autobee extends ReadyResource {
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
         const ff = await FastForward.fromHeads(this, heads, {
+          skipGap: this._networkBooting,
           timeout: FastForward.DEFAULT_TIMEOUT
         })
 
@@ -1208,12 +1283,15 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _appendAck() {
-    if (!this._acking) return false
+    if (!this._acking && !this._reindexed) return false
     if (!this.writers.writable) return false
 
     if (this.writers.localWriter.pending !== null) return false
-    if ((await this._flushesBehind()) < this._ackThreshold) return false
-    if (await this._allHeadsTrusted()) return false
+
+    if (!this._reindexed) {
+      if ((await this._flushesBehind()) < this._ackThreshold) return false
+      if (await this._allHeadsTrusted()) return false
+    }
 
     const links = this.system.getLinks(this.local.key)
     const now = this._now()
@@ -1370,6 +1448,14 @@ module.exports = class Autobee extends ReadyResource {
     if (optimistic) await this.system.ackWriter(batch[0].key)
 
     const changed = await this.system.flush(batch, this._workingBee)
+
+    if (this._reindexed && (await this._isReindexed())) {
+      this._reindexed = false
+      await this.local.setUserData(
+        'autobee/head',
+        encoding.encodeBootRecord(this.system.bootRecord())
+      )
+    }
 
     if (this.system.promotions.changed) this._prefetchApprovals().catch(safetyCatch)
 
@@ -1548,6 +1634,41 @@ module.exports = class Autobee extends ReadyResource {
     } catch (err) {
       safetyCatch(err)
       return false
+    }
+  }
+
+  async _bootFromNetwork() {
+    this._networkBooting = true
+
+    try {
+      await this._waitForNetworkBoot()
+    } finally {
+      this._networkBooting = false
+    }
+  }
+
+  async _waitForNetworkBoot() {
+    const deadline = Date.now() + BOOT_NETWORK_TIMEOUT
+
+    this._requestWakeup()
+
+    while (!this._interrupting && !this.closing && this.fastForwardTo === null) {
+      const hints = await this._applyWakeupHints()
+      if (hints.length) this._queueFastForward(hints)
+
+      const remaining = deadline - Date.now()
+      if (remaining <= 0 || this.fastForwardTo !== null) return
+
+      if (this._ffSearching !== null) {
+        await Promise.race([this._ffSearching, this._bumpSignal.wait(remaining)])
+        this._bumpSignal.notify()
+        if (this._ffSearching === null) return
+        continue
+      }
+
+      if (hints.length) return
+
+      await this._bumpSignal.wait(remaining)
     }
   }
 

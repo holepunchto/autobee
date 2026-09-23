@@ -27,8 +27,8 @@
     "autobee-wakeup": "^1.1.3",
     "b4a": "^1.8.0",
     "compact-encoding": "^3.3.0",
-    "hyperbee2": "^2.16.0",
-    "hypercore": "^11.33.2",
+    "hyperbee2": "^2.17.0",
+    "hypercore": "^11.37.0",
     "hypercore-id-encoding": "^1.3.0",
     "hyperschema": "^1.26.2",
     "read-write-mutexify": "^2.1.0",
@@ -36,6 +36,7 @@
     "ready-resource": "^1.2.0",
     "resolve-reject-promise": "^1.1.0",
     "safety-catch": "^1.0.3",
+    "signal-promise": "^1.0.3",
     "sodium-native": "^5.1.0"
   },
   "devDependencies": {
