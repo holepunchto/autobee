@@ -108,7 +108,7 @@ test('view reindex - fixture holds a v2 view written by main', { skip }, async f
 })
 
 test(
-  'view reindex - a v2 view is reindexed into the v1 local view core',
+  'view reindex - a v2 view is reindexed into the v3 local view core',
   { skip },
   async function (t) {
     const f = await openFixture(t)
@@ -123,7 +123,7 @@ test(
       b4a.equals(head.key, b4a.from(META.view.key, 'hex')),
       'the v2 view core is left behind'
     )
-    t.is(await manifestVersion(f.auto, head.key), 1)
+    t.is(await manifestVersion(f.auto, head.key), 3)
     t.is(head.length, local.length)
     t.is((await bee.cores()).length, 1, 'no references to the v2 view core')
 
@@ -133,13 +133,13 @@ test(
     t.alike(f.auto.system.view, head, 'the system records the reindexed view')
 
     const oplog = await f.auto.writers.getLatestLocalOplog()
-    t.alike(oplog.views.view.key, local.key, 'our oplog advertises the v1 view core')
+    t.alike(oplog.views.view.key, local.key, 'our oplog advertises the v3 view core')
     t.is(oplog.views.view.start + oplog.views.view.length, local.length)
   }
 )
 
 test(
-  'view reindex - the system is reindexed into the v1 local system core',
+  'view reindex - the system is reindexed into the v3 local system core',
   { skip },
   async function (t) {
     const f = await openFixture(t)
@@ -151,19 +151,19 @@ test(
 
     t.alike(head.key, local.key, 'the system head is on the local system core')
     t.is(head.length, local.length)
-    t.is(await manifestVersion(f.auto, head.key), 1)
+    t.is(await manifestVersion(f.auto, head.key), 3)
     t.absent((await coreVersions(f.auto, sys)).includes(2), 'no references to a v2 system core')
 
     const boot = encoding.decodeBootRecord(await f.auto.local.getUserData('autobee/head'))
     t.alike(boot, head, 'the stored boot record is the reindexed system head')
 
     const oplog = await f.auto.writers.getLatestLocalOplog()
-    t.alike(oplog.views.system.key, local.key, 'our oplog advertises the v1 system core')
+    t.alike(oplog.views.system.key, local.key, 'our oplog advertises the v3 system core')
     t.is(oplog.views.system.start + oplog.views.system.length, local.length)
   }
 )
 
-test('view reindex - writes after the reindex land on the v1 core', { skip }, async function (t) {
+test('view reindex - writes after the reindex land on the v3 core', { skip }, async function (t) {
   const f = await openFixture(t)
   t.teardown(() => closeFixture(f))
 
@@ -177,7 +177,7 @@ test('view reindex - writes after the reindex land on the v1 core', { skip }, as
 
   t.alike(await entries(f.auto.view), expected)
   t.is((await bee.cores()).length, 1)
-  t.is(await manifestVersion(f.auto, bee.head().key), 1)
+  t.is(await manifestVersion(f.auto, bee.head().key), 3)
   t.is((await history(bee)).length, META.versions.length + 1)
 })
 
@@ -229,9 +229,9 @@ test(
     t.alike(
       f.auto.system.view.key,
       f.auto._workingBee.context.local.key,
-      'info.view is the v1 view core'
+      'info.view is the v3 view core'
     )
-    t.is(await manifestVersion(f.auto, f.auto.system.view.key), 1)
+    t.is(await manifestVersion(f.auto, f.auto.system.view.key), 3)
     t.alike(f.auto._workingBee.head().key, f.auto._workingBee.context.local.key)
     t.alike(await history(f.auto._workingBee), META.versions)
   }

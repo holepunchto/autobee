@@ -700,24 +700,24 @@ module.exports = class Autobee extends ReadyResource {
   async _isReindexed() {
     const head = this.system.bee.head()
     if (head === null) return true
-    if (!(await this._isV1Core(head.key))) return false
+    if (await this._shouldReindex(head.key)) return false
 
     const view = this.system.view
     if (!view || !view.key) return true
-    return this._isV1Core(view.key)
+    return !(await this._shouldReindex(view.key))
   }
 
   async _reindexBee(bee) {
     const head = bee.head()
     const local = bee.context.local
     if (head === null) return 0
-    if (!(await this._isV1Core(local.key)) && local.length > 0) return 0
-    if (await this._isV1Core(head.key)) return 0
+    if ((await this._shouldReindex(local.key)) && local.length > 0) return 0
+    if (!(await this._shouldReindex(head.key))) return 0
 
-    return bee.reindex((change) => this._isV1Core(change.head.key))
+    return bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)))
   }
 
-  async _isV1Core(key, { unknown = true, length = 0, timeout = 0 } = {}) {
+  async _shouldReindex(key, { unknown = false, length = 0, timeout = 0 } = {}) {
     const core = this.store.get({ key, active: false })
 
     try {
@@ -728,7 +728,7 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       if (core.manifest === null) return unknown
-      return core.manifest.version <= 1
+      return core.manifest.version > 1 && core.manifest.version < DEFAULT_MANIFEST_VERSION
     } finally {
       await core.close()
     }
