@@ -7,6 +7,7 @@ const os = IS_BARE ? null : require('os')
 
 const Autobee = require('../index.js')
 const encoding = require('../lib/encoding.js')
+const { replicate, sync } = require('./helpers/index.js')
 
 const skip = IS_BARE || !['linux', 'darwin'].includes(os.platform())
 
@@ -236,3 +237,44 @@ test(
     t.alike(await history(f.auto._workingBee), META.versions)
   }
 )
+
+test('view reindex - a peer fast-forwards onto a reindexed view', { skip }, async function (t) {
+  const dir = await t.tmp()
+  await fs.cp(path.join(FIXTURE, 'a'), dir, { recursive: true })
+
+  const a = await openFixture(t)
+  t.teardown(() => closeFixture(a))
+
+  let reindexed = 0
+  let fastForwards = 0
+  let done = null
+
+  const b = await openFixture(t, dir, {
+    patch: (auto) => {
+      const reindexBee = auto._reindexBee.bind(auto)
+      auto._reindexBee = async (bee) => {
+        const n = await reindexBee(bee)
+        reindexed += n
+        return n
+      }
+      const applyFastForward = auto._applyFastForward.bind(auto)
+      auto._applyFastForward = async () => {
+        fastForwards++
+        return applyFastForward()
+      }
+      done = replicate(a.auto, auto)
+    }
+  })
+  t.teardown(() => closeFixture(b))
+
+  t.teardown(() => done())
+
+  await sync(a.auto, b.auto)
+
+  t.is(fastForwards, 1, 'the peer fast-forwarded')
+  t.is(reindexed, 0, 'the peer did not reindex locally')
+  t.alike(b.auto.system.bee.head(), a.auto.system.bee.head(), 'the peer is on the reindexed system')
+  t.alike(b.auto.system.view, a.auto.system.view, 'the peer records the reindexed view')
+  t.is(await manifestVersion(b.auto, b.auto.system.view.key), 3)
+  t.alike(await entries(b.auto.view), META.versions[META.versions.length - 1])
+})
