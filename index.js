@@ -689,29 +689,35 @@ module.exports = class Autobee extends ReadyResource {
   async _isReindexed() {
     const head = this.system.bee.head()
     if (head === null) return true
-    if (!(await this._isLegacyCore(head.key))) return false
+    if (!(await this._isV1Core(head.key))) return false
 
     const view = this.system.view
     if (!view || !view.key) return true
-    return this._isLegacyCore(view.key)
+    return this._isV1Core(view.key)
   }
 
   async _reindexBee(bee) {
     const head = bee.head()
     const local = bee.context.local
     if (head === null) return 0
-    if (!(await this._isLegacyCore(local.key)) && local.length > 0) return 0
-    if (await this._isLegacyCore(head.key)) return 0
+    if (!(await this._isV1Core(local.key)) && local.length > 0) return 0
+    if (await this._isV1Core(head.key)) return 0
 
-    return bee.reindex((change) => this._isLegacyCore(change.head.key))
+    return bee.reindex((change) => this._isV1Core(change.head.key))
   }
 
-  async _isLegacyCore(key) {
+  async _isV1Core(key, { unknown = true, length = 0, timeout = 0 } = {}) {
     const core = this.store.get({ key, active: false })
 
     try {
       await core.ready()
-      return core.manifest === null || core.manifest.version <= 1
+
+      if (core.manifest === null && length > 0) {
+        await core.get(length - 1, { raw: true, timeout }).catch(safetyCatch)
+      }
+
+      if (core.manifest === null) return unknown
+      return core.manifest.version <= 1
     } finally {
       await core.close()
     }
