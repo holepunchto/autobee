@@ -769,7 +769,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     // preferably get a peer's compacted view during bootFrom
-    await this.compactMaybe()
+    if (this.fastForwardTo === null) await this.compactMaybe()
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
