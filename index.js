@@ -121,6 +121,7 @@ module.exports = class Autobee extends ReadyResource {
     this._ffSearching = null
     this._bumpSignal = new Signal()
     this._networkBooted = false
+    this._networkBooting = false
 
     this._workingBee = bee
     this._workingView = new ApplyView(this._workingBee, this)
@@ -938,6 +939,7 @@ module.exports = class Autobee extends ReadyResource {
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
         const ff = await FastForward.fromHeads(this, heads, {
+          skipGap: this._networkBooting,
           timeout: FastForward.DEFAULT_TIMEOUT
         })
 
@@ -1636,6 +1638,16 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootFromNetwork() {
+    this._networkBooting = true
+
+    try {
+      await this._waitForNetworkBoot()
+    } finally {
+      this._networkBooting = false
+    }
+  }
+
+  async _waitForNetworkBoot() {
     const deadline = Date.now() + BOOT_NETWORK_TIMEOUT
 
     this._requestWakeup()
