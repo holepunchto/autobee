@@ -671,7 +671,7 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('error', err)
   }
 
-  async compact() {
+  async compactMaybe() {
     if (!this.writers.writable) return 0
 
     if (await this._isReindexed()) return 0
@@ -688,18 +688,19 @@ module.exports = class Autobee extends ReadyResource {
 
   async _isReindexed() {
     const head = this.system.bee.head()
-    if (head === null || head.length === 0) return true
+    if (head === null) return true
     if (!(await this._isLegacyCore(head.key))) return false
 
     const view = this.system.view
-    if (!view || !view.key || view.length === 0) return true
+    if (!view || !view.key) return true
     return this._isLegacyCore(view.key)
   }
 
   async _reindexBee(bee) {
     const head = bee.head()
-    if (head === null || head.length === 0) return 0
-    if (!(await this._isLegacyCore(bee.context.local.key))) return 0
+    const local = bee.context.local
+    if (head === null) return 0
+    if (!(await this._isLegacyCore(local.key)) && local.length > 0) return 0
     if (await this._isLegacyCore(head.key)) return 0
 
     return bee.reindex((change) => this._isLegacyCore(change.head.key))
@@ -719,8 +720,6 @@ module.exports = class Autobee extends ReadyResource {
   // one-shot user gate: nothing applies until the host has resolved whatever
   // state apply depends on (e.g. legacy views recorded by a migration)
   async _runPreApply() {
-    await this.compact()
-
     if (this._preapply === null || this._preApplied) return
 
     this._preApplied = true
@@ -746,6 +745,9 @@ module.exports = class Autobee extends ReadyResource {
         await this._bootFromHead(head)
       }
     }
+
+    // preferably get a peer's compacted view during bootFrom
+    await this.compactMaybe()
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()

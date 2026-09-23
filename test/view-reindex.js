@@ -138,26 +138,30 @@ test(
   }
 )
 
-test('view reindex - the system is reindexed into the v1 local system core', { skip }, async function (t) {
-  const f = await openFixture(t)
-  t.teardown(() => closeFixture(f))
+test(
+  'view reindex - the system is reindexed into the v1 local system core',
+  { skip },
+  async function (t) {
+    const f = await openFixture(t)
+    t.teardown(() => closeFixture(f))
 
-  const sys = f.auto.system.bee
-  const head = sys.head()
-  const local = sys.context.local
+    const sys = f.auto.system.bee
+    const head = sys.head()
+    const local = sys.context.local
 
-  t.alike(head.key, local.key, 'the system head is on the local system core')
-  t.is(head.length, local.length)
-  t.is(await manifestVersion(f.auto, head.key), 1)
-  t.absent((await coreVersions(f.auto, sys)).includes(2), 'no references to a v2 system core')
+    t.alike(head.key, local.key, 'the system head is on the local system core')
+    t.is(head.length, local.length)
+    t.is(await manifestVersion(f.auto, head.key), 1)
+    t.absent((await coreVersions(f.auto, sys)).includes(2), 'no references to a v2 system core')
 
-  const boot = encoding.decodeBootRecord(await f.auto.local.getUserData('autobee/head'))
-  t.alike(boot, head, 'the stored boot record is the reindexed system head')
+    const boot = encoding.decodeBootRecord(await f.auto.local.getUserData('autobee/head'))
+    t.alike(boot, head, 'the stored boot record is the reindexed system head')
 
-  const oplog = await f.auto.writers.getLatestLocalOplog()
-  t.alike(oplog.views.system.key, local.key, 'our oplog advertises the v1 system core')
-  t.is(oplog.views.system.start + oplog.views.system.length, local.length)
-})
+    const oplog = await f.auto.writers.getLatestLocalOplog()
+    t.alike(oplog.views.system.key, local.key, 'our oplog advertises the v1 system core')
+    t.is(oplog.views.system.start + oplog.views.system.length, local.length)
+  }
+)
 
 test('view reindex - writes after the reindex land on the v1 core', { skip }, async function (t) {
   const f = await openFixture(t)
@@ -198,29 +202,37 @@ test('view reindex - reopening does not reindex again', { skip }, async function
   t.alike(sys.head().key, sys.context.local.key, 'the system boots from the reindexed core')
 })
 
-test('view reindex - the reindexed system head is stored before the drain ends', { skip }, async function (t) {
-  const first = await openFixture(t, null, {
-    patch: (auto) => {
-      auto._storeBoot = async () => {}
-    }
-  })
-  const dir = first.dir
-  const length = first.auto._workingBee.context.local.length
-  const systemLength = first.auto.system.bee.context.local.length
-  const head = first.auto.system.bee.head()
+test(
+  'view reindex - the reindexed system head is stored before the drain ends',
+  { skip },
+  async function (t) {
+    const first = await openFixture(t, null, {
+      patch: (auto) => {
+        auto._storeBoot = async () => {}
+      }
+    })
+    const dir = first.dir
+    const length = first.auto._workingBee.context.local.length
+    const systemLength = first.auto.system.bee.context.local.length
+    const head = first.auto.system.bee.head()
 
-  const boot = encoding.decodeBootRecord(await first.auto.local.getUserData('autobee/head'))
-  t.alike(boot, head, 'the system head is stored by the reindex flush')
-  await closeFixture(first)
+    const boot = encoding.decodeBootRecord(await first.auto.local.getUserData('autobee/head'))
+    t.alike(boot, head, 'the system head is stored by the reindex flush')
+    await closeFixture(first)
 
-  const f = await openFixture(t, dir)
-  t.teardown(() => closeFixture(f))
+    const f = await openFixture(t, dir)
+    t.teardown(() => closeFixture(f))
 
-  t.is(f.auto._workingBee.context.local.length, length, 'the local view core did not grow')
-  t.is(f.auto.system.bee.context.local.length, systemLength, 'the local system core did not grow')
-  t.alike(f.auto.system.bee.head(), head)
-  t.alike(f.auto.system.view.key, f.auto._workingBee.context.local.key, 'info.view is the v1 view core')
-  t.is(await manifestVersion(f.auto, f.auto.system.view.key), 1)
-  t.alike(f.auto._workingBee.head().key, f.auto._workingBee.context.local.key)
-  t.alike(await history(f.auto._workingBee), META.versions)
-})
+    t.is(f.auto._workingBee.context.local.length, length, 'the local view core did not grow')
+    t.is(f.auto.system.bee.context.local.length, systemLength, 'the local system core did not grow')
+    t.alike(f.auto.system.bee.head(), head)
+    t.alike(
+      f.auto.system.view.key,
+      f.auto._workingBee.context.local.key,
+      'info.view is the v1 view core'
+    )
+    t.is(await manifestVersion(f.auto, f.auto.system.view.key), 1)
+    t.alike(f.auto._workingBee.head().key, f.auto._workingBee.context.local.key)
+    t.alike(await history(f.auto._workingBee), META.versions)
+  }
+)
