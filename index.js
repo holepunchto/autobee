@@ -674,18 +674,23 @@ module.exports = class Autobee extends ReadyResource {
   async compact() {
     if (!this.writers.writable) return 0
 
-    const head = this._workingBee.head()
+    const view = await this._reindexBee(this._workingBee)
+    if (view > 0) this.bee.move(this._workingBee.head())
+
+    const system = await this._reindexBee(this.system.bee)
+
+    if (view + system > 0) this._reindexed = true
+
+    return view + system
+  }
+
+  async _reindexBee(bee) {
+    const head = bee.head()
     if (head === null || head.length === 0) return 0
-    if (!(await this._isLegacyCore(this._workingBee.context.local.key))) return 0
+    if (!(await this._isLegacyCore(bee.context.local.key))) return 0
     if (await this._isLegacyCore(head.key)) return 0
 
-    const n = await this._workingBee.reindex((change) => this._isLegacyCore(change.head.key))
-    if (n > 0) {
-      this.bee.move(this._workingBee.head())
-      this._reindexed = true
-    }
-
-    return n
+    return bee.reindex((change) => this._isLegacyCore(change.head.key))
   }
 
   async _isLegacyCore(key) {
