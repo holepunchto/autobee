@@ -674,6 +674,8 @@ module.exports = class Autobee extends ReadyResource {
   async compact() {
     if (!this.writers.writable) return 0
 
+    if (await this._isReindexed()) return 0
+
     const view = await this._reindexBee(this._workingBee)
     if (view > 0) this.bee.move(this._workingBee.head())
 
@@ -682,6 +684,16 @@ module.exports = class Autobee extends ReadyResource {
     if (view + system > 0) this._reindexed = true
 
     return view + system
+  }
+
+  async _isReindexed() {
+    const head = this.system.bee.head()
+    if (head === null || head.length === 0) return true
+    if (!(await this._isLegacyCore(head.key))) return false
+
+    const view = this.system.view
+    if (!view || !view.key || view.length === 0) return true
+    return this._isLegacyCore(view.key)
   }
 
   async _reindexBee(bee) {
@@ -1251,9 +1263,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.writers.localWriter.pending !== null) return false
 
-    if (this._reindexed) {
-      this._reindexed = false
-    } else {
+    if (!this._reindexed) {
       if ((await this._flushesBehind()) < this._ackThreshold) return false
       if (await this._allHeadsTrusted()) return false
     }
@@ -1413,6 +1423,14 @@ module.exports = class Autobee extends ReadyResource {
     if (optimistic) await this.system.ackWriter(batch[0].key)
 
     const changed = await this.system.flush(batch, this._workingBee)
+
+    if (this._reindexed && (await this._isReindexed())) {
+      this._reindexed = false
+      await this.local.setUserData(
+        'autobee/head',
+        encoding.encodeBootRecord(this.system.bootRecord())
+      )
+    }
 
     if (this.system.promotions.changed) this._prefetchApprovals().catch(safetyCatch)
 
