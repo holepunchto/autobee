@@ -207,7 +207,7 @@ module.exports = class Autobee extends ReadyResource {
     await 1
     const result = await this._prebooting
     return {
-      name: 'autobee/' + result.local.id + '/local/' + name,
+      name: 'autobee/' + result.local.id + '/view/' + name,
       manifestVersion: DEFAULT_MANIFEST_VERSION,
       encryption: name === 'system' ? this.getSystemEncryption() : this.getViewEncryption(),
       inflightRange: [256, 512]
