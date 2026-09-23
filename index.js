@@ -144,6 +144,7 @@ module.exports = class Autobee extends ReadyResource {
     this._now = handlers.now || Date.now // overridable for clock-drift tests
     this._preapply = handlers.preapply || null
     this._preApplied = false
+    this._reindexed = false
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
@@ -671,13 +672,18 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async compact() {
+    if (!this.writers.writable) return 0
+
     const head = this._workingBee.head()
     if (head === null || head.length === 0) return 0
     if (!(await this._isLegacyCore(this._workingBee.context.local.key))) return 0
     if (await this._isLegacyCore(head.key)) return 0
 
     const n = await this._workingBee.reindex((change) => this._isLegacyCore(change.head.key))
-    if (n > 0) this.bee.move(this._workingBee.head())
+    if (n > 0) {
+      this.bee.move(this._workingBee.head())
+      this._reindexed = true
+    }
 
     return n
   }
@@ -1235,12 +1241,17 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _appendAck() {
-    if (!this._acking) return false
+    if (!this._acking && !this._reindexed) return false
     if (!this.writers.writable) return false
 
     if (this.writers.localWriter.pending !== null) return false
-    if ((await this._flushesBehind()) < this._ackThreshold) return false
-    if (await this._allHeadsTrusted()) return false
+
+    if (this._reindexed) {
+      this._reindexed = false
+    } else {
+      if ((await this._flushesBehind()) < this._ackThreshold) return false
+      if (await this._allHeadsTrusted()) return false
+    }
 
     const links = this.system.getLinks(this.local.key)
     const now = this._now()
