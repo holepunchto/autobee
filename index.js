@@ -12,6 +12,7 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
+const { DEFAULT_MANIFEST_VERSION } = require('./lib/constants.js')
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const FastForward = require('./lib/fast-forward.js')
@@ -205,7 +206,8 @@ module.exports = class Autobee extends ReadyResource {
     await 1
     const result = await this._prebooting
     return {
-      name: 'autobee/' + result.local.id + '/' + name,
+      name: 'autobee/' + result.local.id + '/local/' + name,
+      manifestVersion: DEFAULT_MANIFEST_VERSION,
       encryption: name === 'system' ? this.getSystemEncryption() : this.getViewEncryption(),
       inflightRange: [256, 512]
     }
@@ -668,9 +670,34 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('error', err)
   }
 
+  async compact() {
+    const head = this._workingBee.head()
+    if (head === null || head.length === 0) return 0
+    if (!(await this._isLegacyCore(this._workingBee.context.local.key))) return 0
+    if (await this._isLegacyCore(head.key)) return 0
+
+    const n = await this._workingBee.reindex((change) => this._isLegacyCore(change.head.key))
+    if (n > 0) this.bee.move(this._workingBee.head())
+
+    return n
+  }
+
+  async _isLegacyCore(key) {
+    const core = this.store.get({ key, active: false })
+
+    try {
+      await core.ready()
+      return core.manifest === null || core.manifest.version <= 1
+    } finally {
+      await core.close()
+    }
+  }
+
   // one-shot user gate: nothing applies until the host has resolved whatever
   // state apply depends on (e.g. legacy views recorded by a migration)
   async _runPreApply() {
+    await this.compact()
+
     if (this._preapply === null || this._preApplied) return
 
     this._preApplied = true
