@@ -5,6 +5,7 @@ const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const rrp = require('resolve-reject-promise')
+const Signal = require('signal-promise')
 const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('autobee-encryption')
 const AutobeeWakeup = require('autobee-wakeup')
 const Hypercore = require('hypercore')
@@ -27,6 +28,7 @@ const migrations = require('./lib/migrations.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const DEFAULT_ACK_THRESHOLD = 32
+const BOOT_NETWORK_TIMEOUT = 5000
 const INTERRUPT = new Error('Apply interrupted')
 
 module.exports = class Autobee extends ReadyResource {
@@ -117,6 +119,8 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwardTo = null
     this._ffCandidates = new Map()
     this._ffSearching = null
+    this._bumpSignal = new Signal()
+    this._networkBooted = false
 
     this._workingBee = bee
     this._workingView = new ApplyView(this._workingBee, this)
@@ -383,6 +387,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async _close() {
     this._interrupting = true
+    this._bumpSignal.notify()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -586,6 +591,11 @@ module.exports = class Autobee extends ReadyResource {
     this._localFlushes = this.system.flushes
   }
 
+  async _isReindexing() {
+    if (this._networkBooted || !this._ffEnabled || this._migrating) return false
+    return !(await this._isReindexed())
+  }
+
   async _bootOnline() {
     if (!this._bootOnlineGuard.enter()) return
 
@@ -610,6 +620,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   bumpSoon() {
+    this._bumpSignal.notify()
     this._bump(false).catch(safetyCatch)
   }
 
@@ -743,6 +754,7 @@ module.exports = class Autobee extends ReadyResource {
       const { head = null, legacy = null } = this.bootFrom
 
       this.bootFrom = null
+      this._networkBooted = true
 
       if (legacy) {
         await this._bootFromSystem(legacy)
@@ -750,6 +762,9 @@ module.exports = class Autobee extends ReadyResource {
         this._wakeup.hint({ key: head.key, length: head.length || 0 })
         await this._bootFromHead(head)
       }
+    } else if (await this._isReindexing()) {
+      this._networkBooted = true
+      await this._bootFromNetwork()
     }
 
     // preferably get a peer's compacted view during bootFrom
@@ -1617,6 +1632,31 @@ module.exports = class Autobee extends ReadyResource {
     } catch (err) {
       safetyCatch(err)
       return false
+    }
+  }
+
+  async _bootFromNetwork() {
+    const deadline = Date.now() + BOOT_NETWORK_TIMEOUT
+
+    this._requestWakeup()
+
+    while (!this._interrupting && !this.closing && this.fastForwardTo === null) {
+      const hints = await this._applyWakeupHints()
+      if (hints.length) this._queueFastForward(hints)
+
+      const remaining = deadline - Date.now()
+      if (remaining <= 0 || this.fastForwardTo !== null) return
+
+      if (this._ffSearching !== null) {
+        await Promise.race([this._ffSearching, this._bumpSignal.wait(remaining)])
+        this._bumpSignal.notify()
+        if (this._ffSearching === null) return
+        continue
+      }
+
+      if (hints.length) return
+
+      await this._bumpSignal.wait(remaining)
     }
   }
 

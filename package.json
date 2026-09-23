@@ -36,6 +36,7 @@
     "ready-resource": "^1.2.0",
     "resolve-reject-promise": "^1.1.0",
     "safety-catch": "^1.0.3",
+    "signal-promise": "^1.0.3",
     "sodium-native": "^5.1.0"
   },
   "devDependencies": {
