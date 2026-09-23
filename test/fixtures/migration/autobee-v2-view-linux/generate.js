@@ -84,7 +84,11 @@ async function entries(bee) {
     generatedFrom: 'autobee main 5504fe9 + autobase-v7.28.1-linux/a',
     baseKey: b4a.toString(BASE_KEY, 'hex'),
     localKey: b4a.toString(auto.local.key, 'hex'),
-    view: { key: b4a.toString(head.key, 'hex'), length: head.length, manifestVersion: core.manifest.version },
+    view: {
+      key: b4a.toString(head.key, 'hex'),
+      length: head.length,
+      manifestVersion: core.manifest.version
+    },
     viewCores: cores.length,
     systemView: { key: b4a.toString(auto.system.view.key, 'hex'), length: auto.system.view.length },
     rounds: ROUNDS,
