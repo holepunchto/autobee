@@ -34,7 +34,7 @@ async function apply(batch, view, base) {
   }
 }
 
-async function openFixture(t, dir = null, { patch = null } = {}) {
+async function openFixture(t, dir = null, { patch = null, fastForward = undefined } = {}) {
   if (dir === null) {
     dir = await t.tmp()
     await fs.cp(path.join(FIXTURE, 'a'), dir, { recursive: true })
@@ -46,7 +46,8 @@ async function openFixture(t, dir = null, { patch = null } = {}) {
     migrate: async () => {},
     legacyViews: ['not-a-view'],
     encrypted: true,
-    encryptionKey: SECRET_KEY
+    encryptionKey: SECRET_KEY,
+    fastForward
   })
 
   if (patch) patch(auto)
@@ -277,3 +278,55 @@ test('view reindex - a peer fast-forwards onto a reindexed view', { skip }, asyn
   t.is(await manifestVersion(b.auto, b.auto.system.view.key), 3)
   t.alike(await entries(b.auto.view), META.versions[META.versions.length - 1])
 })
+
+test(
+  'view reindex - a forced boot fast-forward reindexes before anything applies',
+  { skip },
+  async function (t) {
+    // a host boots from an oplog head (like keet): the forced fast-forward onto
+    // the v2 head must not let pending remote nodes apply on top of it
+    const first = await openFixture(t, null, {
+      patch: (auto) => {
+        auto.compactMaybe = () => {}
+      }
+    })
+    const dir = first.dir
+    const boot = { key: first.auto.local.key, length: first.auto.local.length }
+    await closeFixture(first)
+
+    let fastForwards = 0
+    const appliesOnV2 = []
+
+    const f = await openFixture(t, dir, {
+      fastForward: { boot: { head: boot } },
+      patch: (auto) => {
+        const applyFastForward = auto._applyFastForward.bind(auto)
+        auto._applyFastForward = () => {
+          fastForwards++
+          return applyFastForward()
+        }
+        const bumpPendingWriters = auto._bumpPendingWriters.bind(auto)
+        auto._bumpPendingWriters = async (opts) => {
+          const head = auto.system.bee.head()
+          if (head && (await auto._shouldReindex(head.key))) appliesOnV2.push(head)
+          return bumpPendingWriters(opts)
+        }
+      }
+    })
+    t.teardown(() => closeFixture(f))
+    await f.auto.update()
+
+    t.is(fastForwards, 1, 'booted through a forced fast-forward')
+    t.is(appliesOnV2.length, 0, 'apply never ran against the v2 head')
+
+    const sys = f.auto.system.bee
+    t.alike(sys.head().key, sys.context.local.key, 'the system head is on the local core')
+    t.is(await manifestVersion(f.auto, sys.head().key), 3)
+    t.absent((await coreVersions(f.auto, sys)).includes(2), 'no references to a v2 system core')
+    t.absent(
+      (await coreVersions(f.auto, f.auto._workingBee)).includes(2),
+      'no references to a v2 view core'
+    )
+    t.alike(await entries(f.auto.view), META.versions[META.versions.length - 1])
+  }
+)

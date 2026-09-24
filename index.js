@@ -684,8 +684,6 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async compactMaybe() {
-    if (!this.writers.writable) return
-
     if (await this._isReindexed()) return
 
     await this._reindexBee(this._workingBee)
@@ -710,7 +708,6 @@ module.exports = class Autobee extends ReadyResource {
     const head = bee.head()
     const local = bee.context.local
     if (head === null) return
-    if (await this._shouldReindex(local.key)) return
     if (!(await this._shouldReindex(head.key))) return
 
     // a non-empty local core is a completed reindex whose head was never stored
@@ -793,6 +790,7 @@ module.exports = class Autobee extends ReadyResource {
 
           if (this.fastForwardTo !== null) {
             await this._applyFastForward()
+            await this.compactMaybe()
             if (changes) changes.track()
             this._needsUpdate = false
             break // revaluate conditions...
