@@ -691,10 +691,14 @@ module.exports = class Autobee extends ReadyResource {
     const latest = await this.writers.getLatestLocalOplog()
     const views = latest ? latest.views : null
 
+    const from = this._workingBee.head()
     await this._reindexBee(this._workingBee, views ? views.view : null)
     this.bee.move(this._workingBee.head())
 
-    await this._reindexBee(this.system.bee, views ? views.system : null)
+    const map = await migrations.mapReindexedView(this, from, REINDEX_PREFETCH)
+    await this._reindexBee(this.system.bee, views ? views.system : null, map)
+
+    await this.system.reset()
 
     this._reindexed = true
   }
@@ -709,7 +713,7 @@ module.exports = class Autobee extends ReadyResource {
     return !(await this._shouldReindex(view.key))
   }
 
-  async _reindexBee(bee, flushed) {
+  async _reindexBee(bee, flushed, map = null) {
     const head = bee.head()
     const local = bee.context.local
     if (head === null) return
@@ -721,7 +725,8 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)), {
-      prefetch: REINDEX_PREFETCH
+      prefetch: REINDEX_PREFETCH,
+      map
     })
     bee.move({ key: local.key, length: local.length })
   }

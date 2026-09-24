@@ -16,6 +16,10 @@ const fs = skip ? null : require('fs/promises')
 
 const FIXTURE = skip ? null : path.join(__dirname, 'fixtures/migration/autobee-v2-view-linux')
 const META = skip ? null : require(path.join(FIXTURE, 'meta.json'))
+const HEADS_FIXTURE = skip
+  ? null
+  : path.join(__dirname, 'fixtures/migration/autobee-v2-heads-linux')
+const HEADS_META = skip ? null : require(path.join(HEADS_FIXTURE, 'meta.json'))
 const BASE_KEY = b4a.from('7f22e8f8460095e563eb47a71843a6be852bd8c800d27904eef26068149b921a', 'hex')
 const SECRET_KEY = b4a.alloc(32).fill('secret')
 
@@ -26,22 +30,30 @@ async function apply(batch, view, base) {
     if (!data || typeof data !== 'object') continue
     if (data.add) await base.addWriter(b4a.from(data.add, 'hex'), { indexer: !!data.indexer })
     if (data.puts || data.dels) {
-      const w = view.write()
-      for (const [k, v] of data.puts || []) w.tryPut(b4a.from(k), b4a.from(v))
-      for (const k of data.dels || []) w.tryDelete(b4a.from(k))
-      await w.flush()
+      // the heads fixture flushes the view once per chunk of puts
+      const chunks = data.puts && Array.isArray(data.puts[0][0]) ? data.puts : [data.puts || []]
+      for (const puts of chunks) {
+        const w = view.write()
+        for (const [k, v] of puts) w.tryPut(b4a.from(k), b4a.from(v))
+        for (const k of data.dels || []) w.tryDelete(b4a.from(k))
+        await w.flush()
+      }
     }
   }
 }
 
-async function openFixture(t, dir = null, { patch = null, fastForward = undefined } = {}) {
+async function openFixture(
+  t,
+  dir = null,
+  { patch = null, fastForward = undefined, fixture = FIXTURE, key = BASE_KEY } = {}
+) {
   if (dir === null) {
     dir = await t.tmp()
-    await fs.cp(path.join(FIXTURE, 'a'), dir, { recursive: true })
+    await fs.cp(path.join(fixture, 'a'), dir, { recursive: true })
   }
 
   const store = new Corestore(dir, { allowBackup: true, manifestVersion: 2 })
-  const auto = new Autobee(store, BASE_KEY, {
+  const auto = new Autobee(store, key, {
     apply,
     migrate: async () => {},
     legacyViews: ['not-a-view'],
@@ -165,6 +177,50 @@ test(
   }
 )
 
+test('view reindex - copied system records point at the v3 view', { skip }, async function (t) {
+  const f = await openFixture(t)
+  t.teardown(() => closeFixture(f))
+
+  const sys = f.auto.system.bee
+  const local = f.auto._workingBee.context.local
+
+  // the copied history, before it links back into the legacy system core
+  const heads = []
+  for await (const { head } of sys.createChangesStream()) {
+    if (!b4a.equals(head.key, sys.context.local.key)) break
+    heads.push(head)
+  }
+
+  const views = []
+  for (const head of heads) {
+    const checkout = sys.checkout(head)
+    const node = await checkout.get(b4a.from([0]))
+    await checkout.close()
+    if (node) views.push(encoding.decodeSystemInfo(node.value).view)
+  }
+
+  t.ok(views.length > 1, 'the system history was copied')
+  for (const view of views) {
+    t.alike(
+      view.key,
+      local.key,
+      'system record at view length ' + view.length + ' is on the v3 core'
+    )
+  }
+  t.alike(views[0], f.auto.system.view, 'the head record matches the in-memory view')
+
+  // an undo reloads the view from an older system record: it must stay on v3
+  const previous = views.findIndex((v) => v.length === local.length - 1)
+  t.ok(previous > 0, 'a record from before the last view batch was copied')
+
+  const view = await f.auto.system.undo(heads[previous])
+  t.alike(view, { key: local.key, length: local.length - 1 }, 'undo lands the view on the v3 core')
+  t.ok(await f.auto._isReindexed(), 'undo does not reintroduce the v2 view')
+  const checkout = f.auto._workingBee.checkout(view)
+  t.alike(await entries(checkout), META.versions[META.versions.length - 2])
+  await checkout.close()
+})
+
 test('view reindex - writes after the reindex land on the v3 core', { skip }, async function (t) {
   const f = await openFixture(t)
   t.teardown(() => closeFixture(f))
@@ -233,6 +289,88 @@ test(
     t.is(await manifestVersion(f.auto, f.auto.system.view.key), 3)
     t.alike(f.auto._workingBee.head().key, f.auto._workingBee.context.local.key)
     t.alike(await history(f.auto._workingBee), META.versions)
+  }
+)
+
+test(
+  'view reindex - a large system with several view flushes per batch',
+  { skip },
+  async function (t) {
+    t.ok(HEADS_META.infoSize > 1024, 'the system info is not inlined')
+    t.not(
+      HEADS_META.systemChanges,
+      HEADS_META.viewChanges,
+      'system and view batches do not line up'
+    )
+
+    const key = b4a.from(HEADS_META.baseKey, 'hex')
+    const f = await openFixture(t, null, { fixture: HEADS_FIXTURE, key })
+    const dir = f.dir
+    t.teardown(() => closeFixture(f))
+
+    const bee = f.auto._workingBee
+    const sys = f.auto.system.bee
+    const local = bee.context.local
+
+    t.alike(bee.head(), { key: local.key, length: local.length }, 'the view is on the v3 core')
+    t.is((await bee.cores()).length, 1)
+    t.alike(sys.head().key, sys.context.local.key, 'the system is on the v3 core')
+    t.absent((await coreVersions(f.auto, sys)).includes(2))
+    t.alike(f.auto.system.view, bee.head())
+
+    t.alike(await entries(f.auto.view), HEADS_META.versions[HEADS_META.versions.length - 1])
+    t.alike(await history(bee), HEADS_META.versions, 'every view flush survives the reindex')
+
+    const viewHeads = new Set([0])
+    for await (const { head } of bee.createChangesStream()) viewHeads.add(head.length)
+
+    const heads = []
+    for await (const { head } of sys.createChangesStream()) heads.push(head)
+    t.ok(heads.length >= HEADS_META.systemChanges, 'the whole system history was copied')
+
+    let large = 0
+    let most = 0
+    const views = []
+    for (const head of heads) {
+      const checkout = sys.checkout(head)
+      const node = await checkout.get(b4a.from([0]))
+      await checkout.close()
+      if (!node) continue
+      if (node.value.byteLength > 1024) large++
+      const info = encoding.decodeSystemInfo(node.value)
+      most = Math.max(most, info.heads.length)
+      views.push(info.view)
+    }
+
+    t.ok(large > 1, 'copied system records with a non-inlined value')
+    t.is(most, HEADS_META.heads, 'the copied records still carry every head')
+    t.is(views.length, heads.length)
+    t.ok(
+      views.every((v) => b4a.equals(v.key, local.key) && viewHeads.has(v.length)),
+      'every system record points at a v3 view head'
+    )
+
+    const previous = views.findIndex((v) => v.length === local.length - 1)
+    const view = await f.auto.system.undo(heads[previous])
+    t.alike(view, { key: local.key, length: local.length - 1 }, 'undo lands on the v3 view')
+    t.ok(await f.auto._isReindexed())
+    const checkout = bee.checkout(view)
+    t.alike(await entries(checkout), HEADS_META.versions[HEADS_META.versions.length - 2])
+    await checkout.close()
+
+    const viewLength = local.length
+    const systemLength = sys.context.local.length
+    await closeFixture(f)
+
+    const again = await openFixture(t, dir, { fixture: HEADS_FIXTURE, key })
+    t.teardown(() => closeFixture(again))
+
+    t.is(again.auto._workingBee.context.local.length, viewLength, 'the view did not reindex again')
+    t.is(
+      again.auto.system.bee.context.local.length,
+      systemLength,
+      'the system did not reindex again'
+    )
   }
 )
 
