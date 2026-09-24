@@ -29,6 +29,7 @@ const migrations = require('./lib/migrations.js')
 const EMPTY_HEAD = { length: 0, key: null }
 const DEFAULT_ACK_THRESHOLD = 32
 const BOOT_NETWORK_TIMEOUT = 5000
+const REINDEX_PREFETCH = 4096
 const INTERRUPT = new Error('Apply interrupted')
 
 module.exports = class Autobee extends ReadyResource {
@@ -718,7 +719,9 @@ module.exports = class Autobee extends ReadyResource {
       return
     }
 
-    await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)))
+    await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)), {
+      prefetch: REINDEX_PREFETCH
+    })
     bee.move({ key: local.key, length: local.length })
   }
 
