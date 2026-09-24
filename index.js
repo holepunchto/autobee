@@ -1665,17 +1665,16 @@ module.exports = class Autobee extends ReadyResource {
       const hints = await this._applyWakeupHints()
       if (hints.length) this._queueFastForward(hints)
 
-      const remaining = deadline - Date.now()
-      if (remaining <= 0 || this.fastForwardTo !== null) return
-
+      // the search bounds its own reads, so it always settles
       if (this._ffSearching !== null) {
-        await Promise.race([this._ffSearching, this._bumpSignal.wait(remaining)])
-        this._bumpSignal.notify()
-        if (this._ffSearching === null) return
-        continue
+        await this._ffSearching
+        return
       }
 
-      if (hints.length) return
+      if (hints.length || this.fastForwardTo !== null) return
+
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return
 
       await this._bumpSignal.wait(remaining)
     }
