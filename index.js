@@ -684,18 +684,16 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async compactMaybe() {
-    if (!this.writers.writable) return 0
+    if (!this.writers.writable) return
 
-    if (await this._isReindexed()) return 0
+    if (await this._isReindexed()) return
 
-    const view = await this._reindexBee(this._workingBee)
-    if (view > 0) this.bee.move(this._workingBee.head())
+    await this._reindexBee(this._workingBee)
+    this.bee.move(this._workingBee.head())
 
-    const system = await this._reindexBee(this.system.bee)
+    await this._reindexBee(this.system.bee)
 
-    if (view + system > 0) this._reindexed = true
-
-    return view + system
+    this._reindexed = true
   }
 
   async _isReindexed() {
@@ -711,11 +709,16 @@ module.exports = class Autobee extends ReadyResource {
   async _reindexBee(bee) {
     const head = bee.head()
     const local = bee.context.local
-    if (head === null) return 0
-    if ((await this._shouldReindex(local.key)) && local.length > 0) return 0
-    if (!(await this._shouldReindex(head.key))) return 0
+    if (head === null) return
+    if (await this._shouldReindex(local.key)) return
+    if (!(await this._shouldReindex(head.key))) return
 
-    return bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)))
+    // a non-empty local core is a completed reindex whose head was never stored
+    if (local.length === 0) {
+      await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)))
+    }
+
+    bee.move({ key: local.key, length: local.length })
   }
 
   async _shouldReindex(key, { unknown = false, length = 0, timeout = 0 } = {}) {
