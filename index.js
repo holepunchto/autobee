@@ -151,6 +151,7 @@ module.exports = class Autobee extends ReadyResource {
     this._preapply = handlers.preapply || null
     this._preApplied = false
     this._reindexed = false
+    this._strictReindex = !!handlers.strictReindex
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
@@ -736,7 +737,8 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       if (core.manifest === null) return unknown
-      return core.manifest.version > 1 && core.manifest.version < DEFAULT_MANIFEST_VERSION
+      if (core.manifest.version >= DEFAULT_MANIFEST_VERSION) return false
+      return this._strictReindex || core.manifest.version > 1
     } finally {
       await core.close()
     }
