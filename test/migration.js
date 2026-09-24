@@ -3,13 +3,13 @@ const IS_BARE = typeof global.Bare !== 'undefined'
 const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
-const { AutobeeEncryption } = require('autobee-encryption')
 const uncaughts = require('uncaughts')
 const os = IS_BARE ? null : require('os')
 
 const Autobee = require('../index.js')
 const { AUTOBEE_VERSION, LEGACY_AUTOBASE_VERSION } = require('../lib/constants.js')
 const encoding = require('../lib/encoding.js')
+const { AutobeeEncryption } = require('../lib/encryption.js')
 const { decodeBlock } = require('hyperbee2/lib/encoding.js')
 const { replicate, sync } = require('./helpers')
 
