@@ -252,10 +252,9 @@ test('view reindex - a peer fast-forwards onto a reindexed view', { skip }, asyn
   const b = await openFixture(t, dir, {
     patch: (auto) => {
       const reindexBee = auto._reindexBee.bind(auto)
-      auto._reindexBee = async (bee) => {
-        const n = await reindexBee(bee)
-        reindexed += n
-        return n
+      auto._reindexBee = (bee) => {
+        reindexed++
+        return reindexBee(bee)
       }
       const applyFastForward = auto._applyFastForward.bind(auto)
       auto._applyFastForward = async () => {
