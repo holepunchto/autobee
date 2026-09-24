@@ -12,7 +12,7 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
-const { DEFAULT_MANIFEST_VERSION } = require('./lib/constants.js')
+const { DEFAULT_MANIFEST_VERSION, AUTOBEE_VERSION } = require('./lib/constants.js')
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('./lib/encryption.js')
@@ -25,6 +25,7 @@ const TrustedPeers = require('./lib/trusted.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
+const reindex = require('./lib/reindex.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const DEFAULT_ACK_THRESHOLD = 32
@@ -691,12 +692,99 @@ module.exports = class Autobee extends ReadyResource {
     const latest = await this.writers.getLatestLocalOplog()
     const views = latest ? latest.views : null
 
-    await this._reindexBee(this._workingBee, views ? views.view : null)
+    if (!this._adoptReindex(views)) await this._reindex()
     this.bee.move(this._workingBee.head())
 
-    await this._reindexBee(this.system.bee, views ? views.system : null)
-
     this._reindexed = true
+  }
+
+  _adoptReindex(views) {
+    if (views === null) return false
+
+    const view = this._workingBee.context.local
+    const system = this.system.bee.context.local
+
+    if (!isFlushedTo(views.view, view.key) || !isFlushedTo(views.system, system.key)) return false
+
+    this._workingBee.move({ key: view.key, length: views.view.start + views.view.length })
+    this.system.bee.move({ key: system.key, length: views.system.start + views.system.length })
+
+    return true
+  }
+
+  async _reindex() {
+    const until = async (change) => !(await this._shouldReindex(change.head.key))
+    const opts = { prefetch: REINDEX_PREFETCH }
+
+    const view = (await this._needsReindex(this._workingBee))
+      ? await reindex.collect(this._workingBee, until, opts)
+      : []
+
+    const system = (await this._needsReindex(this.system.bee))
+      ? await reindex.collect(this.system.bee, until, opts)
+      : []
+
+    const views = new reindex.Copier(this._workingBee)
+    const systems = new reindex.Copier(this.system.bee)
+
+    const rewrite = {
+      key: System.INFO_KEY,
+      map: (value) => this._rewriteSystemView(value, views)
+    }
+
+    try {
+      let next = view.length
+
+      for (let i = system.length - 1; i >= 0; i--) {
+        const change = system[i]
+        const head = await this._systemViewAt(change.head)
+        const upto = head === null ? -1 : findChange(view, head, next)
+
+        if (upto !== -1) {
+          await views.append(view.slice(upto, next))
+          next = upto
+        }
+
+        await systems.append([change], { rewrite })
+      }
+
+      await views.append(view.slice(0, next))
+
+      await views.flush()
+      await systems.flush()
+    } finally {
+      views.release()
+      systems.release()
+    }
+
+    if (views.appended > 0) this._workingBee.move(views.head())
+    if (systems.appended > 0) this.system.bee.move(systems.head())
+  }
+
+  async _systemViewAt(head) {
+    const node = await this.system.bee.checkout(head).get(System.INFO_KEY)
+    if (node === null) return null
+
+    const info = encoding.decodeSystemInfo(node.value)
+    return info.view && info.view.key ? info.view : null
+  }
+
+  async _rewriteSystemView(value, views) {
+    const info = encoding.decodeSystemInfo(value)
+    if (info.version < AUTOBEE_VERSION || !info.view || !info.view.key) return null
+    if (!b4a.equals(encoding.encodeSystemInfo(info), value)) return null
+    if (!(await this._shouldReindex(info.view.key))) return null
+
+    const to = info.view.length === 0 ? { key: views.key, length: 0 } : views.get(info.view)
+    if (to === null) throw new Error('Reindexed system state references an unmapped view')
+
+    info.view = { key: to.key, length: to.length }
+    return encoding.encodeSystemInfo(info)
+  }
+
+  async _needsReindex(bee) {
+    const head = bee.head()
+    return head !== null && (await this._shouldReindex(head.key))
   }
 
   async _isReindexed() {
@@ -707,23 +795,6 @@ module.exports = class Autobee extends ReadyResource {
     const view = this.system.view
     if (!view || !view.key) return true
     return !(await this._shouldReindex(view.key))
-  }
-
-  async _reindexBee(bee, flushed) {
-    const head = bee.head()
-    const local = bee.context.local
-    if (head === null) return
-    if (!(await this._shouldReindex(head.key))) return
-
-    if (flushed && flushed.key && b4a.equals(flushed.key, local.key)) {
-      bee.move({ key: local.key, length: flushed.start + flushed.length })
-      return
-    }
-
-    await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)), {
-      prefetch: REINDEX_PREFETCH
-    })
-    bee.move({ key: local.key, length: local.length })
   }
 
   async _shouldReindex(key, { unknown = false, length = 0, timeout = 0 } = {}) {
@@ -1753,6 +1824,18 @@ module.exports = class Autobee extends ReadyResource {
   replay() {
     return topo.replay(this)
   }
+}
+
+function findChange(changes, head, end) {
+  for (let i = end - 1; i >= 0; i--) {
+    const h = changes[i].head
+    if (h.length === head.length && b4a.equals(h.key, head.key)) return i
+  }
+  return -1
+}
+
+function isFlushedTo(range, key) {
+  return !!range && !!range.key && b4a.equals(range.key, key)
 }
 
 function isObject(o) {

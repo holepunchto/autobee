@@ -7,6 +7,7 @@ const os = IS_BARE ? null : require('os')
 
 const Autobee = require('../index.js')
 const encoding = require('../lib/encoding.js')
+const System = require('../lib/system.js')
 const { create, replicate, sync } = require('./helpers/index.js')
 
 const skip = IS_BARE || !['linux', 'darwin'].includes(os.platform())
@@ -249,10 +250,10 @@ test('view reindex - a peer fast-forwards onto a reindexed view', { skip }, asyn
 
   const b = await openFixture(t, dir, {
     patch: (auto) => {
-      const reindexBee = auto._reindexBee.bind(auto)
-      auto._reindexBee = (bee) => {
+      const reindexViews = auto._reindex.bind(auto)
+      auto._reindex = () => {
         reindexed++
-        return reindexBee(bee)
+        return reindexViews()
       }
       const applyFastForward = auto._applyFastForward.bind(auto)
       auto._applyFastForward = async () => {
@@ -396,4 +397,49 @@ test('view reindex - strictReindex only accepts v3 cores', async function (t) {
 
   t.alike(await shouldReindex(loose), [false, true, false], 'by default only v2 is reindexed')
   t.alike(await shouldReindex(strict), [true, true, false], 'strict reindexes v1 and v2')
+})
+
+async function systemViews(auto, head) {
+  const views = []
+
+  for await (const change of auto.system.bee.checkout(head).createChangesStream()) {
+    if (!b4a.equals(change.head.key, head.key)) break
+    const node = await auto.system.bee.checkout(change.head).get(System.INFO_KEY)
+    views.push(encoding.decodeSystemInfo(node.value).view)
+  }
+
+  return views
+}
+
+test('view reindex - every reindexed system state records a v3 view', { skip }, async function (t) {
+  const dir = await t.tmp()
+  await fs.cp(path.join(FIXTURE, 'a'), dir, { recursive: true })
+
+  const store = new Corestore(dir, { allowBackup: true })
+  const local = store.get({ key: b4a.from(META.localKey, 'hex'), active: false })
+  await local.ready()
+  const legacyHead = encoding.decodeBootRecord(await local.getUserData('autobee/head'))
+  await store.close()
+
+  const f = await openFixture(t, dir)
+  t.teardown(() => closeFixture(f))
+
+  const viewKey = f.auto._workingBee.context.local.key
+
+  const before = await systemViews(f.auto, legacyHead)
+  const after = await systemViews(f.auto, f.auto.system.bee.head())
+  const copied = after.slice(after.length - before.length)
+
+  t.ok(before.length > 0, 'the v2 system has autobee states')
+  t.ok(after.length > before.length, 'states were written after the reindex')
+
+  for (let i = 0; i < before.length; i++) {
+    t.absent(b4a.equals(before[i].key, viewKey), 'the original state recorded a v2 view')
+    t.alike(copied[i].key, viewKey, 'the reindexed state records the v3 view core')
+    t.alike(
+      await entries(f.auto._workingBee.checkout(copied[i])),
+      await entries(f.auto._workingBee.checkout(before[i])),
+      'the v3 view it records reads the same as the v2 view it replaces'
+    )
+  }
 })
