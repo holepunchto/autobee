@@ -7,7 +7,7 @@ const os = IS_BARE ? null : require('os')
 
 const Autobee = require('../index.js')
 const encoding = require('../lib/encoding.js')
-const { replicate, sync } = require('./helpers/index.js')
+const { create, replicate, sync } = require('./helpers/index.js')
 
 const skip = IS_BARE || !['linux', 'darwin'].includes(os.platform())
 
@@ -378,3 +378,22 @@ test(
     )
   }
 )
+
+test('view reindex - strictReindex only accepts v3 cores', async function (t) {
+  const loose = await create(t)
+  const strict = await create(t, { strictReindex: true })
+
+  const shouldReindex = async (auto) => {
+    const out = []
+    for (const manifestVersion of [1, 2, 3]) {
+      const core = auto.store.get({ name: 'v' + manifestVersion, manifestVersion })
+      await core.ready()
+      out.push(await auto._shouldReindex(core.key))
+      await core.close()
+    }
+    return out
+  }
+
+  t.alike(await shouldReindex(loose), [false, true, false], 'by default only v2 is reindexed')
+  t.alike(await shouldReindex(strict), [true, true, false], 'strict reindexes v1 and v2')
+})
