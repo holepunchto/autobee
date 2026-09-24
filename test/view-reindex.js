@@ -205,7 +205,7 @@ test('view reindex - reopening does not reindex again', { skip }, async function
 })
 
 test(
-  'view reindex - the reindexed system head is stored before the drain ends',
+  'view reindex - a reindex whose head was never stored is adopted on reopen',
   { skip },
   async function (t) {
     const first = await openFixture(t, null, {
@@ -217,9 +217,6 @@ test(
     const length = first.auto._workingBee.context.local.length
     const systemLength = first.auto.system.bee.context.local.length
     const head = first.auto.system.bee.head()
-
-    const boot = encoding.decodeBootRecord(await first.auto.local.getUserData('autobee/head'))
-    t.alike(boot, head, 'the system head is stored by the reindex flush')
     await closeFixture(first)
 
     const f = await openFixture(t, dir)
@@ -338,9 +335,7 @@ test(
     const first = await openFixture(t, null, {
       patch: (auto) => {
         auto.on('error', () => {})
-        auto._flushLocal = async () => {
-          throw new Error('crash')
-        }
+        auto._flushLocal = () => Promise.reject(new Error('crash'))
       }
     })
     const dir = first.dir
@@ -350,16 +345,23 @@ test(
     await closeFixture(first)
 
     const errors = []
+    const reboots = []
     const f = await openFixture(t, dir, {
       patch: (auto) => {
         auto.on('error', (err) => errors.push(err))
+        const compactMaybe = auto.compactMaybe.bind(auto)
+        auto.compactMaybe = async () => {
+          await compactMaybe()
+          const info = await auto.system.get(auto.local.key)
+          reboots.push({ system: info.length, oplog: auto.local.length })
+        }
       }
     })
     t.teardown(() => closeFixture(f))
 
-    const info = await f.auto.system.get(f.auto.local.key)
+    t.ok(reboots.length > 0, 'the reopen went through the reindex')
     t.ok(
-      info.length <= f.auto.local.length,
+      reboots.every(({ system, oplog }) => system <= oplog),
       'the system does not reference local nodes missing from the oplog'
     )
 

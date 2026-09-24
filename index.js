@@ -686,10 +686,13 @@ module.exports = class Autobee extends ReadyResource {
   async compactMaybe() {
     if (await this._isReindexed()) return
 
-    await this._reindexBee(this._workingBee)
+    const latest = await this.writers.getLatestLocalOplog()
+    const views = latest ? latest.views : null
+
+    await this._reindexBee(this._workingBee, views ? views.view : null)
     this.bee.move(this._workingBee.head())
 
-    await this._reindexBee(this.system.bee)
+    await this._reindexBee(this.system.bee, views ? views.system : null)
 
     this._reindexed = true
   }
@@ -704,17 +707,18 @@ module.exports = class Autobee extends ReadyResource {
     return !(await this._shouldReindex(view.key))
   }
 
-  async _reindexBee(bee) {
+  async _reindexBee(bee, flushed) {
     const head = bee.head()
     const local = bee.context.local
     if (head === null) return
     if (!(await this._shouldReindex(head.key))) return
 
-    // a non-empty local core is a completed reindex whose head was never stored
-    if (local.length === 0) {
-      await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)))
+    if (flushed && flushed.key && b4a.equals(flushed.key, local.key)) {
+      bee.move({ key: local.key, length: flushed.start + flushed.length })
+      return
     }
 
+    await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)))
     bee.move({ key: local.key, length: local.length })
   }
 
