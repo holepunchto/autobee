@@ -330,3 +330,49 @@ test(
     t.alike(await entries(f.auto.view), META.versions[META.versions.length - 1])
   }
 )
+
+test(
+  'view reindex - a crash before the reindex ack reaches the oplog still boots',
+  { skip },
+  async function (t) {
+    const first = await openFixture(t, null, {
+      patch: (auto) => {
+        auto._flushLocal = async () => {}
+        auto._storeBoot = async () => {}
+      }
+    })
+    const dir = first.dir
+    const localLength = first.auto.local.length
+
+    const boot = encoding.decodeBootRecord(await first.auto.local.getUserData('autobee/head'))
+    t.alike(boot, first.auto.system.bee.head(), 'the reindex flush stored the system head')
+    t.ok(first.auto.writers.localWriter.pending, 'the reindex ack never reached the oplog')
+    await closeFixture(first)
+
+    const errors = []
+    const f = await openFixture(t, dir, {
+      patch: (auto) => {
+        auto.on('error', (err) => errors.push(err))
+      }
+    })
+    t.teardown(() => closeFixture(f))
+
+    const info = await f.auto.system.get(f.auto.local.key)
+    t.ok(
+      info.length <= f.auto.local.length,
+      'the system does not reference local nodes missing from the oplog'
+    )
+
+    await append(f.auto, [['after', 'crash']])
+
+    t.alike(errors, [], 'no background errors')
+    t.ok(f.auto.local.length > localLength, 'the local oplog advanced')
+    t.alike(
+      await entries(f.auto.view),
+      META.versions[META.versions.length - 1]
+        .concat([['after', 'crash']])
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      'the write after the crash is applied'
+    )
+  }
+)
