@@ -205,7 +205,7 @@ test('view reindex - reopening does not reindex again', { skip }, async function
 })
 
 test(
-  'view reindex - the reindexed system head is stored before the drain ends',
+  'view reindex - a reindex whose head was never stored is adopted on reopen',
   { skip },
   async function (t) {
     const first = await openFixture(t, null, {
@@ -217,9 +217,6 @@ test(
     const length = first.auto._workingBee.context.local.length
     const systemLength = first.auto.system.bee.context.local.length
     const head = first.auto.system.bee.head()
-
-    const boot = encoding.decodeBootRecord(await first.auto.local.getUserData('autobee/head'))
-    t.alike(boot, head, 'the system head is stored by the reindex flush')
     await closeFixture(first)
 
     const f = await openFixture(t, dir)
@@ -328,5 +325,56 @@ test(
       'no references to a v2 view core'
     )
     t.alike(await entries(f.auto.view), META.versions[META.versions.length - 1])
+  }
+)
+
+test(
+  'view reindex - a crash before the reindex ack reaches the oplog still boots',
+  { skip },
+  async function (t) {
+    const first = await openFixture(t, null, {
+      patch: (auto) => {
+        auto.on('error', () => {})
+        auto._flushLocal = () => Promise.reject(new Error('crash'))
+      }
+    })
+    const dir = first.dir
+    const localLength = first.auto.local.length
+
+    t.ok(first.auto.writers.localWriter.pending, 'the reindex ack never reached the oplog')
+    await closeFixture(first)
+
+    const errors = []
+    const reboots = []
+    const f = await openFixture(t, dir, {
+      patch: (auto) => {
+        auto.on('error', (err) => errors.push(err))
+        const compactMaybe = auto.compactMaybe.bind(auto)
+        auto.compactMaybe = async () => {
+          await compactMaybe()
+          const info = await auto.system.get(auto.local.key)
+          reboots.push({ system: info.length, oplog: auto.local.length })
+        }
+      }
+    })
+    t.teardown(() => closeFixture(f))
+
+    t.ok(reboots.length > 0, 'the reopen went through the reindex')
+    t.ok(
+      reboots.every(({ system, oplog }) => system <= oplog),
+      'the system does not reference local nodes missing from the oplog'
+    )
+
+    await append(f.auto, [['after', 'crash']])
+
+    t.alike(errors, [], 'no background errors')
+    t.ok(f.auto.local.length > localLength, 'the local oplog advanced')
+    t.alike(
+      await entries(f.auto.view),
+      META.versions[META.versions.length - 1]
+        .concat([['after', 'crash']])
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+      'the write after the crash is applied'
+    )
   }
 )
