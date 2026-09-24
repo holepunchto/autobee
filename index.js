@@ -150,6 +150,7 @@ module.exports = class Autobee extends ReadyResource {
     this._preapply = handlers.preapply || null
     this._preApplied = false
     this._reindexed = false
+    this._storeReindexed = false
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
@@ -804,6 +805,14 @@ module.exports = class Autobee extends ReadyResource {
 
         await this._flushLocal()
 
+        if (this._storeReindexed) {
+          this._storeReindexed = false
+          await this.local.setUserData(
+            'autobee/head',
+            encoding.encodeBootRecord(this.system.bootRecord())
+          )
+        }
+
         if (!this._interrupting) await this.writers.refresh()
       } finally {
         if (this.bumping === 1) this.bumping = 0
@@ -1452,10 +1461,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this._reindexed && (await this._isReindexed())) {
       this._reindexed = false
-      await this.local.setUserData(
-        'autobee/head',
-        encoding.encodeBootRecord(this.system.bootRecord())
-      )
+      this._storeReindexed = true
     }
 
     if (this.system.promotions.changed) this._prefetchApprovals().catch(safetyCatch)

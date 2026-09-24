@@ -337,15 +337,15 @@ test(
   async function (t) {
     const first = await openFixture(t, null, {
       patch: (auto) => {
-        auto._flushLocal = async () => {}
-        auto._storeBoot = async () => {}
+        auto.on('error', () => {})
+        auto._flushLocal = async () => {
+          throw new Error('crash')
+        }
       }
     })
     const dir = first.dir
     const localLength = first.auto.local.length
 
-    const boot = encoding.decodeBootRecord(await first.auto.local.getUserData('autobee/head'))
-    t.alike(boot, first.auto.system.bee.head(), 'the reindex flush stored the system head')
     t.ok(first.auto.writers.localWriter.pending, 'the reindex ack never reached the oplog')
     await closeFixture(first)
 
