@@ -1,7 +1,9 @@
 const test = require('brittle')
 const b4a = require('b4a')
+const crypto = require('hypercore-crypto')
 
 const { create, replicateAndSync, same, encode, decode } = require('./helpers')
+const { AutobeeEncryption } = require('../lib/encryption.js')
 
 const ENCRYPTION_KEY = b4a.alloc(32).fill('encryption key')
 
@@ -169,3 +171,34 @@ test('encryption - no plaintext in any block of any core', async function (t) {
     t.alike(leaked(blocks[name], markers[name]), [], name + ' blocks leak no plaintext')
   }
 })
+
+test('encryption - setSystemEncryption and getSystemEncryption roundtrip', async (t) => {
+  const bootstrap = crypto.randomBytes(32)
+  const encryptionKey = crypto.randomBytes(32)
+  const context = ctx()
+
+  let installed = null
+  const core = {
+    manifest: { version: 2 },
+    ready() {},
+    setEncryption(e) {
+      installed = e
+    }
+  }
+  await AutobeeEncryption.setSystemEncryption(bootstrap, encryptionKey, core)
+
+  const readSide = AutobeeEncryption.getSystemEncryption(bootstrap, encryptionKey)
+
+  const writeKeys = await installed.getKeys(0, context)
+  const readKeys = await readSide.getKeys(0, context)
+
+  t.alike(
+    writeKeys.block,
+    readKeys.block,
+    'setSystemEncryption and getSystemEncryption must derive the same key for the system core'
+  )
+})
+
+function ctx({ key = crypto.randomBytes(32), version = 2, userData = null } = {}) {
+  return { key, manifest: { version, userData } }
+}
