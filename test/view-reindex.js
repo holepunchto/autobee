@@ -20,6 +20,10 @@ const HEADS_FIXTURE = skip
   ? null
   : path.join(__dirname, 'fixtures/migration/autobee-v2-heads-linux')
 const HEADS_META = skip ? null : require(path.join(HEADS_FIXTURE, 'meta.json'))
+const EMPTY_FIXTURE = skip
+  ? null
+  : path.join(__dirname, 'fixtures/migration/autobee-v2-empty-view-linux')
+const EMPTY_META = skip ? null : require(path.join(EMPTY_FIXTURE, 'meta.json'))
 const BASE_KEY = b4a.from('7f22e8f8460095e563eb47a71843a6be852bd8c800d27904eef26068149b921a', 'hex')
 const SECRET_KEY = b4a.alloc(32).fill('secret')
 
@@ -371,6 +375,97 @@ test(
       systemLength,
       'the system did not reindex again'
     )
+  }
+)
+
+test('view reindex - a view that was never written', { skip }, async function (t) {
+  t.is(EMPTY_META.viewChanges, 0)
+  t.is(EMPTY_META.systemView.length, 0)
+
+  const key = b4a.from(EMPTY_META.baseKey, 'hex')
+  const f = await openFixture(t, null, { fixture: EMPTY_FIXTURE, key })
+  const dir = f.dir
+  t.teardown(() => closeFixture(f))
+
+  const bee = f.auto._workingBee
+  const sys = f.auto.system.bee
+  const local = bee.context.local
+
+  t.alike(bee.head(), { key: local.key, length: 0 }, 'the empty view is on the v3 core')
+  t.alike(sys.head().key, sys.context.local.key, 'the system is on the v3 core')
+  t.absent((await coreVersions(f.auto, sys)).includes(2))
+  t.ok(await f.auto._isReindexed())
+
+  const views = []
+  for await (const { head } of sys.createChangesStream()) {
+    const checkout = sys.checkout(head)
+    const node = await checkout.get(b4a.from([0]))
+    await checkout.close()
+    if (node) views.push(encoding.decodeSystemInfo(node.value).view)
+  }
+
+  t.ok(views.length >= EMPTY_META.systemChanges)
+  t.ok(
+    views.every((v) => b4a.equals(v.key, local.key) && v.length === 0),
+    'every system record points at the empty v3 view'
+  )
+
+  await append(f.auto, [['first', 'write']])
+  t.alike(await entries(f.auto.view), [['first', 'write']])
+  t.alike(bee.head(), { key: local.key, length: local.length })
+  t.is((await bee.cores()).length, 1)
+
+  const viewLength = local.length
+  const systemLength = sys.context.local.length
+  await closeFixture(f)
+
+  const again = await openFixture(t, dir, { fixture: EMPTY_FIXTURE, key })
+  t.teardown(() => closeFixture(again))
+
+  t.is(again.auto._workingBee.context.local.length, viewLength, 'the view did not reindex again')
+  t.is(again.auto.system.bee.context.local.length, systemLength, 'the system did not reindex again')
+  t.alike(await entries(again.auto.view), [['first', 'write']])
+})
+
+test(
+  'view reindex - empty views of every member map to the empty v3 view',
+  { skip },
+  async function (t) {
+    const migrations = require('../lib/migrations.js')
+    const original = migrations.mapReindexedView
+
+    let map = null
+    migrations.mapReindexedView = async (...args) => {
+      map = await original(...args)
+      return map
+    }
+    t.teardown(() => {
+      migrations.mapReindexedView = original
+    })
+
+    const key = b4a.from(EMPTY_META.baseKey, 'hex')
+    const f = await openFixture(t, null, { fixture: EMPTY_FIXTURE, key })
+    t.teardown(() => closeFixture(f))
+
+    t.ok(map !== null, 'the system copy was mapped')
+
+    const local = f.auto._workingBee.context.local
+    const node = await f.auto.system.bee.get(b4a.from([0]))
+    const info = encoding.decodeSystemInfo(node.value)
+
+    // an empty view is recorded under the local key of whoever flushed the record
+    for (const owner of [b4a.from(EMPTY_META.view.key, 'hex'), b4a.alloc(32).fill(7)]) {
+      const value = encoding.encodeSystemInfo({ ...info, view: { key: owner, length: 0 } })
+      const mapped = map(b4a.from([0]), value)
+      t.ok(mapped !== null, 'the record was rewritten')
+      t.alike(encoding.decodeSystemInfo(mapped).view, { key: local.key, length: 0 })
+    }
+
+    const written = encoding.encodeSystemInfo({
+      ...info,
+      view: { key: b4a.alloc(32).fill(7), length: 3 }
+    })
+    t.is(map(b4a.from([0]), written), null, 'an unknown written head is left alone')
   }
 )
 

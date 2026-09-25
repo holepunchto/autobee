@@ -1,0 +1,17 @@
+{
+  "generatedFrom": "autobee main 5504fe9",
+  "baseKey": "e14973a67cc90103f129670a6dd40e1488580e57378a0cd35d4dc77bc07c2909",
+  "localKey": "e14973a67cc90103f129670a6dd40e1488580e57378a0cd35d4dc77bc07c2909",
+  "writers": 3,
+  "infoSize": 89,
+  "view": {
+    "key": "2332d55e25b8d3ca7786d8c9d9a9a08866dae95844e0e679acfd54b8dd701454",
+    "length": 0
+  },
+  "systemView": {
+    "key": "2332d55e25b8d3ca7786d8c9d9a9a08866dae95844e0e679acfd54b8dd701454",
+    "length": 0
+  },
+  "systemChanges": 3,
+  "viewChanges": 0
+}
