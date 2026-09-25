@@ -309,12 +309,9 @@ test('a fast-forward asks peers to re-announce', async function (t) {
 test('candidate views are opened and closed through the handlers', async function (t) {
   // the genesis writer is trusted on boot regardless of the hook, so the head
   // we want auto2 to treat as an untrusted candidate has to come from a
-  // second writer. only the heads it signals as trusted are ever opened, so
-  // it signals itself
+  // second writer
   const auto1 = await create(t)
-  const writer = await create(t, auto1.key, {
-    mostRecentTrusted: () => ({ key: writer.local.key, length: writer.local.length })
-  })
+  const writer = await create(t, auto1.key)
 
   await auto1.append(encode({ addWriter: writer.local.id, weight: 1 }))
   await replicateAndSync(auto1, writer)

@@ -987,7 +987,15 @@ module.exports = class Autobee extends ReadyResource {
     for (const res of ops) {
       if (res === null) continue
 
+      // the head we were woken on is a candidate in its own right
       heads.push({ key: res.key, length: res.length })
+
+      if (!res.op.trusted) continue
+
+      for (const trusted of res.op.trusted) {
+        const head = this.trusted.read(trusted)
+        if (head !== null) heads.push(head)
+      }
     }
 
     return heads
