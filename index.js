@@ -1612,10 +1612,11 @@ module.exports = class Autobee extends ReadyResource {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
 
-    const ff = await FastForward.fromHead(this, head, null, { force: true, timeout })
+    // an explicit move goes wherever it is pointed, backwards included
+    const ff = await FastForward.fromHead(this, head, null, { force: true, rewind: true, timeout })
     if (ff === null) return null
 
-    if (!(await this._runFastForward(ff, { force: true }))) return null
+    if (!(await this._runFastForward(ff, { force: true, rewind: true }))) return null
 
     return this.ff.promise
   }
@@ -1681,7 +1682,7 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _runFastForward(ff, { force = false } = {}) {
+  async _runFastForward(ff, { force = false, rewind = false } = {}) {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) {
       await ff.close()
       return false
@@ -1696,6 +1697,9 @@ module.exports = class Autobee extends ReadyResource {
     if (this.fastForwarding === ff) this.fastForwarding = null
 
     if (!result) return false
+
+    // never move backwards, a boot head can be older than what we already have
+    if (!rewind && flushes < this.system.flushes) return false
 
     // apply ran while we searched, only drop it if it no longer moves us forward
     if (!force && flushes <= this.system.flushes) return false

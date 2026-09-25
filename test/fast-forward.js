@@ -248,6 +248,51 @@ test('boot from a stale head searches for the latest', async function (t) {
   t.ok(await same(auto1, auto2), 'converged')
 })
 
+test('boot from a head behind the local system never moves backwards', async function (t) {
+  const auto1 = await create(t)
+  const early = await create(t, auto1.key)
+
+  t.teardown(replicate(auto1, early))
+
+  await auto1.append(encode({ addWriter: early.local.id }))
+  await sync(auto1, early)
+
+  // a writer that stops early: its latest oplog head records an old system
+  for (let i = 0; i < 20; i++) await early.append(encode({ value: 'e' + i }))
+  await sync(auto1, early)
+
+  const behind = { key: early.local.key, length: early.local.length }
+
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const storage = await t.tmp()
+  const auto2 = await create(t, auto1.key, { storage })
+
+  await replicateAndSync(auto1, auto2)
+
+  const flushes = auto2.system.flushes
+  const head = auto2.system.bee.head()
+  t.ok(flushes > 100, 'synced to the tip')
+  await auto2.close()
+
+  const auto3 = await create(t, auto1.key, { storage, fastForward: { boot: { head: behind } } })
+
+  auto3.on('move-to', () => t.fail('booted backwards onto the old head'))
+
+  await auto3.update()
+
+  t.is(auto3.system.flushes, flushes, 'flushes did not go down')
+  t.alike(auto3.system.bee.head(), head, 'still on the system head we had')
+  t.absent(auto3.fastForwardTo, 'no fast-forward scheduled')
+
+  auto3.removeAllListeners('move-to')
+  t.teardown(replicate(early, auto3))
+
+  // an explicit move is the caller's call, it may go backwards
+  t.ok(await auto3.moveTo(behind), 'an explicit move behind us still lands')
+  t.ok(auto3.system.flushes < flushes, 'moveTo went backwards on purpose')
+})
+
 test('boot from a head above the last flush', async function (t) {
   const auto1 = await create(t)
   for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
