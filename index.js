@@ -732,8 +732,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _shouldReindex(key, { unknown = false, length = 0, timeout = 0 } = {}) {
-    // an inactive session never attaches to a peer, so fetching needs an active one
-    const core = this.store.get({ key, active: unknown && length > 0 })
+    const core = this.store.get({ key, active: false })
 
     try {
       await core.ready()
