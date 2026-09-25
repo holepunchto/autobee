@@ -427,6 +427,48 @@ test('view reindex - a view that was never written', { skip }, async function (t
   t.alike(await entries(again.auto.view), [['first', 'write']])
 })
 
+test(
+  'view reindex - empty views of every member map to the empty v3 view',
+  { skip },
+  async function (t) {
+    const migrations = require('../lib/migrations.js')
+    const original = migrations.mapReindexedView
+
+    let map = null
+    migrations.mapReindexedView = async (...args) => {
+      map = await original(...args)
+      return map
+    }
+    t.teardown(() => {
+      migrations.mapReindexedView = original
+    })
+
+    const key = b4a.from(EMPTY_META.baseKey, 'hex')
+    const f = await openFixture(t, null, { fixture: EMPTY_FIXTURE, key })
+    t.teardown(() => closeFixture(f))
+
+    t.ok(map !== null, 'the system copy was mapped')
+
+    const local = f.auto._workingBee.context.local
+    const node = await f.auto.system.bee.get(b4a.from([0]))
+    const info = encoding.decodeSystemInfo(node.value)
+
+    // an empty view is recorded under the local key of whoever flushed the record
+    for (const owner of [b4a.from(EMPTY_META.view.key, 'hex'), b4a.alloc(32).fill(7)]) {
+      const value = encoding.encodeSystemInfo({ ...info, view: { key: owner, length: 0 } })
+      const mapped = map(b4a.from([0]), value)
+      t.ok(mapped !== null, 'the record was rewritten')
+      t.alike(encoding.decodeSystemInfo(mapped).view, { key: local.key, length: 0 })
+    }
+
+    const written = encoding.encodeSystemInfo({
+      ...info,
+      view: { key: b4a.alloc(32).fill(7), length: 3 }
+    })
+    t.is(map(b4a.from([0]), written), null, 'an unknown written head is left alone')
+  }
+)
+
 test('view reindex - a peer fast-forwards onto a reindexed view', { skip }, async function (t) {
   const dir = await t.tmp()
   await fs.cp(path.join(FIXTURE, 'a'), dir, { recursive: true })
