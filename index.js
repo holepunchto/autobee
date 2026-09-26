@@ -508,10 +508,14 @@ module.exports = class Autobee extends ReadyResource {
       this.bootFrom = getBootOption(await this.bootFrom)
     }
 
-    return boot(this.store, this.key, {
+    const result = await boot(this.store, this.key, {
       encryptionKey: this.encryptionKey,
       keyPair: this.keyPair
     })
+
+    if (result.encryptionKey) this.encrypted = true
+
+    return result
   }
 
   async _boot() {
