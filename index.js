@@ -110,8 +110,8 @@ module.exports = class Autobee extends ReadyResource {
     // oplog head to boot from: migrates or fast-forwards depending on its version
     this.bootFrom = (fastForward && fastForward.boot) || null
 
-    // conservative (default on): only fast-forward onto a system and view held whole
-    this._conservativeFF = fastForward === null || fastForward.conservative !== false
+    // conservative (default off): only fast-forward onto a system and view held whole
+    this._conservativeFF = fastForward !== null && fastForward.conservative === true
 
     this.trusted = new TrustedPeers(this, handlers)
 

@@ -100,11 +100,14 @@ test('conservative ff proceeds once a connected peer advertises the head whole',
     await auto1.append(encode({ value: 'a' + i }))
   }
 
-  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
+  const auto2 = await create(t, auto1.key, {
+    isTrusted: () => true,
+    fastForward: { conservative: true }
+  })
   t.teardown(replicate(auto1, auto2))
 
   await new Promise((resolve) => auto2.once('move-to', resolve))
-  t.pass('the fast-forward went through under the conservative default')
+  t.pass('the conservative fast-forward went through')
 
   // move-to fires before the tip is reapplied, so let the catch-up settle
   await sync(auto1, auto2)
@@ -394,8 +397,7 @@ test('candidate views are opened and closed through the handlers', async functio
     }
   })
 
-  // the writer has to be around so the conservative ff sees a peer that can
-  // serve its head whole
+  // the writer has to be around to serve its head
   t.teardown(replicate(auto1, writer, auto2))
 
   await new Promise((resolve) => auto2.once('move-to', resolve))

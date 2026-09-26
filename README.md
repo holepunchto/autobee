@@ -285,9 +285,11 @@ Pass one of `head` or `legacy`, not both.
 
 #### `fastForward.conservative`
 
-Defaults to `true`: only fast-forward once the system and view lengths the head stamps are held whole, either locally or by a connected peer.
+Defaults to `false`. When `true`, only fast-forward once the system and view lengths the head stamps are held whole, either locally or by a connected peer.
 
 The check runs at the end of the fast-forward, after the system has booted and the view head has been fetched, so a sparse view nobody can serve is skipped instead of landed on.
+
+A node that landed via fast-forward holds its cores sparse, so it never satisfies the check for others. Leave it off unless every peer is warmed up to hold the view whole.
 
 #### `await db.moveTo(head, [options])`
 
