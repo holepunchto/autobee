@@ -172,6 +172,64 @@ test('encryption - no plaintext in any block of any core', async function (t) {
   }
 })
 
+test('encryption - reopening without the key options keeps encrypting', async function (t) {
+  const storage = await t.tmp()
+  const anchoring = anchoringApply()
+
+  let key = null
+  let value = null
+
+  {
+    const auto = await create(t, null, {
+      storage,
+      apply: anchoring.apply,
+      encryptionKey: ENCRYPTION_KEY
+    })
+
+    key = auto.key
+    value = encode({ hello: 'world' })
+
+    await auto.append(value)
+    await auto.updated()
+    await auto.close()
+  }
+
+  // the key is persisted in the store, but this open does not pass it
+  const auto = await create(t, key, {
+    storage,
+    apply: anchoring.apply,
+    encryptionKey: undefined,
+    encrypted: undefined
+  })
+
+  t.is(auto.encrypted, true, 'persisted key implies encrypted')
+  t.alike(auto.encryptionKey, ENCRYPTION_KEY, 'persisted key is loaded')
+
+  const reopened = encode({ hello: 'again' })
+  await auto.append(reopened)
+  await auto.append(encode({ anchor: true }))
+  await auto.updated()
+
+  t.ok(anchoring.anchor, 'an anchor was created')
+  t.alike(
+    (await auto.view.get(b4a.from('latest'))).value,
+    encode({ anchor: true }),
+    'reads decrypt'
+  )
+
+  const blocks = await rawCores(auto, anchoring.anchor)
+  const markers = markersFor(auto, reopened)
+
+  for (const name of Object.keys(markers)) {
+    t.ok(blocks[name].length > 0, name + ' core has blocks')
+    t.alike(
+      leaked(blocks[name], markers[name]),
+      [],
+      name + ' blocks leak no plaintext after reopen'
+    )
+  }
+})
+
 test('encryption - setSystemEncryption and getSystemEncryption roundtrip', async (t) => {
   const bootstrap = crypto.randomBytes(32)
   const encryptionKey = crypto.randomBytes(32)
