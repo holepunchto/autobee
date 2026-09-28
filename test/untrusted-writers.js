@@ -101,7 +101,8 @@ test('untrusted-writers - a stalled mirror fast-forwards once the admin moves on
 
   await t.execution(moved, 'the mirror fast-forwarded')
   await sync(admin, mirror)
-  await done()
 
   t.ok(await same(admin, mirror), 'the mirror converged on the admin')
+
+  await done()
 })
