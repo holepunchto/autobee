@@ -196,10 +196,10 @@ for (const node of await db.replayLast(10)) {
 }
 ```
 
-`options.filter` selects which nodes count towards `n`. It defaults to `Autobee.isUserOp`, so acks are skipped and the walk keeps rewinding until it has found `n` real ops. Pass `Autobee.isAnyOp` (or `null`) for everything.
+`options.filter` selects which nodes count towards `n`. By default every node counts, acks included. Pass `Autobee.isUserOp` to skip acks, and the walk keeps rewinding until it has found `n` real ops.
 
 ```js
-await db.replayLast(10, { filter: Autobee.isAnyOp })
+await db.replayLast(10, { filter: Autobee.isUserOp })
 ```
 
 A custom filter is never called with a `null` marker - those are always kept, and count towards `n`. A history with no matching nodes costs a full `replay()`, since there is no way to know that without looking.
@@ -357,11 +357,7 @@ Decode an Autobee block back to its value.
 
 #### `Autobee.isUserOp(node)`
 
-`true` if `node` carries an op for `apply`. Acks carry no value, so they are not user ops. The default `filter` for `db.replayLast`.
-
-#### `Autobee.isAnyOp(node)`
-
-Always `true`. Pass as `db.replayLast`'s `filter` to include acks.
+`true` if `node` carries an op for `apply`. Acks carry no value, so they are not user ops. Pass as `db.replayLast`'s `filter` to skip acks.
 
 #### `Autobee.GENESIS`
 

@@ -1,7 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
 const Autobee = require('../index.js')
-const topo = require('../lib/topo.js')
 const { create, replicateAndSync, encode, decode } = require('./helpers')
 
 function ids(nodes) {
@@ -11,7 +10,7 @@ function ids(nodes) {
 }
 
 async function expected(auto, n, opts) {
-  const keep = topo.nodeFilter(opts)
+  const keep = (opts && opts.filter) || (() => true)
   const all = await auto.replay()
   return ids(all.filter((node) => node === null || keep(node)).slice(-n))
 }
@@ -72,7 +71,7 @@ test('replay-last - walks several top-up rounds', async function (t) {
   t.is(ids(await a.replayLast(3, opts)), await expected(a, 3, opts), 'sparse filter, n=3')
 })
 
-test('replay-last - skips acks by default, isAnyOp keeps them', async function (t) {
+test('replay-last - keeps acks by default, isUserOp skips them', async function (t) {
   const a = await create(t)
   const b = await create(t, a.key, {
     ackThreshold: 1,
@@ -99,20 +98,21 @@ test('replay-last - skips acks by default, isAnyOp keeps them', async function (
     'history contains acks'
   )
 
-  const ops = await a.replayLast(4)
-  for (const node of ops) t.ok(node.value && node.value.length, 'no acks by default')
+  const opts = { filter: Autobee.isUserOp }
+  const ops = await a.replayLast(4, opts)
+  for (const node of ops) t.ok(node.value && node.value.length, 'no acks with isUserOp')
 
-  t.is(ids(ops), await expected(a, 4), 'default is isUserOp')
-  t.is(ids(await a.replayLast(4, { filter: Autobee.isAnyOp })), ids(all.slice(-4)), 'isAnyOp')
-  t.is(ids(await a.replayLast(4, { filter: null })), ids(all.slice(-4)), 'null is isAnyOp')
-  t.is(ids(await a.replayLast(all.length, { filter: Autobee.isAnyOp })), ids(all), 'whole replay')
+  t.is(ids(ops), await expected(a, 4, opts), 'isUserOp')
+  t.is(ids(await a.replayLast(4)), ids(all.slice(-4)), 'default keeps everything')
+  t.is(ids(await a.replayLast(4, { filter: null })), ids(all.slice(-4)), 'null keeps everything')
+  t.is(ids(await a.replayLast(all.length)), ids(all), 'whole replay')
 
-  const anyOp = await a.replayLast(4, { filter: Autobee.isAnyOp })
+  const tail = await a.replayLast(4)
   t.ok(
-    anyOp.some((node) => node !== null && !Autobee.isUserOp(node)),
+    tail.some((node) => node !== null && !Autobee.isUserOp(node)),
     'the tail itself contains acks'
   )
-  t.ok(positionOf(all, ops[0]) < positionOf(all, anyOp[0]), 'default walked past the acks')
+  t.ok(positionOf(all, ops[0]) < positionOf(all, tail[0]), 'isUserOp walked past the acks')
 })
 
 test('replay-last - a custom filter never sees a null', async function (t) {

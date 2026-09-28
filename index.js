@@ -171,7 +171,6 @@ module.exports = class Autobee extends ReadyResource {
 
   static GENESIS = EMPTY_HEAD
   static isUserOp = isUserOp
-  static isAnyOp = topo.isAnyOp
 
   static isAutobee(auto) {
     return auto instanceof Autobee
