@@ -764,6 +764,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
+    this.emit('busy')
+
     if (this._updating) await this._updating
 
     await this._runPreApply()
@@ -831,7 +833,10 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this._draining = null
-    if (this._interrupting) return
+    if (this._interrupting) {
+      this.emit('idle')
+      return
+    }
 
     const updating = rrp()
     this._updating = updating.promise
@@ -842,6 +847,7 @@ module.exports = class Autobee extends ReadyResource {
     } finally {
       this._updating = null
       updating.resolve()
+      this.emit('idle')
     }
   }
 
