@@ -668,9 +668,22 @@ module.exports = class Autobee extends ReadyResource {
 
   interrupt(reason) {
     asserts.assert(!!this._host.applying, 'Interrupt is only allowed in apply')
+    this._interrupt(reason)
+  }
+
+  _interrupt(reason) {
     this._interrupting = true
     if (reason) this.interrupted = reason
     throw INTERRUPT
+  }
+
+  // a core we sign misses signed blocks (eg. after a power cut), writing it forks it
+  _rolledBack() {
+    return (
+      rolledBack('oplog', this.local) ||
+      rolledBack('system', this.system.bee.context.local) ||
+      rolledBack('view', this._workingBee.context.local)
+    )
   }
 
   getLastError() {
@@ -738,6 +751,9 @@ module.exports = class Autobee extends ReadyResource {
       bee.move({ key: local.key, length: flushed.start + flushed.length })
       return
     }
+
+    const err = this._rolledBack()
+    if (err) this._interrupt(err)
 
     await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)), {
       prefetch: REINDEX_PREFETCH,
@@ -1435,6 +1451,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyBatch(batch, optimistic) {
+    const err = this._rolledBack()
+    if (err) this._interrupt(err)
+
     const local = batch[0].core === this.local
 
     const userBatch = []
@@ -1544,6 +1563,9 @@ module.exports = class Autobee extends ReadyResource {
       throw new Error('Not writable')
     }
 
+    const err = this._rolledBack()
+    if (err) throw err
+
     await this.local.ready()
 
     const links = this.system.getLinks(this.local.key)
@@ -1588,6 +1610,9 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushLocal() {
+    const err = this._rolledBack()
+    if (err) this._interrupt(err)
+
     // pull any available local nodes in before flushing
     while (!this._interrupting && (await this._bumpPendingWriters({ local: true }))) {
       // a bump that applied a batch flags the update itself
@@ -1742,7 +1767,12 @@ module.exports = class Autobee extends ReadyResource {
 
     this.system.bee.move(head)
     await this.system.reset()
-    if (this.system.migration) await this._runMigration()
+
+    if (this.system.migration) {
+      const err = this._rolledBack()
+      if (err) this._interrupt(err)
+      await this._runMigration()
+    }
 
     this.bee.move(this.system.view)
     this._workingBee.move(this.system.view)
@@ -1819,6 +1849,22 @@ function createAnchorCore(store, prologue, manifestData) {
   })
 
   return core
+}
+
+function rolledBack(name, core) {
+  const length = signedLength(core)
+  if (length <= core.contiguousLength) return null
+  return new Error(`Local ${name} core rolled back to ${core.contiguousLength} of ${length} blocks`)
+}
+
+// the longest length signed for a core, ours or a synced peer's on the same fork
+function signedLength(core) {
+  let length = core.length
+  for (const peer of core.peers) {
+    if (!peer.remoteSynced || peer.remoteFork !== core.fork) continue
+    if (peer.remoteLength > length) length = peer.remoteLength
+  }
+  return length
 }
 
 function crashSoon(err) {
