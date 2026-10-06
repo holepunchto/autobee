@@ -14,6 +14,12 @@
     "lib/*.js",
     "encoding"
   ],
+  "imports": {
+    "fs": {
+      "bare": "bare-fs",
+      "default": "fs"
+    }
+  },
   "scripts": {
     "format": "prettier . --write",
     "lint": "lunte && prettier . --check",
@@ -39,8 +45,9 @@
     "sodium-native": "^5.1.0"
   },
   "devDependencies": {
+    "bare-fs": "^4.7.2",
     "brittle": "^4.1.0",
-    "corestore": "^7.12.2",
+    "corestore": "^7.13.0",
     "hypercore-crypto": "^3.6.1",
     "lunte": "^1.6.0",
     "prettier": "^3.8.1",
