@@ -596,6 +596,17 @@ module.exports = class Autobee extends ReadyResource {
     this._localSystemStart = this.system.bee.context.local.length
     this._localViewStart = this._workingBee.context.local.length
     this._localFlushes = this.system.flushes
+
+    this._watchConflict('oplog', this.local)
+    this._watchConflict('system', this.system.bee.context.local)
+    this._watchConflict('view', this._workingBee.context.local)
+  }
+
+  // a peer proved conflicting blocks for a core we sign, hypercore closes it under us
+  _watchConflict(name, core) {
+    core.on('conflict', (length) => {
+      this._onError(new Error(`Local ${name} core forked at length ${length}`))
+    })
   }
 
   async _isReindexing() {
@@ -1093,6 +1104,7 @@ module.exports = class Autobee extends ReadyResource {
     const oldLocal = this.local
 
     this.local = newLocal
+    this._watchConflict('oplog', this.local)
     await this.writers.rotateLocalWriter(this.local)
 
     this._updateLocalCore = null

@@ -119,7 +119,10 @@ async function create(t, key, opts) {
   if (!t.tick) t.tick = 0
 
   const storage = (opts && opts.storage) || (await t.tmp())
-  const store = new Corestore(storage, { manifestVersion: 2 })
+  const store = new Corestore(storage, {
+    manifestVersion: 2,
+    allowBackup: !!(opts && opts.allowBackup)
+  })
   const auto = new Autobee(store, key, {
     encryptionKey,
     encrypted: !!encryptionKey,
