@@ -138,6 +138,8 @@ module.exports = class Autobee extends ReadyResource {
 
     this._draining = null
     this._updating = null
+    this._paused = false
+    this._pausedBump = null
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -208,6 +210,10 @@ module.exports = class Autobee extends ReadyResource {
 
   get busy() {
     return !!(this._draining || this._updating)
+  }
+
+  get paused() {
+    return this._paused
   }
 
   async _getCorePreload(name) {
@@ -423,6 +429,9 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.writers) await this.writers.close()
     await this.system.close()
+
+    await this._registerPendingWakeup()
+
     await this._wakeup.close()
     if (this.bootstrap) await this.bootstrap.close()
 
@@ -636,6 +645,11 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!force && !this._bootOnlineGuard.opened) await this._bootOnlineGuard.ready()
 
+    if (!force && this._paused) {
+      if (!this._pausedBump) this._pausedBump = rrp()
+      return this._pausedBump.promise
+    }
+
     this.bumping++
 
     if (!this._draining) {
@@ -647,6 +661,23 @@ module.exports = class Autobee extends ReadyResource {
 
   update() {
     return this._bump(false)
+  }
+
+  pause() {
+    this._paused = true
+  }
+
+  async resume() {
+    if (!this._paused) return
+
+    this._paused = false
+
+    const pending = this._pausedBump
+    this._pausedBump = null
+
+    await this._drainBootHints()
+
+    if (pending) this._bump(false).then(pending.resolve, pending.reject)
   }
 
   async updated() {
@@ -765,7 +796,6 @@ module.exports = class Autobee extends ReadyResource {
 
   async _drain() {
     this.emit('busy')
-
     if (this._updating) await this._updating
 
     await this._runPreApply()
@@ -852,6 +882,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   _onGroupUpdate({ key, length }) {
+    if (this._paused) return
     this._wakeup.hint({ key, length })
     this.bumpSoon()
   }
@@ -1480,6 +1511,33 @@ module.exports = class Autobee extends ReadyResource {
     for (const { key, added } of changed) {
       if (added) await this.writers.add(key)
       else await this.writers.remove(key)
+    }
+  }
+
+  async _registerPendingWakeup() {
+    if (!this.wakeupCapability || !this._paused) return
+
+    const proms = []
+    for (const hex of this._wakeup.hints.keys()) {
+      const key = b4a.from(hex, 'hex')
+      const discoveryKey = crypto.discoveryKey(key)
+      if (this.store.cores.opened(b4a.toString(discoveryKey, 'hex'))) continue
+      proms.push(this._touchWakeupCore(key, discoveryKey))
+    }
+
+    await Promise.all(proms)
+  }
+
+  async _touchWakeupCore(key, discoveryKey) {
+    let core = null
+    try {
+      if (await this.store.storage.hasCore(discoveryKey)) return
+      core = this.openCore(key)
+      await core.ready()
+    } catch (err) {
+      safetyCatch(err)
+    } finally {
+      if (core) await core.close()
     }
   }
 
