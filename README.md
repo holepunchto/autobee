@@ -152,6 +152,24 @@ Wait until the current apply cycle has finished.
 
 Wait until all known writers have been fully indexed.
 
+#### `db.busy`
+
+`true` while an apply cycle is running. The db emits `'busy'` when a cycle starts and `'idle'` when it has finished, including the `update` hook.
+
+#### `db.pause()`
+
+Stop starting new apply cycles. A cycle already in flight runs to completion. Replication carries on, but nothing is applied and `append`/`update` do not settle until `resume()`.
+
+Writer updates that arrive while paused are not tracked in memory - they are read back from storage on resume - so a paused db can be closed and reopened without losing track of what it has to catch up on.
+
+#### `await db.resume()`
+
+Resume applying. Reads back every writer update recorded while paused and runs a single catch-up cycle; anything waiting on `append`/`update` settles once it completes.
+
+#### `db.paused`
+
+`true` between `pause()` and `resume()`.
+
 #### `stream = db.replicate(isInitiator)`
 
 Create a replication stream. Pass `true` for the initiating side, `false` for the other.
@@ -162,7 +180,7 @@ const s2 = db2.replicate(false)
 s1.pipe(s2).pipe(s1)
 ```
 
-#### `db.wakeup({ key, length })`
+#### `db.hintWakeup({ key, length })`
 
 Hint that a new writer core is available at `key` with at least `length` entries. Used to wake up replication when you learn about a peer out of band.
 
