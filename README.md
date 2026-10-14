@@ -156,15 +156,15 @@ Wait until all known writers have been fully indexed.
 
 `true` while an apply cycle is running. The db emits `'busy'` when a cycle starts and `'idle'` when it has finished, including the `update` hook.
 
-#### `db.pause()`
+#### `await db.pause()`
 
-Stop starting new apply cycles. A cycle already in flight runs to completion. Replication carries on, but nothing is applied and `append`/`update` do not settle until `resume()`.
+Stop applying. Waits for any in-flight `resume()` and for the current apply cycle to finish, so the db is idle once it resolves. Replication carries on, but nothing is applied and `append`/`update`/`setLocal`/`moveTo` throw `Autobee paused` until `resume()`.
 
 Writer updates that arrive while paused are not tracked in memory - they are read back from storage on resume - so a paused db can be closed and reopened without losing track of what it has to catch up on.
 
 #### `await db.resume()`
 
-Resume applying. Reads back every writer update recorded while paused and runs a single catch-up cycle; anything waiting on `append`/`update` settles once it completes.
+Resume applying. Reads back every writer update recorded while paused and runs a single catch-up cycle, resolving once it has run. `pause()` and `resume()` wait for each other, so overlapping calls always take effect in call order and the last one wins.
 
 #### `db.paused`
 

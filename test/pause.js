@@ -14,35 +14,30 @@ const {
   dump
 } = require('./helpers')
 
-test('pause - blocks new drains until resume', async function (t) {
+test('pause - waits for the current drain and refuses new ones', async function (t) {
   const auto = await create(t)
+  await auto.append(encode({ hello: 'world' }))
 
   const events = []
   auto.on('busy', () => events.push('busy'))
   auto.on('idle', () => events.push('idle'))
 
-  await auto.append(encode({ hello: 'world' }))
-  events.length = 0
-
-  auto.pause()
+  await auto.pause()
   t.ok(auto.paused, 'paused')
+  t.absent(auto.busy, 'not busy once pause resolves')
 
-  let resolved = false
-  const appended = auto.append(encode({ a: 1 })).then(() => {
-    resolved = true
-  })
+  await t.exception(auto.append(encode({ a: 1 })), /Autobee paused/)
+  await t.exception(auto.update(), /Autobee paused/)
+  auto.hintWakeup({ key: crypto.randomBytes(32), length: 1 })
 
   await new Promise((resolve) => setTimeout(resolve, 200))
-  t.absent(resolved, 'append has not resolved while paused')
   t.alike(events, [], 'no busy/idle emitted while paused')
 
   await auto.resume()
   t.absent(auto.paused, 'no longer paused')
 
-  await appended
-
-  t.ok(resolved, 'append resolved after resume')
-  t.ok(events.includes('busy') && events.includes('idle'), 'a drain ran on resume')
+  await auto.append(encode({ a: 1 }))
+  t.ok(events.includes('busy') && events.includes('idle'), 'drains run again after resume')
 })
 
 test('pause - resume with nothing pending is a no-op', async function (t) {
@@ -130,6 +125,127 @@ test('pause - two writers make many updates while paused, resume catches up once
   t.is(await dump(auto1), expected, 'auto1 converges after resume, without its peers')
 
   await mirror.close()
+})
+
+test('pause - waits for an in-flight drain', async function (t) {
+  let release = null
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+
+  const auto = await create(t, {
+    apply: async (batch, view, host) => {
+      for (const node of batch) {
+        if (JSON.parse(node.value.toString()).slow) await gate
+      }
+      return apply(batch, view, host)
+    }
+  })
+  await auto.append(encode({ hello: 'world' }))
+
+  const appended = auto.append(encode({ slow: true }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  t.ok(auto.busy, 'drain is in flight')
+
+  let paused = false
+  const pausing = auto.pause().then(() => {
+    paused = true
+  })
+
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  t.absent(paused, 'pause waits for the drain')
+
+  release()
+  await pausing
+  await appended
+
+  t.ok(paused)
+  t.absent(auto.busy, 'idle once pause resolves')
+})
+
+test('pause - waits for a pending resume', async function (t) {
+  const auto = await create(t)
+  await auto.append(encode({ hello: 'world' }))
+
+  await auto.pause()
+
+  let resumed = false
+  const resuming = auto.resume().then(() => {
+    resumed = true
+  })
+  await auto.pause()
+
+  t.ok(resumed, 'resume settled before pause resolved')
+  t.ok(auto.paused, 'the later pause wins')
+  t.absent(auto.busy)
+  await resuming
+
+  await t.exception(auto.append(encode({ a: 1 })), /Autobee paused/)
+
+  await auto.resume()
+  await auto.append(encode({ a: 1 }))
+
+  t.pass()
+})
+
+test('pause - the last of overlapping pause/resume calls wins', async function (t) {
+  const auto = await create(t)
+  await auto.append(encode({ hello: 'world' }))
+
+  await auto.pause()
+  await Promise.all([auto.resume(), auto.pause(), auto.resume()])
+  t.absent(auto.paused, 'resume, pause, resume ends resumed')
+  await auto.append(encode({ a: 1 }))
+
+  await Promise.all([auto.pause(), auto.resume(), auto.pause()])
+  t.ok(auto.paused, 'pause, resume, pause ends paused')
+  t.absent(auto.busy)
+  await t.exception(auto.append(encode({ b: 1 })), /Autobee paused/)
+
+  await auto.resume()
+})
+
+test('pause - overlapping resumes both settle', async function (t) {
+  const auto = await create(t)
+
+  auto.pause()
+
+  await Promise.all([auto.resume(), auto.resume()])
+  t.absent(auto.paused)
+
+  await auto.append(encode({ hello: 'world' }))
+  t.pass()
+})
+
+test('busy - an interrupt in apply leaves the db idle', async function (t) {
+  const auto = await create(t, {
+    apply: (batch, view, host) => {
+      for (const node of batch) {
+        if (JSON.parse(node.value.toString()).stop) host.interrupt('stop')
+      }
+      return apply(batch, view, host)
+    }
+  })
+
+  await auto.append(encode({ hello: 'world' }))
+
+  const events = []
+  auto.on('busy', () => events.push('busy'))
+  auto.on('idle', () => events.push('idle'))
+
+  const interrupted = new Promise((resolve) => auto.once('interrupt', resolve))
+
+  await auto.append(encode({ stop: true }))
+
+  t.is(await interrupted, 'stop')
+  t.absent(auto.busy, 'not busy after an interrupt')
+  t.is(events[0], 'busy')
+  t.is(events[events.length - 1], 'idle')
+  t.is(
+    events.filter((e) => e === 'busy').length,
+    events.filter((e) => e === 'idle').length,
+    'every busy has its idle'
+  )
 })
 
 test('pause - a -1 (unknown length) wakeup hint does not crash a close or a normal drain', async function (t) {

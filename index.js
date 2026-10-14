@@ -25,6 +25,7 @@ const TrustedPeers = require('./lib/trusted.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
+const TaskQueue = require('./lib/task-queue.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const DEFAULT_ACK_THRESHOLD = 32
@@ -139,8 +140,8 @@ module.exports = class Autobee extends ReadyResource {
     this._draining = null
     this._updating = null
     this._paused = false
-    this._pausedBump = null
-    this._resuming = null
+    this._resuming = false
+    this._transitions = new TaskQueue()
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -399,13 +400,6 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
 
-    if (this._pausedBump) {
-      const pending = this._pausedBump
-      this._pausedBump = null
-      pending.promise.catch(noop)
-      pending.reject(new Error('Autobee closed'))
-    }
-
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
     // outlives the teardown and only release it once everything is down
@@ -645,6 +639,7 @@ module.exports = class Autobee extends ReadyResource {
 
   bumpSoon() {
     this._bumpSignal.notify()
+    if (this._paused) return
     this._bump(false).catch(safetyCatch)
   }
 
@@ -653,50 +648,59 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!force && !this._bootOnlineGuard.opened) await this._bootOnlineGuard.ready()
 
-    if (!force && this._paused) {
-      if (this.closing) throw new Error('Autobee closed')
-      if (!this._pausedBump) this._pausedBump = rrp()
-      return this._pausedBump.promise
-    }
+    if (!force && this._paused) throw new Error('Autobee paused')
 
     this.bumping++
 
     if (!this._draining) {
-      this._draining = this._drain().catch(this._onErrorBound)
+      const draining = this._drain().catch((err) => {
+        if (this._draining === draining) {
+          this._draining = null
+          this.emit('idle')
+        }
+        return this._onError(err)
+      })
+      this._draining = draining
     }
 
     return this._draining
   }
 
   update() {
+    if (this._paused) return Promise.reject(new Error('Autobee paused'))
     return this._bump(false)
   }
 
   pause() {
-    if (this.closing) return
-    this._paused = true
+    if (!this._resuming) this._paused = true
+    return this._transitions.push(() => this._pause())
   }
 
   resume() {
-    if (this._resuming) return this._resuming
-    if (!this._paused || this.closing) return Promise.resolve()
+    return this._transitions.push(() => this._resume())
+  }
 
-    this._resuming = this._resume().finally(() => {
-      this._resuming = null
-    })
+  async _pause() {
+    if (this.closing) return
 
-    return this._resuming
+    this._paused = true
+
+    if (this._draining) await this._draining
+    if (this._updating) await this._updating
   }
 
   async _resume() {
+    if (!this._paused || this.closing) return
+
+    this._resuming = true
     this._paused = false
 
-    const pending = this._pausedBump
-    this._pausedBump = null
-
-    await this._drainBootHints()
-
-    if (pending) this._bump(false).then(pending.resolve, pending.reject)
+    try {
+      await this._drainBootHints()
+      await this._bump(false)
+    } finally {
+      this._resuming = false
+    }
   }
 
   async updated() {
@@ -845,7 +849,7 @@ module.exports = class Autobee extends ReadyResource {
     if (changes) changes.track()
 
     // Anything expecting work to be done during bumpSoon should do it here
-    while (!this._interrupting && this.bumping > 0) {
+    while (!this._interrupting && !this._paused && this.bumping > 0) {
       if (this._interrupting) break
 
       // Ensure we catch updates during the drain (i.e. setLocal will bump)
@@ -854,9 +858,9 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       try {
-        while (!this._interrupting) {
+        while (!this._interrupting && !this._paused) {
           await this._flushWakeup()
-          if (this._interrupting) break
+          if (this._interrupting || this._paused) break
 
           if (this.fastForwardTo !== null) {
             await this._applyFastForward()
@@ -1117,6 +1121,7 @@ module.exports = class Autobee extends ReadyResource {
   async setLocal(key, { keyPair } = {}) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
+    if (this._paused) throw new Error('Autobee paused')
 
     const manifest = keyPair
       ? { version: this.store.manifestVersion, signers: [{ publicKey: keyPair.publicKey }] }
@@ -1395,6 +1400,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bumpPendingWriters({ local = false } = {}) {
+    if (this._paused && !local) return false
+
     if (!local && this._catchupMigratedNodes !== null) {
       const updated = await this._bumpMigratedWriters()
       this._catchupMigratedNodes = null
@@ -1604,6 +1611,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async append(values, { optimistic = false } = {}) {
     if (this.closing) throw new Error('Autobee closed')
+    if (this._paused) throw new Error('Autobee paused')
 
     this.stats.appends++
 
@@ -1690,6 +1698,7 @@ module.exports = class Autobee extends ReadyResource {
   async moveTo(head, { timeout = 0 } = {}) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
+    if (this._paused) throw new Error('Autobee paused')
 
     // an explicit move goes wherever it is pointed, backwards included
     const ff = await FastForward.fromHead(this, head, null, { force: true, rewind: true, timeout })
