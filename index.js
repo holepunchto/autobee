@@ -171,6 +171,7 @@ module.exports = class Autobee extends ReadyResource {
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
     this.previousDrain = 0
+    this._pendingWakeups = encoding.encodePendingWakeups([])
 
     this._catchupMigratedNodes = null
     this._migrating = false
@@ -556,6 +557,11 @@ module.exports = class Autobee extends ReadyResource {
       this._notifyHandler = this.store.notifyGroup(this.wakeupCapability.discoveryKey)
       this._notifyHandler.on('update', this._onGroupUpdateBound)
       await this._drainBootHints()
+    }
+
+    if (result.pendingWakeups.length) {
+      this._pendingWakeups = encoding.encodePendingWakeups(result.pendingWakeups)
+      this._wakeup.hint(result.pendingWakeups)
     }
 
     const system = result.system || EMPTY_HEAD
@@ -1477,8 +1483,37 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  async _getPendingWakeups(writers) {
+    const infos = await Promise.all(writers.map((w) => this.system.get(w.core.key)))
+    const pending = []
+
+    for (let i = 0; i < writers.length; i++) {
+      const w = writers[i]
+      const info = infos[i]
+      if (info && info.length >= w.core.length) continue
+
+      pending.push({ key: w.core.key, length: w.core.length })
+    }
+
+    return pending
+  }
+
+  async _storePendingWakeups(writers) {
+    const pending = await this._getPendingWakeups(writers)
+    const pendingWakeups = encoding.encodePendingWakeups(pending)
+    if (b4a.equals(pendingWakeups, this._pendingWakeups)) return
+
+    await this.local.setUserData('autobee/pending-wakeups', pendingWakeups)
+    this._pendingWakeups = pendingWakeups
+  }
+
   async _storeBoot() {
     const proms = []
+
+    const writers = []
+    for (const w of this.writers.external()) {
+      if (!w.isFrozen && w.core.length > 0) writers.push(w)
+    }
 
     proms.push(
       this.local.setUserData(
@@ -1486,6 +1521,8 @@ module.exports = class Autobee extends ReadyResource {
         encoding.encodePreviousDrain(this.previousDrain)
       )
     )
+
+    proms.push(this._storePendingWakeups(writers))
 
     const boot = this.system.bootRecord()
     if (boot) {
