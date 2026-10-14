@@ -140,6 +140,7 @@ module.exports = class Autobee extends ReadyResource {
     this._updating = null
     this._paused = false
     this._pausedBump = null
+    this._resuming = null
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -398,6 +399,13 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
 
+    if (this._pausedBump) {
+      const pending = this._pausedBump
+      this._pausedBump = null
+      pending.promise.catch(noop)
+      pending.reject(new Error('Autobee closed'))
+    }
+
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
     // outlives the teardown and only release it once everything is down
@@ -646,6 +654,7 @@ module.exports = class Autobee extends ReadyResource {
     if (!force && !this._bootOnlineGuard.opened) await this._bootOnlineGuard.ready()
 
     if (!force && this._paused) {
+      if (this.closing) throw new Error('Autobee closed')
       if (!this._pausedBump) this._pausedBump = rrp()
       return this._pausedBump.promise
     }
@@ -664,12 +673,22 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   pause() {
+    if (this.closing) return
     this._paused = true
   }
 
-  async resume() {
-    if (!this._paused) return
+  resume() {
+    if (this._resuming) return this._resuming
+    if (!this._paused || this.closing) return Promise.resolve()
 
+    this._resuming = this._resume().finally(() => {
+      this._resuming = null
+    })
+
+    return this._resuming
+  }
+
+  async _resume() {
     this._paused = false
 
     const pending = this._pausedBump
