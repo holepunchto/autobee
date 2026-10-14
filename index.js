@@ -412,6 +412,7 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
+    this._transitions.destroy()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -681,11 +682,11 @@ module.exports = class Autobee extends ReadyResource {
 
   pause() {
     if (!this._resuming) this._paused = true
-    return this._transitions.push(() => this._pause())
+    return this._transitions.queue(() => this._pause())
   }
 
   resume() {
-    return this._transitions.push(() => this._resume())
+    return this._transitions.queue(() => this._resume())
   }
 
   async _pause() {
