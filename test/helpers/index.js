@@ -9,6 +9,7 @@ const encryptionKey = argv.includes('--encrypt-all')
 
 exports.create = create
 exports.sync = sync
+exports.syncExpected = syncExpected
 exports.same = same
 exports.replicate = replicate
 exports.replicateAndSync = replicateAndSync
@@ -203,6 +204,29 @@ async function sync(...autos) {
           return false
         }
       }
+    }
+
+    return true
+  }
+}
+
+async function syncExpected(expected, ...autos) {
+  const scale = [10, 10, 20, 30, 40, 50]
+
+  while (true) {
+    if (await check()) {
+      for (const a of autos) await a.flush()
+      if (await check()) {
+        return
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, scale.shift() || 100))
+  }
+
+  async function check() {
+    for (const a of autos) {
+      await a.updated()
+      if ((await dump(a)) !== expected) return false
     }
 
     return true
