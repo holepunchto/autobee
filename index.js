@@ -1479,14 +1479,10 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _hasUnappliedWriters() {
+  _hasUnappliedWriters() {
     for (const w of this.writers.active.values()) {
       if (w === this.writers.localWriter || w.isFrozen || !w.isAdded || w.isRemoved) continue
-
-      const info = await this.system.get(w.core.key)
-      const length = info ? info.length : 0
-
-      if (length < w.core.length) return true
+      if (w.systemLength < w.core.length) return true
     }
 
     return false
@@ -1495,7 +1491,7 @@ module.exports = class Autobee extends ReadyResource {
   async _storeBoot() {
     const proms = []
 
-    if (!(await this._hasUnappliedWriters())) {
+    if (!this._hasUnappliedWriters()) {
       this._storedPreviousDrain = this.previousDrain
     }
 
