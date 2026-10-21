@@ -171,6 +171,7 @@ module.exports = class Autobee extends ReadyResource {
     this.wakeupCapability = null
     this._wakeup = new AutobeeWakeup(this, handlers)
     this.previousDrain = 0
+    this._storedPreviousDrain = 0
 
     this._catchupMigratedNodes = null
     this._migrating = false
@@ -254,6 +255,7 @@ module.exports = class Autobee extends ReadyResource {
       this.id = result.bootstrap.core.id
       this.encryptionKey = result.encryptionKey
       this.previousDrain = result.previousDrain
+      this._storedPreviousDrain = result.previousDrain
       this.local = result.local
 
       if (this.encrypted && this.encryptionKey === null) {
@@ -1477,13 +1479,30 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  async _hasUnappliedWriters() {
+    for (const w of this.writers.active.values()) {
+      if (w === this.writers.localWriter || w.isFrozen || !w.isAdded || w.isRemoved) continue
+
+      const info = await this.system.get(w.core.key)
+      const length = info ? info.length : 0
+
+      if (length < w.core.length) return true
+    }
+
+    return false
+  }
+
   async _storeBoot() {
     const proms = []
+
+    if (!(await this._hasUnappliedWriters())) {
+      this._storedPreviousDrain = this.previousDrain
+    }
 
     proms.push(
       this.local.setUserData(
         'autobee/previous-drain',
-        encoding.encodePreviousDrain(this.previousDrain)
+        encoding.encodePreviousDrain(this._storedPreviousDrain)
       )
     )
 
