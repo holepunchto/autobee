@@ -1,6 +1,6 @@
 const test = require('brittle')
 const Corestore = require('corestore')
-const { create, replicate, replicateAndSync, encode, same, decode } = require('./helpers')
+const { create, replicate, replicateAndSync, encode, same, decode, apply } = require('./helpers')
 const b4a = require('b4a')
 const ProtomuxWakeup = require('protomux-wakeup')
 
@@ -199,6 +199,87 @@ test('wakeup - previous drain', async function (t) {
 
   const buf = await local.getUserData('autobee/previous-drain')
   t.is(encoding.decodePreviousDrain(buf), previousDrain)
+})
+
+test('wakeup - previous drain does not skip an unapplied writer', async function (t) {
+  const now = Date.now
+  let last = 0
+  Date.now = () => (last = Math.max(now(), last + 1))
+  t.teardown(() => {
+    Date.now = now
+  })
+
+  const dir = await t.tmp()
+
+  let crash = true
+
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+  const auto3 = await create(t, auto1.key, {
+    storage: dir,
+    apply(nodes, view, host) {
+      for (const node of nodes) {
+        if (crash && decode(node.value).crash) throw new Error('Crash')
+      }
+      return apply(nodes, view, host)
+    }
+  })
+
+  const crashed = new Promise((resolve) => auto3.once('error', resolve))
+
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2, auto3)
+
+  await auto2.append(encode({ hello: 'head' }))
+  await replicateAndSync(auto1, auto2, auto3)
+
+  t.alike(
+    auto3.system.heads.map((h) => h.key),
+    [auto2.local.key],
+    'auto1 is not a head on auto3'
+  )
+
+  await auto2.append(encode({ hello: 'dep' }))
+  await replicateAndSync(auto1, auto2)
+  await auto1.append(encode({ crash: true }))
+
+  const core = auto3.store.get({ key: auto1.local.key })
+  await core.ready()
+  const s1 = auto1.local.replicate(true)
+  const s2 = core.replicate(false)
+  s1.pipe(s2).pipe(s1)
+
+  while (!(await core.has(auto1.local.length - 1))) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  await auto3.update()
+
+  s1.destroy()
+  s2.destroy()
+  await core.close()
+
+  t.is((await auto3.system.get(auto1.local.key)).length, 1, 'auto1 node is not applied yet')
+
+  const done = replicate(auto2, auto3)
+  await crashed
+  await done()
+  await auto3.close()
+
+  t.pass('auto3 crashed applying auto1 node')
+
+  crash = false
+  const reopened = await create(t, auto1.key, { storage: dir })
+
+  let length = 0
+  for (let i = 0; i < 100; i++) {
+    await reopened.update()
+    const info = await reopened.system.get(auto1.local.key)
+    length = info ? info.length : 0
+    if (length === auto1.local.length) break
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+
+  t.is(length, auto1.local.length, 'auto1 node applied after reopen')
 })
 
 test('wakeup - handle malicious wakeup', async function (t) {
