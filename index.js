@@ -881,7 +881,7 @@ module.exports = class Autobee extends ReadyResource {
     const hints = this._wakeup.flush()
     if (!hints.size) return []
 
-    this.previousDrain = Date.now()
+    this.previousDrain = this._now()
     const results = await this._filterHints(hints)
 
     for (const { key, length } of results) {
