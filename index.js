@@ -12,7 +12,12 @@ const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
 const asserts = require('./lib/asserts.js')
 const boot = require('./lib/boot.js')
-const { DEFAULT_MANIFEST_VERSION } = require('./lib/constants.js')
+const {
+  MAPPED_AUTOBEE_VERSION,
+  MAPPED_MANIFEST_VERSION,
+  DEFAULT_MANIFEST_VERSION
+} = require('./lib/constants.js')
+
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('./lib/encryption.js')
@@ -22,14 +27,13 @@ const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
+const { Remapper } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const DEFAULT_ACK_THRESHOLD = 32
-const BOOT_NETWORK_TIMEOUT = 5000
-const REINDEX_PREFETCH = 4096
 const INTERRUPT = new Error('Apply interrupted')
 
 module.exports = class Autobee extends ReadyResource {
@@ -101,6 +105,7 @@ module.exports = class Autobee extends ReadyResource {
     this.keyPair = null
     this.writers = null
     this.bumping = 0
+    this.remapped = false
 
     // fastForward: false disables all fast-forwards - both wakeup and boot
     const fastForward = handlers.fastForward === false ? null : handlers.fastForward || {}
@@ -121,8 +126,6 @@ module.exports = class Autobee extends ReadyResource {
     this._ffCandidates = new Map()
     this._ffSearching = null
     this._bumpSignal = new Signal()
-    this._networkBooted = false
-    this._networkBooting = false
 
     this._workingBee = bee
     this._workingView = new ApplyView(this._workingBee, this)
@@ -150,8 +153,9 @@ module.exports = class Autobee extends ReadyResource {
     this._now = handlers.now || Date.now // overridable for clock-drift tests
     this._preapply = handlers.preapply || null
     this._preApplied = false
-    this._reindexed = false
-    this._strictReindex = !!handlers.strictReindex
+    this._remapper = null
+    this._remapSettle = handlers.remapSettle // override in tests
+    this._forceAck = false
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
@@ -191,6 +195,11 @@ module.exports = class Autobee extends ReadyResource {
 
   get appending() {
     return this.writers ? this.writers.localWriter.appending : false
+  }
+
+  // until the store is on the remapped generation, by its own remap or a landing
+  get remapping() {
+    return !this.remapped
   }
 
   get writable() {
@@ -391,6 +400,7 @@ module.exports = class Autobee extends ReadyResource {
   async _close() {
     this._interrupting = true
     this._bumpSignal.notify()
+    if (this._remapper !== null) this._remapper.destroy()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -598,11 +608,6 @@ module.exports = class Autobee extends ReadyResource {
     this._localFlushes = this.system.flushes
   }
 
-  async _isReindexing() {
-    if (this._networkBooted || !this._ffEnabled || this._migrating) return false
-    return !(await this._isReindexed())
-  }
-
   async _bootOnline() {
     if (!this._bootOnlineGuard.enter()) return
 
@@ -689,53 +694,104 @@ module.exports = class Autobee extends ReadyResource {
     this.emit('error', err)
   }
 
-  async compactMaybe() {
-    if (await this._isReindexed()) return
+  // the remap runs in the background, the drain picks it up once finished
+  _startRemap() {
+    // a migration is walked once it has caught up
+    if (this._migrating || this.system.migration) return
 
-    const latest = await this.writers.getLatestLocalOplog()
-    const views = latest ? latest.views : null
-
-    const from = this._workingBee.head()
-    await this._reindexBee(this._workingBee, views ? views.view : null)
-    this.bee.move(this._workingBee.head())
-
-    const map = await migrations.mapReindexedView(this, from, REINDEX_PREFETCH)
-    await this._reindexBee(this.system.bee, views ? views.system : null, map)
-
-    await this.system.reset()
-
-    this._reindexed = true
-  }
-
-  async _isReindexed() {
-    const head = this.system.bee.head()
-    if (head === null) return true
-    if (await this._shouldReindex(head.key)) return false
-
-    const view = this.system.view
-    if (!view || !view.key) return true
-    return !(await this._shouldReindex(view.key))
-  }
-
-  async _reindexBee(bee, flushed, map = null) {
-    const head = bee.head()
-    const local = bee.context.local
-    if (head === null) return
-    if (!(await this._shouldReindex(head.key))) return
-
-    if (flushed && flushed.key && b4a.equals(flushed.key, local.key)) {
-      bee.move({ key: local.key, length: flushed.start + flushed.length })
+    // a system of the remapped generation reads current cores only
+    if (this.system.isGenesis() || this.system.version >= MAPPED_AUTOBEE_VERSION) {
+      this._onremapped(null, false)
       return
     }
 
-    await bee.reindex(async (change) => !(await this._shouldReindex(change.head.key)), {
-      prefetch: REINDEX_PREFETCH,
-      map
-    })
-    bee.move({ key: local.key, length: local.length })
+    const remapper = new Remapper(this)
+    this._remapper = remapper
+
+    // a destroyed remap fails its reads after the fact, which says nothing
+    const failed = (err) => {
+      if (remapper.destroyed || this.closing) return
+      this._onErrorBound(err)
+    }
+
+    remapper.run({ settle: this._remapSettle }).then(this.bumpSoon.bind(this), failed)
   }
 
-  async _shouldReindex(key, { unknown = false, length = 0, timeout = 0 } = {}) {
+  // applies ran meanwhile, but only a landing could have linked new cores and
+  // a landing destroys the remap, so what the walk found is all there is
+  async _finishRemap() {
+    const remapper = this._remapper
+    this._remapper = null
+
+    if (remapper.destroyed || this.remapped) return
+
+    const mappings = remapper.mappings
+
+    if (mappings.views.length === 0 && mappings.systems.length === 0) {
+      this._onremapped(null, true)
+      return
+    }
+
+    if (mappings.views.length > 0) {
+      await this._workingBee.write({ mappings: mappings.views }).flush()
+      this.bee.move(this._workingBee.head())
+    }
+
+    this.system.mappings = mappings.systems
+    this._onremapped(mappings, true)
+  }
+
+  _onremapped(mappings, ack) {
+    this.remapped = true
+    // a writer flushes right away, claiming the generation for whoever lands on it
+    if (ack && this.writers.writable) this._forceAck = true
+    this.emit('remap', mappings)
+  }
+
+  async _onLegacyHead(bee) {
+    const head = bee.head()
+    if (head === null) return false
+
+    const core = this.store.get({ key: head.key, active: false })
+
+    try {
+      await core.ready()
+      return core.manifest !== null && core.manifest.version <= 1
+    } finally {
+      await core.close()
+    }
+  }
+
+  async _reachable(bee, opts) {
+    if (await this._onLegacyHead(bee)) return []
+    return bee.cores({ recursive: true, local: false, ...opts })
+  }
+
+  async _unmappedCores(opts) {
+    const [views, systems] = await Promise.all([
+      this._reachable(this._workingBee, opts),
+      this._reachable(this.system.bee, opts)
+    ])
+
+    const cores = { views: [], systems: [] }
+
+    // a view never written is recorded at length 0: nothing is read from it
+    const view = this.system.view
+    const empty = view && view.length === 0 ? view.key : null
+
+    for (const key of views) {
+      if (empty !== null && b4a.equals(key, empty)) continue
+      if (await this._needsRemap(key)) cores.views.push(key)
+    }
+
+    for (const key of systems) {
+      if (await this._needsRemap(key)) cores.systems.push(key)
+    }
+
+    return cores
+  }
+
+  async _needsRemap(key, { unknown = true, length = 0, timeout = 0 } = {}) {
     // an inactive session never attaches to a peer, so fetching needs an active one
     const core = this.store.get({ key, active: unknown && length > 0 })
 
@@ -747,8 +803,8 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       if (core.manifest === null) return unknown
-      if (core.manifest.version >= DEFAULT_MANIFEST_VERSION) return false
-      return this._strictReindex || core.manifest.version > 1
+      if (core.manifest.version >= MAPPED_MANIFEST_VERSION) return false
+      return core.manifest.version > 1
     } finally {
       await core.close()
     }
@@ -774,7 +830,6 @@ module.exports = class Autobee extends ReadyResource {
       const { head = null, legacy = null } = this.bootFrom
 
       this.bootFrom = null
-      this._networkBooted = true
 
       if (legacy) {
         await this._bootFromSystem(legacy)
@@ -782,13 +837,10 @@ module.exports = class Autobee extends ReadyResource {
         this._wakeup.hint({ key: head.key, length: head.length || 0 })
         await this._bootFromHead(head)
       }
-    } else if (await this._isReindexing()) {
-      this._networkBooted = true
-      await this._bootFromNetwork()
     }
 
-    // preferably get a peer's compacted view during bootFrom
-    if (this.fastForwardTo === null) await this.compactMaybe()
+    if (this._remapper !== null && this._remapper.finished) await this._finishRemap()
+    if (!this.remapped && this._remapper === null && this.fastForwardTo === null) this._startRemap()
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
@@ -809,7 +861,6 @@ module.exports = class Autobee extends ReadyResource {
 
           if (this.fastForwardTo !== null) {
             await this._applyFastForward()
-            await this.compactMaybe()
             if (changes) changes.track()
             this._needsUpdate = false
             break // revaluate conditions...
@@ -959,7 +1010,7 @@ module.exports = class Autobee extends ReadyResource {
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
         const ff = await FastForward.fromHeads(this, heads, {
-          skipGap: this._networkBooting,
+          skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
           timeout: FastForward.DEFAULT_TIMEOUT
         })
 
@@ -1295,12 +1346,12 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _appendAck() {
-    if (!this._acking && !this._reindexed) return false
+    if (!this._acking && !this._forceAck) return false
     if (!this.writers.writable) return false
 
     if (this.writers.localWriter.pending !== null) return false
 
-    if (!this._reindexed) {
+    if (!this._forceAck) {
       if ((await this._flushesBehind()) < this._ackThreshold) return false
       if (await this._allHeadsTrusted()) return false
     }
@@ -1310,6 +1361,7 @@ module.exports = class Autobee extends ReadyResource {
     const t = Math.max(now, this.system.timestamp)
 
     this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null, null, null, t - now)
+    this._forceAck = false
     return true
   }
 
@@ -1460,8 +1512,6 @@ module.exports = class Autobee extends ReadyResource {
     if (optimistic) await this.system.ackWriter(batch[0].key)
 
     const changed = await this.system.flush(batch, this._workingBee)
-
-    if (this._reindexed && (await this._isReindexed())) this._reindexed = false
 
     if (this.system.promotions.changed) this._prefetchApprovals().catch(safetyCatch)
 
@@ -1644,40 +1694,6 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  async _bootFromNetwork() {
-    this._networkBooting = true
-
-    try {
-      await this._waitForNetworkBoot()
-    } finally {
-      this._networkBooting = false
-    }
-  }
-
-  async _waitForNetworkBoot() {
-    const deadline = Date.now() + BOOT_NETWORK_TIMEOUT
-
-    this._requestWakeup()
-
-    while (!this._interrupting && !this.closing && this.fastForwardTo === null) {
-      const hints = await this._applyWakeupHints()
-      if (hints.length) this._queueFastForward(hints)
-
-      // the search bounds its own reads, so it always settles
-      if (this._ffSearching !== null) {
-        await this._ffSearching
-        return
-      }
-
-      if (hints.length || this.fastForwardTo !== null) return
-
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) return
-
-      await this._bumpSignal.wait(remaining)
-    }
-  }
-
   async _runFastForward(ff, { force = false, rewind = false } = {}) {
     if (this.fastForwardTo !== null || this.fastForwarding !== null) {
       await ff.close()
@@ -1702,6 +1718,9 @@ module.exports = class Autobee extends ReadyResource {
 
     this.fastForwardTo = result
     this.ff = rrp()
+
+    // a remapped head replaces whatever we were about to remap ourselves
+    if (this._remapper !== null) this._remapper.destroy()
 
     this.bumpSoon()
 
