@@ -69,6 +69,10 @@ auto.register({
     {
       version: 3,
       type: '@autobee/system-info-v3'
+    },
+    {
+      version: 4,
+      type: '@autobee/system-info-v3'
     }
   ]
 })

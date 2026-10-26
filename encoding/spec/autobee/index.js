@@ -532,7 +532,7 @@ const encoding18 = {
 // @autobee/system-info
 const encoding19 = {
   preencode(state, m) {
-    const v = m.version ?? 3
+    const v = m.version ?? 4
     c.uint.preencode(state, v)
     switch (v) {
       case 0:
@@ -545,12 +545,15 @@ const encoding19 = {
       case 3:
         encoding18.preencode(state, m)
         break
+      case 4:
+        encoding18.preencode(state, m)
+        break
       default:
         throw new Error('Unsupported version')
     }
   },
   encode(state, m) {
-    const v = m.version ?? 3
+    const v = m.version ?? 4
     c.uint.encode(state, v)
     switch (v) {
       case 0:
@@ -561,6 +564,9 @@ const encoding19 = {
         encoding16.encode(state, m)
         break
       case 3:
+        encoding18.encode(state, m)
+        break
+      case 4:
         encoding18.encode(state, m)
         break
       default:
@@ -583,6 +589,11 @@ const encoding19 = {
         return decoded
       }
       case 3: {
+        const decoded = encoding18.decode(state)
+        decoded.version = v
+        return decoded
+      }
+      case 4: {
         const decoded = encoding18.decode(state)
         decoded.version = v
         return decoded
