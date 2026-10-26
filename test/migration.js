@@ -1,19 +1,17 @@
-const IS_BARE = typeof global.Bare !== 'undefined'
-
 const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 const uncaughts = require('uncaughts')
-const os = IS_BARE ? null : require('os')
+const os = require('os')
 
 const Autobee = require('../index.js')
 const { AUTOBEE_VERSION, LEGACY_AUTOBASE_VERSION } = require('../lib/constants.js')
 const encoding = require('../lib/encoding.js')
 const { AutobeeEncryption } = require('../lib/encryption.js')
 const { decodeBlock } = require('hyperbee2/lib/encoding.js')
-const { replicate, sync } = require('./helpers')
+const { replicate, sync, recoveryPeers, remapped, caughtUp } = require('./helpers')
 
-const skip = IS_BARE || !['linux', 'darwin'].includes(os.platform())
+const skip = !['linux', 'darwin'].includes(os.platform())
 
 const path = skip ? null : require('path')
 const fs = skip ? null : require('fs/promises')
@@ -70,6 +68,7 @@ function migrateHandler(store, state, baseKey = BASE_KEY) {
 function makeAutobee(store, state, { key = BASE_KEY, ...opts } = {}) {
   let auto
   auto = new Autobee(store, key, {
+    remapSettle: 200,
     apply,
     migrate: migrateHandler(store, state),
     legacyViews: [LEGACY_VIEW_NAME],
@@ -80,7 +79,9 @@ function makeAutobee(store, state, { key = BASE_KEY, ...opts } = {}) {
   return auto
 }
 
-async function openFixture(t, name, state, { prepare = null, ...opts } = {}) {
+// without serving peers the store has nothing to remap against and stays on
+// the generation before, so a peer of it cannot land and has to migrate itself
+async function openFixture(t, name, state, { prepare = null, serve = true, ...opts } = {}) {
   const dir = await t.tmp()
   await copyFixture(t, name, dir)
 
@@ -90,11 +91,13 @@ async function openFixture(t, name, state, { prepare = null, ...opts } = {}) {
   const auto = makeAutobee(store, state, opts)
 
   t.teardown(() => auto.close())
+  if (serve) await servePeers(t, store, FIXTURE, opts.key || BASE_KEY)
   await auto.ready()
 
   // a migration boots in the background after ready(), and the fixture is
   // local on disk, so wait for it to settle before the tests poke at state
   await auto.flush()
+  if (serve) await remapped(auto)
 
   return auto
 }
@@ -133,6 +136,34 @@ const skipFF = skip
 async function sameContent(t, a, b, count, label) {
   for (let i = 0; i < count; i++) {
     t.alike(await messageAt(a, i), await messageAt(b, i), `${label} message ${i} matches`)
+  }
+}
+
+// recovery peers holding the whole room, like blind peers would: one per store
+// of the fixture, each also mirroring the bootstrap. A migrated store waits on
+// them before it claims the remapped generation
+async function servePeers(t, store, root, key) {
+  for (const name of await fs.readdir(root)) {
+    if (name === 'meta.json') continue
+
+    const dir = await t.tmp()
+    await fs.cp(path.join(root, name), dir, { recursive: true })
+
+    const peer = new Corestore(dir, { allowBackup: true })
+    t.teardown(() => peer.close())
+
+    const bootstrap = peer.get({ key })
+    await bootstrap.ready()
+    t.teardown(() => bootstrap.close())
+
+    const s1 = store.replicate(true)
+    const s2 = peer.replicate(false)
+    s1.pipe(s2).pipe(s1)
+    recoveryPeers(s2)
+    t.teardown(() => {
+      s1.destroy()
+      s2.destroy()
+    })
   }
 }
 
@@ -251,6 +282,7 @@ test(
       const s1 = store.replicate(true)
       const s2 = aStore.replicate(false)
       s1.pipe(s2).pipe(s1)
+      recoveryPeers(s1, s2)
       return () => {
         s1.destroy()
         s2.destroy()
@@ -426,7 +458,7 @@ test(
     const ff = await c.moveTo(safeHeadOfB(b))
     t.ok(ff, 'c fast-forwarded onto b')
 
-    await sync(b, c)
+    await caughtUp(c, b)
 
     for (let i = 0; i < C_CONFIRMED; i++) {
       t.alike(await messageAt(c, i), before[i], `message ${i} unchanged after ff`)
@@ -447,7 +479,7 @@ test(
   { skip: skipFF },
   async function (t) {
     const bState = {}
-    const b = await openFixture(t, 'b', bState)
+    const b = await openFixture(t, 'b', bState, { serve: false })
 
     const legacy = {
       key: b4a.from('6fd1e0b67c3946a8665cbd1f1bca90aad868def590d83f6e6dc8ca64bcd92de6', 'hex'),
@@ -480,7 +512,7 @@ test(
   { skip: skipFF },
   async function (t) {
     const bState = {}
-    const b = await openFixture(t, 'b', bState)
+    const b = await openFixture(t, 'b', bState, { serve: false })
 
     // what an old (pre-migration) invite carries: the legacy system key, no length
     const systemKey = b4a.from(
@@ -515,7 +547,7 @@ test(
   { skip: skipFF },
   async function (t) {
     const bState = {}
-    const b = await openFixture(t, 'b', bState)
+    const b = await openFixture(t, 'b', bState, { serve: false })
 
     const systemKey = b4a.from(
       '6fd1e0b67c3946a8665cbd1f1bca90aad868def590d83f6e6dc8ca64bcd92de6',
@@ -581,6 +613,7 @@ test(
     const joinerState = {}
     let joiner
     joiner = new Autobee(joinerStore, bootstrap, {
+      remapSettle: 200,
       apply,
       migrate: migrateHandler(joinerStore, joinerState, bootstrap),
       legacyViews: [LEGACY_VIEW_NAME],
@@ -595,6 +628,7 @@ test(
     const s1 = serverStore.replicate(true)
     const s2 = joinerStore.replicate(false)
     s1.pipe(s2).pipe(s1)
+    recoveryPeers(s1, s2)
     t.teardown(() => {
       s1.destroy()
       s2.destroy()
@@ -625,9 +659,11 @@ test(
     await fs.cp(path.join(fixture, 'a'), aDir, { recursive: true })
 
     const aStore = new Corestore(aDir, { allowBackup: true })
+    await servePeers(t, aStore, fixture, bootstrap)
     const aState = {}
     let a
     a = new Autobee(aStore, bootstrap, {
+      remapSettle: 200,
       apply,
       migrate: migrateHandler(aStore, aState, bootstrap),
       legacyViews: [LEGACY_VIEW_NAME],
@@ -638,6 +674,7 @@ test(
 
     await a.ready()
     await a.flush() // the migration boots in the background after ready()
+    await remapped(a)
     t.is(aState.calls, 1, 'a migrated locally')
 
     await a.append(JSON.stringify({ noop: 1 }))
@@ -648,6 +685,7 @@ test(
     let preapplies = 0
     let joiner
     joiner = new Autobee(joinerStore, bootstrap, {
+      remapSettle: 200,
       apply,
       migrate: migrateHandler(joinerStore, joinerState, bootstrap),
       preapply: () => {
@@ -697,7 +735,7 @@ test(
     const ffA = await c.moveTo(localHead(a))
     t.ok(ffA, 'c fast-forwarded onto a')
 
-    await sync(a, c)
+    await caughtUp(c, a)
 
     t.is(await messageAt(c, A_CONFIRMED - 1), 'm198')
 
@@ -1001,6 +1039,7 @@ test(
       const store = new Corestore(dir, { allowBackup: true })
 
       const auto = new Autobee(store, bootstrap, {
+        remapSettle: 200,
         apply,
         migrate: migrateHandler(store, state, bootstrap),
         legacyViews: [LEGACY_VIEW_NAME],
