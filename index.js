@@ -1754,6 +1754,9 @@ module.exports = class Autobee extends ReadyResource {
     this.bee.move(this.system.view)
     this._workingBee.move(this.system.view)
 
+    if (this.system.version < MAPPED_AUTOBEE_VERSION) this.remapped = false
+    if (!this.remapped && this._remapper === null) this._startRemap()
+
     this._approvalCheck = true
     this.fastForwardTo = null
 
