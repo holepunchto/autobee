@@ -149,15 +149,6 @@ async function create(t, key, opts) {
 }
 
 function replicate(...autos) {
-  return replicateMaybeRecovery(false, autos)
-}
-
-// the peers also count as recovery peers for each other, as blind peers would
-function replicateAsRecovery(...autos) {
-  return replicateMaybeRecovery(true, autos)
-}
-
-function replicateMaybeRecovery(recovery, autos) {
   const teardowns = []
 
   while (autos.length > 1) {
@@ -169,7 +160,40 @@ function replicateMaybeRecovery(recovery, autos) {
       const s2 = b.replicate(false)
 
       s1.pipe(s2).pipe(s1)
-      if (recovery) recoveryPeers(s1, s2)
+
+      s1.on('error', console.error)
+      s2.on('error', console.error)
+
+      teardowns.push(async () => {
+        s1.destroy()
+        s2.destroy()
+        await Promise.all([
+          new Promise((resolve) => s1.once('close', resolve)),
+          new Promise((resolve) => s2.once('close', resolve))
+        ])
+      })
+    }
+  }
+
+  return async () => {
+    for (const teardown of teardowns) await teardown()
+  }
+}
+
+// the peers also count as recovery peers for each other, as blind peers would
+function replicateAsRecovery(...autos) {
+  const teardowns = []
+
+  while (autos.length > 1) {
+    const a = autos.pop()
+    for (let i = 0; i < autos.length; i++) {
+      const b = autos[i]
+
+      const s1 = a.replicate(true)
+      const s2 = b.replicate(false)
+
+      s1.pipe(s2).pipe(s1)
+      recoveryPeers(s1, s2)
 
       s1.on('error', console.error)
       s2.on('error', console.error)
