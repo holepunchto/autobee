@@ -14,6 +14,7 @@ exports.sync = sync
 exports.caughtUp = caughtUp
 exports.same = same
 exports.replicate = replicate
+exports.replicateAsRecovery = replicateAsRecovery
 exports.recoveryPeers = recoveryPeers
 exports.remapped = remapped
 exports.replicateAndSync = replicateAndSync
@@ -148,6 +149,15 @@ async function create(t, key, opts) {
 }
 
 function replicate(...autos) {
+  return replicateMaybeRecovery(false, autos)
+}
+
+// the peers also count as recovery peers for each other, as blind peers would
+function replicateAsRecovery(...autos) {
+  return replicateMaybeRecovery(true, autos)
+}
+
+function replicateMaybeRecovery(recovery, autos) {
   const teardowns = []
 
   while (autos.length > 1) {
@@ -159,7 +169,7 @@ function replicate(...autos) {
       const s2 = b.replicate(false)
 
       s1.pipe(s2).pipe(s1)
-      recoveryPeers(s1, s2)
+      if (recovery) recoveryPeers(s1, s2)
 
       s1.on('error', console.error)
       s2.on('error', console.error)

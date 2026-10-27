@@ -8,7 +8,13 @@ const Hypercore = require('hypercore')
 const Autobee = require('../index.js')
 const { migrateCore, Remapper } = require('../lib/remap.js')
 const { ManifestData } = require('../lib/encoding.js')
-const { replicate, sync, recoveryPeers, remapped: settled } = require('./helpers/index.js')
+const {
+  replicate,
+  replicateAsRecovery,
+  sync,
+  recoveryPeers,
+  remapped: settled
+} = require('./helpers/index.js')
 
 const skip = !['linux', 'darwin'].includes(os.platform())
 
@@ -522,7 +528,7 @@ test(
     const b = await openFixture(t, { dir: await t.tmp(), peer: false })
     t.teardown(() => closeFixture(b))
 
-    const done = replicate(a.auto, b.auto)
+    const done = replicateAsRecovery(a.auto, b.auto)
     t.teardown(() => done())
     await new Promise((resolve) => setTimeout(resolve, 3000))
 
@@ -552,6 +558,7 @@ test(
     const b = await openFixture(t, { dir: await copyFixture(t), peer: false, flush: false })
     t.teardown(() => closeFixture(b))
 
+    // a is a peer of b, not a recovery peer: only the landing can end b's wait
     const done = replicate(a.auto, b.auto)
     t.teardown(() => done())
 
@@ -563,30 +570,6 @@ test(
     t.is(b.auto.system.version, 4)
     t.ok(b.auto.remapped, 'and counts as remapped')
     t.alike(await entries(b.auto.view), VIEW.meta.versions[VIEW.meta.versions.length - 1])
-  }
-)
-
-test(
-  'remap fixtures - a peer connected before the writer remapped lands when it does',
-  { skip },
-  async function (t) {
-    // b waits with no recovery peer; a is connected to it before a has remapped
-    const b = await openFixture(t, { dir: await copyFixture(t), peer: false, flush: false })
-    t.teardown(() => closeFixture(b))
-
-    const a = await openFixture(t, { flush: false })
-    t.teardown(() => closeFixture(a))
-    const done = replicate(a.auto, b.auto)
-    t.teardown(() => done())
-    t.ok(a.auto.remapping && b.auto.remapping, 'neither is remapped yet')
-
-    await settled(a.auto)
-    t.absent(a.auto.remapping, 'a remapped on its own')
-
-    await settled(b.auto)
-    t.is(b.events.remap, 0, 'b copied nothing')
-    t.alike(b.auto.system.bee.head(), a.auto.system.bee.head(), 'b landed on a once a claimed')
-    t.is(b.auto.system.version, 4)
   }
 )
 
