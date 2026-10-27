@@ -280,7 +280,12 @@ async function caughtUp(a, b) {
   while (true) {
     await a.update()
     const info = await a.system.get(b.local.key)
-    if (n++ % 20 === 0) console.error('[dbg] caughtUp waiting', { applied: info && info.length, target: b.local.length })
+    if (n++ % 20 === 0) {
+      console.error('[dbg] caughtUp waiting', {
+        applied: info && info.length,
+        target: b.local.length
+      })
+    }
     if (info && info.length === b.local.length) return
     await new Promise((resolve) => setTimeout(resolve, 50))
   }

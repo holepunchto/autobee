@@ -108,7 +108,12 @@ async function openFixture(t, name, state, { prepare = null, serve = true, ...op
   await auto.flush()
   dbg(auto, 'open: remapped', { flushes: auto.system.flushes, version: auto.system.version })
   if (serve) await remapped(auto)
-  dbg(auto, 'open: done', { flushes: auto.system.flushes, version: auto.system.version, local: auto.local.length, view: auto.system.view.length })
+  dbg(auto, 'open: done', {
+    flushes: auto.system.flushes,
+    version: auto.system.version,
+    local: auto.local.length,
+    view: auto.system.view.length
+  })
 
   return auto
 }
@@ -462,20 +467,21 @@ test.solo(
   'migration - 1) c migrates, b migrates, c fast-forwards onto b',
   { skip: skipFF },
   async function (t) {
-    const state = (auto) => auto && {
-      flushes: auto.system.flushes,
-      version: auto.system.version,
-      view: auto.system.view.length,
-      local: auto.local.length,
-      draining: !!auto._draining,
-      ffing: auto.fastForwarding !== null,
-      ffTo: auto.fastForwardTo !== null,
-      searching: auto._ffSearching !== null,
-      candidates: auto._ffCandidates.size,
-      remapped: auto.remapped,
-      remapper: auto._remapper !== null,
-      closing: !!auto.closing
-    }
+    const state = (auto) =>
+      auto && {
+        flushes: auto.system.flushes,
+        version: auto.system.version,
+        view: auto.system.view.length,
+        local: auto.local.length,
+        draining: !!auto._draining,
+        ffing: auto.fastForwarding !== null,
+        ffTo: auto.fastForwardTo !== null,
+        searching: auto._ffSearching !== null,
+        candidates: auto._ffCandidates.size,
+        remapped: auto.remapped,
+        remapper: auto._remapper !== null,
+        closing: !!auto.closing
+      }
     let c = null
     let b = null
     const timer = setInterval(() => {
