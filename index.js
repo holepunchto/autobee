@@ -22,6 +22,7 @@ const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('./lib/encryption.js')
 const FastForward = require('./lib/fast-forward.js')
+const dbg = require('./lib/debug.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
@@ -696,6 +697,7 @@ module.exports = class Autobee extends ReadyResource {
 
   // the remap runs in the background, the drain picks it up once finished
   _startRemap() {
+    dbg(this, 'startRemap', { migrating: this._migrating, migration: !!this.system.migration, genesis: this.system.isGenesis(), version: this.system.version })
     // a migration is walked once it has caught up
     if (this._migrating || this.system.migration) return
 
@@ -723,6 +725,7 @@ module.exports = class Autobee extends ReadyResource {
     const remapper = this._remapper
     this._remapper = null
 
+    dbg(this, 'finishRemap', { destroyed: remapper.destroyed, remapped: this.remapped, mappings: remapper.mappings && { views: remapper.mappings.views.length, systems: remapper.mappings.systems.length } })
     if (remapper.destroyed || this.remapped) return
 
     const mappings = remapper.mappings
@@ -742,6 +745,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   _onremapped(mappings, ack) {
+    dbg(this, 'onremapped', { mappings: mappings !== null, ack, writable: this.writers.writable })
     this.remapped = true
     // a writer flushes right away, claiming the generation for whoever lands on it
     if (ack && this.writers.writable) this._forceAck = true
@@ -820,6 +824,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
+    dbg(this, 'drain start', { bumping: this.bumping, flushes: this.system.flushes, version: this.system.version, remapped: this.remapped, remapper: this._remapper !== null, ffTo: this.fastForwardTo !== null, ffing: this.fastForwarding !== null })
     if (this._updating) await this._updating
 
     await this._runPreApply()
@@ -866,9 +871,13 @@ module.exports = class Autobee extends ReadyResource {
             break // revaluate conditions...
           }
 
-          if (await this._bumpPendingWriters()) continue
+          if (await this._bumpPendingWriters()) {
+            dbg(this, 'drain applied writers', { flushes: this.system.flushes })
+            continue
+          }
 
           if (!(await this._appendAck())) break
+          dbg(this, 'drain appended ack')
           this._needsUpdate = true
         }
 
@@ -882,6 +891,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this._draining = null
+    dbg(this, 'drain end', { flushes: this.system.flushes, version: this.system.version, remapped: this.remapped })
     if (this._interrupting) return
 
     const updating = rrp()
@@ -966,6 +976,7 @@ module.exports = class Autobee extends ReadyResource {
   async _flushWakeup() {
     const hints = await this._applyWakeupHints()
     if (!hints.length) return
+    dbg(this, 'wakeup hints', hints.map((h) => [dbg.hex(h.key), h.length]))
 
     this._queueFastForward(hints)
   }
@@ -981,6 +992,7 @@ module.exports = class Autobee extends ReadyResource {
       if (previous === undefined || previous < length) this._ffCandidates.set(hex, length)
     }
 
+    dbg(this, 'queue ff', { candidates: [...this._ffCandidates].map(([k, l]) => [k.slice(0, 6), l]), searching: this._ffSearching !== null, ffTo: this.fastForwardTo !== null, ffing: this.fastForwarding !== null, catchup: this._catchupMigratedNodes !== null, enabled: this._ffEnabled })
     if (!this._ffCandidates.size || this._ffSearching !== null) return
 
     // a scheduled fast-forward is applied by the drain before we look again
@@ -1006,14 +1018,17 @@ module.exports = class Autobee extends ReadyResource {
         if (this._interrupting || this.closing || this.bootFrom) return
 
         const hints = flushCandidates(this._ffCandidates)
+        dbg(this, 'search ff', hints.map((h) => [dbg.hex(h.key), h.length]), { flushes: this.system.flushes, version: this.system.version })
 
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
+        dbg(this, 'search ff heads', heads.map((h) => [dbg.hex(h.key), h.length, h.op && h.op.version, h.op && h.op.views && h.op.views.flushes]))
 
         const ff = await FastForward.fromHeads(this, heads, {
           skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
           timeout: FastForward.DEFAULT_TIMEOUT
         })
 
+        dbg(this, 'search ff candidate', ff !== null && { head: [dbg.hex(ff.head.key), ff.head.length] })
         if (ff === null) continue
 
         if (this._interrupting || this.closing) {
@@ -1024,6 +1039,7 @@ module.exports = class Autobee extends ReadyResource {
         if (await this._runFastForward(ff)) return
       }
     } catch (err) {
+      dbg(this, 'search ff error', err && err.stack)
       safetyCatch(err)
     }
   }
@@ -1658,13 +1674,19 @@ module.exports = class Autobee extends ReadyResource {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
 
+    dbg(this, 'moveTo start', [dbg.hex(head.key), head.length], { timeout, ffTo: this.fastForwardTo !== null, ffing: this.fastForwarding !== null })
     // an explicit move goes wherever it is pointed, backwards included
     const ff = await FastForward.fromHead(this, head, null, { force: true, rewind: true, timeout })
+    dbg(this, 'moveTo fromHead', ff !== null && { head: [dbg.hex(ff.head.key), ff.head.length] })
     if (ff === null) return null
 
-    if (!(await this._runFastForward(ff, { force: true, rewind: true }))) return null
+    const ran = await this._runFastForward(ff, { force: true, rewind: true })
+    dbg(this, 'moveTo ran', ran)
+    if (!ran) return null
 
-    return this.ff.promise
+    const res = await this.ff.promise
+    dbg(this, 'moveTo done')
+    return res
   }
 
   // legacy: ungated boot straight onto a system head
@@ -1673,6 +1695,7 @@ module.exports = class Autobee extends ReadyResource {
       const ff = new FastForward(this, system, { timeout: FastForward.DEFAULT_TIMEOUT })
       return await this._runFastForward(ff, { force: true })
     } catch (err) {
+      dbg(this, 'bootFromSystem error', err && err.stack)
       safetyCatch(err)
       return false
     }
@@ -1689,32 +1712,43 @@ module.exports = class Autobee extends ReadyResource {
 
       return ff !== null && (await this._runFastForward(ff, { force: true }))
     } catch (err) {
+      dbg(this, 'bootFromHead error', err && err.stack)
       safetyCatch(err)
       return false
     }
   }
 
   async _runFastForward(ff, { force = false, rewind = false } = {}) {
+    dbg(this, 'runFF start', { head: [dbg.hex(ff.head.key), ff.head.length], force, rewind, ffTo: this.fastForwardTo !== null, ffing: this.fastForwarding !== null })
     if (this.fastForwardTo !== null || this.fastForwarding !== null) {
+      dbg(this, 'runFF busy, dropped')
       await ff.close()
       return false
     }
 
     this.fastForwarding = ff
 
+    const t = Date.now()
     const result = await ff.run()
     const flushes = ff.system.flushes
     await ff.close()
+    dbg(this, 'runFF ran', { ms: Date.now() - t, result: !!result, failed: ff.failed, flushes, local: this.system.flushes, version: ff.system.version })
 
     if (this.fastForwarding === ff) this.fastForwarding = null
 
     if (!result) return false
 
     // never move backwards, a boot head can be older than what we already have
-    if (!rewind && flushes < this.system.flushes) return false
+    if (!rewind && flushes < this.system.flushes) {
+      dbg(this, 'runFF dropped: backwards')
+      return false
+    }
 
     // apply ran while we searched, only drop it if it no longer moves us forward
-    if (!force && flushes <= this.system.flushes) return false
+    if (!force && flushes <= this.system.flushes) {
+      dbg(this, 'runFF dropped: not ahead')
+      return false
+    }
 
     this.fastForwardTo = result
     this.ff = rrp()
@@ -1750,8 +1784,10 @@ module.exports = class Autobee extends ReadyResource {
     const from = this.system.bee.head()
     const to = head
 
+    dbg(this, 'applyFF start', { to: [dbg.hex(head.key), head.length] })
     this.system.bee.move(head)
     await this.system.reset()
+    dbg(this, 'applyFF reset', { version: this.system.version, flushes: this.system.flushes, migration: !!this.system.migration })
     if (this.system.migration) await this._runMigration()
 
     this.bee.move(this.system.view)
@@ -1759,6 +1795,7 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.system.version < MAPPED_AUTOBEE_VERSION) this.remapped = false
     if (!this.remapped && this._remapper === null) this._startRemap()
+    dbg(this, 'applyFF moved', { remapped: this.remapped, remapper: this._remapper !== null })
 
     this._approvalCheck = true
     this.fastForwardTo = null
@@ -1776,6 +1813,7 @@ module.exports = class Autobee extends ReadyResource {
     await this._updateAcking()
 
     this.stats.fastForwards++
+    dbg(this, 'applyFF done', { flushes: this.system.flushes, version: this.system.version })
     this.emit('move-to', to, from)
     this.ff.resolve({ to, from })
   }

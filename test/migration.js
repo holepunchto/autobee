@@ -5,6 +5,7 @@ const uncaughts = require('uncaughts')
 const os = require('os')
 
 const Autobee = require('../index.js')
+const dbg = require('../lib/debug.js')
 const {
   AUTOBEE_VERSION,
   LEGACY_AUTOBASE_VERSION,
@@ -93,15 +94,21 @@ async function openFixture(t, name, state, { prepare = null, serve = true, ...op
 
   const store = new Corestore(dir, { allowBackup: true })
   const auto = makeAutobee(store, state, opts)
+  auto.debugName = name
 
   t.teardown(() => auto.close())
+  dbg(auto, 'open: serving')
   if (serve) await servePeers(t, store, FIXTURE, opts.key || BASE_KEY)
+  dbg(auto, 'open: ready')
   await auto.ready()
 
   // a migration boots in the background after ready(), and the fixture is
   // local on disk, so wait for it to settle before the tests poke at state
+  dbg(auto, 'open: flush')
   await auto.flush()
+  dbg(auto, 'open: remapped', { flushes: auto.system.flushes, version: auto.system.version })
   if (serve) await remapped(auto)
+  dbg(auto, 'open: done', { flushes: auto.system.flushes, version: auto.system.version, local: auto.local.length, view: auto.system.view.length })
 
   return auto
 }
@@ -130,7 +137,9 @@ function localHead(auto) {
 }
 
 async function viewReached(auto, length) {
+  let n = 0
   while (auto.system.view.length < length) {
+    if (n++ % 20 === 0) dbg(auto, 'viewReached waiting', { view: auto.system.view.length, length })
     await auto.update()
     if (auto.system.view.length < length) await new Promise((resolve) => setTimeout(resolve, 50))
   }
@@ -449,27 +458,54 @@ test('migration - no matching legacy view migrates to an empty view', { skip }, 
   t.is(a.system.view.length, 0, 'nothing to adopt: the view starts empty')
 })
 
-test(
+test.solo(
   'migration - 1) c migrates, b migrates, c fast-forwards onto b',
-  { skip: true },
+  { skip: skipFF },
   async function (t) {
+    const state = (auto) => auto && {
+      flushes: auto.system.flushes,
+      version: auto.system.version,
+      view: auto.system.view.length,
+      local: auto.local.length,
+      draining: !!auto._draining,
+      ffing: auto.fastForwarding !== null,
+      ffTo: auto.fastForwardTo !== null,
+      searching: auto._ffSearching !== null,
+      candidates: auto._ffCandidates.size,
+      remapped: auto.remapped,
+      remapper: auto._remapper !== null,
+      closing: !!auto.closing
+    }
+    let c = null
+    let b = null
+    const timer = setInterval(() => {
+      if (c) dbg(c, 'tick', state(c))
+      if (b) dbg(b, 'tick', state(b))
+    }, 2000)
+    t.teardown(() => clearInterval(timer))
+
     const cState = {}
-    const c = await openFixture(t, 'c', cState)
+    c = await openFixture(t, 'c', cState)
 
     t.is(cState.length, C_CONFIRMED)
 
     const before = []
     for (let i = 0; i < C_CONFIRMED; i++) before.push(await messageAt(c, i))
 
+    dbg(c, 'test: read before')
     const bState = {}
-    const b = await openFixture(t, 'b', bState)
+    b = await openFixture(t, 'b', bState)
 
+    dbg(c, 'test: replicate', { c: state(c), b: state(b) })
     const done = replicate(b, c)
 
     // c may already be fast-forwarding onto b on its own, so only the outcome is checked
-    await c.moveTo(safeHeadOfB(b))
+    const moved = await c.moveTo(safeHeadOfB(b))
+    dbg(c, 'test: moveTo returned', !!moved, state(c))
     await caughtUp(c, b)
+    dbg(c, 'test: caughtUp', state(c))
     await viewReached(c, B_CONFIRMED)
+    dbg(c, 'test: viewReached', state(c))
 
     for (let i = 0; i < C_CONFIRMED; i++) {
       t.alike(await messageAt(c, i), before[i], `message ${i} unchanged after ff`)

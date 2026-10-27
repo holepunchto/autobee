@@ -276,9 +276,11 @@ async function remapped(auto) {
 
 // a has applied everything b wrote, whether or not b tracks a
 async function caughtUp(a, b) {
+  let n = 0
   while (true) {
     await a.update()
     const info = await a.system.get(b.local.key)
+    if (n++ % 20 === 0) console.error('[dbg] caughtUp waiting', { applied: info && info.length, target: b.local.length })
     if (info && info.length === b.local.length) return
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
