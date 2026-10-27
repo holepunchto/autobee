@@ -272,6 +272,7 @@ async function remapped(auto) {
     if (auto.remapping) await new Promise((resolve) => setTimeout(resolve, 100))
   }
   while (auto.writable && auto.system.version < MAPPED_AUTOBEE_VERSION) await auto.update()
+  await auto.updated()
 }
 
 // a has applied everything b wrote, whether or not b tracks a
