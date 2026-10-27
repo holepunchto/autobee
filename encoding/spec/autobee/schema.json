@@ -462,6 +462,11 @@
           "type": "@autobee/system-info-v3",
           "map": null,
           "version": 3
+        },
+        {
+          "type": "@autobee/system-info-v3",
+          "map": null,
+          "version": 4
         }
       ]
     },

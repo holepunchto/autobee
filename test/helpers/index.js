@@ -1,3 +1,5 @@
+const { MAPPED_AUTOBEE_VERSION } = require('../../lib/constants.js')
+const Hypercore = require('hypercore')
 const Autobee = require('../../index.js')
 const Corestore = require('corestore')
 const b4a = require('b4a')
@@ -9,8 +11,12 @@ const encryptionKey = argv.includes('--encrypt-all')
 
 exports.create = create
 exports.sync = sync
+exports.caughtUp = caughtUp
 exports.same = same
 exports.replicate = replicate
+exports.replicateAsRecovery = replicateAsRecovery
+exports.recoveryPeers = recoveryPeers
+exports.remapped = remapped
 exports.replicateAndSync = replicateAndSync
 exports.apply = apply
 exports.encode = encode
@@ -174,6 +180,40 @@ function replicate(...autos) {
   }
 }
 
+// the peers also count as recovery peers for each other, as blind peers would
+function replicateAsRecovery(...autos) {
+  const teardowns = []
+
+  while (autos.length > 1) {
+    const a = autos.pop()
+    for (let i = 0; i < autos.length; i++) {
+      const b = autos[i]
+
+      const s1 = a.replicate(true)
+      const s2 = b.replicate(false)
+
+      s1.pipe(s2).pipe(s1)
+      recoveryPeers(s1, s2)
+
+      s1.on('error', console.error)
+      s2.on('error', console.error)
+
+      teardowns.push(async () => {
+        s1.destroy()
+        s2.destroy()
+        await Promise.all([
+          new Promise((resolve) => s1.once('close', resolve)),
+          new Promise((resolve) => s2.once('close', resolve))
+        ])
+      })
+    }
+  }
+
+  return async () => {
+    for (const teardown of teardowns) await teardown()
+  }
+}
+
 async function sync(...autos) {
   const scale = [10, 10, 20, 30, 40, 50]
 
@@ -213,4 +253,33 @@ async function replicateAndSync(...autos) {
   const done = replicate(...autos)
   await sync(...autos)
   await done()
+}
+
+// every peer the tests connect counts as a recovery peer, which a remap waits on
+const recovery = []
+Hypercore.setRecoveryPeers(recovery)
+
+function recoveryPeers(...streams) {
+  for (const s of streams) recovery.push(s.noiseStream.publicKey)
+  Hypercore.setRecoveryPeers(recovery)
+}
+
+// the remap runs in the background: wait for the store to be on the remapped
+// generation and, for a writer, for the ack that claims it to be applied
+async function remapped(auto) {
+  while (auto.remapping) {
+    await auto.update()
+    if (auto.remapping) await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  while (auto.writable && auto.system.version < MAPPED_AUTOBEE_VERSION) await auto.update()
+}
+
+// a has applied everything b wrote, whether or not b tracks a
+async function caughtUp(a, b) {
+  while (true) {
+    await a.update()
+    const info = await a.system.get(b.local.key)
+    if (info && info.length === b.local.length) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
 }
