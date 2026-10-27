@@ -1720,7 +1720,10 @@ module.exports = class Autobee extends ReadyResource {
     this.ff = rrp()
 
     // a remapped head replaces whatever we were about to remap ourselves
-    if (this._remapper !== null) this._remapper.destroy()
+    if (this._remapper !== null) {
+      this._remapper.destroy()
+      this._remapper = null
+    }
 
     this.bumpSoon()
 

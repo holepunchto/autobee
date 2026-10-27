@@ -558,12 +558,19 @@ test(
     const b = await openFixture(t, { dir: await copyFixture(t), peer: false, flush: false })
     t.teardown(() => closeFixture(b))
 
+    let landed = null
+    b.auto.once('move-to', () => {
+      landed = b.auto.remapped
+    })
+
     // a is a peer of b, not a recovery peer: only the landing can end b's wait
     const done = replicate(a.auto, b.auto)
     t.teardown(() => done())
 
     await sync(a.auto, b.auto)
     await settled(b.auto)
+
+    t.is(landed, true, 'remapped as soon as it landed')
 
     t.is(b.events.remap, 0, 'nothing was remapped')
     t.alike(b.auto.system.bee.head(), a.auto.system.bee.head(), 'the store landed on the writer')
