@@ -129,13 +129,6 @@ function localHead(auto) {
   return { key: auto.local.key, length: auto.local.length }
 }
 
-async function viewReached(auto, length) {
-  while (auto.system.view.length < length) {
-    await auto.update()
-    if (auto.system.view.length < length) await new Promise((resolve) => setTimeout(resolve, 50))
-  }
-}
-
 const B_SAFE_HEAD_LENGTH = 87
 
 function safeHeadOfB(b) {
@@ -451,7 +444,7 @@ test('migration - no matching legacy view migrates to an empty view', { skip }, 
 
 test(
   'migration - 1) c migrates, b migrates, c fast-forwards onto b',
-  { skip: true },
+  { skip: skipFF },
   async function (t) {
     const cState = {}
     const c = await openFixture(t, 'c', cState)
@@ -466,10 +459,10 @@ test(
 
     const done = replicate(b, c)
 
-    // c may already be fast-forwarding onto b on its own, so only the outcome is checked
-    await c.moveTo(safeHeadOfB(b))
+    const ff = await c.moveTo(safeHeadOfB(b))
+    t.ok(ff, 'c fast-forwarded onto b')
+
     await caughtUp(c, b)
-    await viewReached(c, B_CONFIRMED)
 
     for (let i = 0; i < C_CONFIRMED; i++) {
       t.alike(await messageAt(c, i), before[i], `message ${i} unchanged after ff`)
@@ -754,7 +747,7 @@ test(
 
 test(
   'migration - 3) a online, c migrates and ffs onto a, then b online and c ffs onto b too',
-  { skip: true },
+  { skip: skipFF },
   async function (t) {
     const aState = {}
     const a = await openFixture(t, 'a', aState)
@@ -765,11 +758,10 @@ test(
     t.is(cState.length, C_CONFIRMED)
 
     const doneA = replicate(a, c)
+    const ffA = await c.moveTo(localHead(a))
+    t.ok(ffA, 'c fast-forwarded onto a')
 
-    // c may already be fast-forwarding onto a on its own, so only the outcome is checked
-    await c.moveTo(localHead(a))
     await caughtUp(c, a)
-    await viewReached(c, A_CONFIRMED)
 
     t.is(await messageAt(c, A_CONFIRMED - 1), 'm198')
 
