@@ -824,3 +824,22 @@ async function sparseViewMirror(t, auto1, auto2) {
     s4.destroy()
   }
 }
+
+test('an explicit move cancels a fast-forward that is still running', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key)
+  await auto2.ready()
+
+  const stuck = new FastForward(auto2, { key: b4a.alloc(32, 1), length: 10 }, { timeout: 0 })
+  const background = auto2._runFastForward(stuck)
+  t.is(auto2.fastForwarding, stuck, 'a fast-forward is in flight')
+
+  t.teardown(replicate(auto1, auto2))
+
+  const moved = await auto2.moveTo({ key: auto1.local.key, length: auto1.local.length })
+  t.ok(moved, 'the explicit move landed')
+  t.is(await background, false, 'the one in flight was cancelled')
+  t.alike(auto2.system.bee.head(), auto1.system.bee.head(), 'on the head it was pointed at')
+})
