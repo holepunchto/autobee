@@ -463,7 +463,7 @@ test('migration - no matching legacy view migrates to an empty view', { skip }, 
   t.is(a.system.view.length, 0, 'nothing to adopt: the view starts empty')
 })
 
-test.solo(
+test(
   'migration - 1) c migrates, b migrates, c fast-forwards onto b',
   { skip: skipFF },
   async function (t) {
