@@ -276,6 +276,7 @@ module.exports = class Autobee extends ReadyResource {
       // unblock the guard awaiters (bee preloads, bumps, wakeups, flushes)
       this._bootGuard.destroy(err)
       this._bootOnlineGuard.destroy(err)
+      await Promise.allSettled([this.local?.close(), this.bootstrap?.close()].filter(Boolean))
       throw err
     }
 
