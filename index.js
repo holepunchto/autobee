@@ -67,7 +67,8 @@ module.exports = class Autobee extends ReadyResource {
         await 1
         await this._bootGuard.ready()
       },
-      getEncryptionProvider: this.getViewEncryption
+      getEncryptionProvider: this.getViewEncryption,
+      mappings: true
     })
 
     this.store = store
