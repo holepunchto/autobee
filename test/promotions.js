@@ -50,6 +50,18 @@ test('promotions - a grant refreshes the cached anchored level', async function 
   t.alike(p.digest, await fromScratch(bee))
 })
 
+test('promotions - the cold fill reads all hints at once', async function (t) {
+  const bee = new CountingBee()
+  const writers = keys(6)
+
+  for (const w of writers.slice(0, 5)) bee.putPending(w, 1)
+
+  const p = new Promotions(bee)
+  t.is(await flush(p, bee, [request(writers[5], 1)]), 6)
+  t.is(bee.maxInflight, 6, 'every pending entry and the new writer in one round')
+  t.alike(p.digest, await fromScratch(bee))
+})
+
 test('promotions - reset drops the cached levels', async function (t) {
   const bee = new CountingBee()
   const [w1, w2, w3] = keys(3)
@@ -101,6 +113,8 @@ class CountingBee {
   constructor() {
     this.map = new Map()
     this.gets = 0
+    this.inflight = 0
+    this.maxInflight = 0
   }
 
   putPending(key, weight) {
@@ -123,10 +137,16 @@ class CountingBee {
     else this.map.set(hex, value)
   }
 
-  get(key) {
+  // resolves a tick later, like a read that has to go somewhere, so overlapping
+  // reads show up in maxInflight
+  async get(key) {
     this.gets++
+    this.inflight++
+    this.maxInflight = Math.max(this.maxInflight, this.inflight)
+    await new Promise((resolve) => setImmediate(resolve))
+    this.inflight--
     const value = this.map.get(b4a.toString(key, 'hex'))
-    return Promise.resolve(value ? { key, value } : null)
+    return value ? { key, value } : null
   }
 
   async *createReadStream({ gte, lt }) {
