@@ -67,7 +67,8 @@ module.exports = class Autobee extends ReadyResource {
         await 1
         await this._bootGuard.ready()
       },
-      getEncryptionProvider: this.getViewEncryption
+      getEncryptionProvider: this.getViewEncryption,
+      mappings: true
     })
 
     this.store = store
@@ -1662,7 +1663,15 @@ module.exports = class Autobee extends ReadyResource {
     const ff = await FastForward.fromHead(this, head, null, { force: true, rewind: true, timeout })
     if (ff === null) return null
 
-    if (!(await this._runFastForward(ff, { force: true, rewind: true }))) return null
+    while (this.fastForwardTo !== null && !this.closing) await this.ff.promise
+
+    const previous = this.fastForwarding
+    this.fastForwarding = null
+
+    const running = this._runFastForward(ff, { force: true, rewind: true })
+    if (previous !== null) await previous.close()
+
+    if (!(await running)) return null
 
     return this.ff.promise
   }
@@ -1706,7 +1715,8 @@ module.exports = class Autobee extends ReadyResource {
     const flushes = ff.system.flushes
     await ff.close()
 
-    if (this.fastForwarding === ff) this.fastForwarding = null
+    if (this.fastForwarding !== ff) return false
+    this.fastForwarding = null
 
     if (!result) return false
 
