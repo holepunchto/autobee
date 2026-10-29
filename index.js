@@ -125,6 +125,7 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwarding = null
     this.fastForwardTo = null
     this._ffCandidates = new Map()
+    this._ffFailed = new Map()
     this._ffSearching = null
     this._bumpSignal = new Signal()
 
@@ -1010,19 +1011,23 @@ module.exports = class Autobee extends ReadyResource {
 
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
-        const ff = await FastForward.fromHeads(this, heads, {
-          skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
-          timeout: FastForward.DEFAULT_TIMEOUT
-        })
+        // a boot that fails is passed over on the next pick, so the rest of the batch gets its turn
+        while (true) {
+          const ff = await FastForward.fromHeads(this, heads, {
+            skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
+            timeout: FastForward.DEFAULT_TIMEOUT
+          })
 
-        if (ff === null) continue
+          if (ff === null) break
 
-        if (this._interrupting || this.closing) {
-          await ff.close()
-          return
+          if (this._interrupting || this.closing) {
+            await ff.close()
+            return
+          }
+
+          if (await this._runFastForward(ff)) return
+          if (!ff.failed) break
         }
-
-        if (await this._runFastForward(ff)) return
       }
     } catch (err) {
       safetyCatch(err)

@@ -13,7 +13,8 @@ const {
   sync,
   encode,
   decode,
-  dump
+  dump,
+  apply
 } = require('./helpers')
 
 // predates the moveTo removal
@@ -843,3 +844,69 @@ test('an explicit move cancels a fast-forward that is still running', async func
   t.is(await background, false, 'the one in flight was cancelled')
   t.alike(auto2.system.bee.head(), auto1.system.bee.head(), 'on the head it was pointed at')
 })
+
+test('a boot nobody serves hands the search to the next head of the batch', async function (t) {
+  t.timeout(60_000)
+
+  // c holds its applies, as replay of a long gap is slow, so only a fast-forward catches it up
+  let hold = null
+  t.teardown(() => hold && hold.resolve())
+
+  const a = await create(t)
+  const b = await create(t, a.key)
+  const c = await create(t, a.key, {
+    apply: async (nodes, view, host) => {
+      if (hold) await hold.promise
+      return apply(nodes, view, host)
+    }
+  })
+
+  await a.append(encode({ addWriter: b.local.id, weight: 1 }))
+  await replicateAndSync(a, b, c)
+
+  for (let i = 0; i < 100; i++) await a.append(encode({ value: i }))
+  await replicateAndSync(a, b)
+
+  // b writes last, so its head stamps the most flushes, then leaves with the only copy of its system core
+  const ab = replicate(a, b)
+  await b.append(encode({ tip: true }))
+  await sync(a, b)
+  await ab()
+  const heads = [
+    { key: a.local.key, length: a.local.length },
+    { key: b.local.key, length: b.local.length }
+  ]
+  await b.close()
+
+  hold = Promise.withResolvers()
+  const moved = new Promise((resolve) => c.once('move-to', () => resolve(c.system.bee.core.key)))
+
+  // both heads in one batch, and only the stores replicate, so no wakeup hands c any other
+  c._queueFastForward(heads)
+
+  const s1 = a.store.replicate(true)
+  const s2 = c.store.replicate(false)
+  s1.pipe(s2).pipe(s1)
+  t.teardown(() => {
+    s1.destroy()
+    s2.destroy()
+  })
+
+  const found = await poll(() => c.fastForwardTo !== null || c.stats.fastForwards > 0, 20_000)
+  t.ok(found, "c still fast-forwards once the boot onto b's head fails")
+
+  hold.resolve()
+  if (!found) return
+
+  t.alike(await moved, a.system.bee.core.key, "onto a's head, the next best of the batch")
+})
+
+async function poll(fn, timeout) {
+  const end = Date.now() + timeout
+  while (Date.now() < end) {
+    const value = fn()
+    if (value) return value
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return null
+}
