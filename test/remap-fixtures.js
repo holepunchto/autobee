@@ -615,3 +615,72 @@ function remapperFor(store, views) {
     _unmappedCores: async () => ({ views, systems: [] })
   }
 }
+
+test('remap fixtures - a store that has not remapped lands on an old head', { skip }, async function (t) {
+  const dir = await copyFixture(t)
+  const local = b4a.from(VIEW.meta.localKey, 'hex')
+  const before = await coreLength(dir, local)
+
+  const a = await openFixture(t, { dir })
+  t.teardown(() => closeFixture(a))
+
+  const b = await openFixture(t, {
+    dir: await t.tmp(),
+    flush: false,
+    patch: (auto) => (auto._startRemap = () => {})
+  })
+  t.teardown(() => closeFixture(b))
+
+  b.auto.remapped = false
+
+  const done = replicate(a.auto, b.auto)
+  t.teardown(() => done())
+
+  t.ok(await b.auto.moveTo({ key: local, length: before }), 'lands on the head from before the remap')
+  t.is(b.auto.system.version, 3)
+})
+
+test('remap fixtures - finished copies are kept across an interrupted remap', { skip }, async function (t) {
+  const staticify = Corestore.prototype.staticify
+  let copies = 0
+  Corestore.prototype.staticify = function (...args) {
+    copies++
+    return staticify.apply(this, args)
+  }
+  t.teardown(() => (Corestore.prototype.staticify = staticify))
+
+  let copied = null
+  const done = new Promise((resolve) => (copied = resolve))
+
+  const first = await openFixture(t, {
+    flush: false,
+    patch: (auto) => {
+      auto._remapSettle = 200
+      auto._finishRemap = async function () {
+        const remapper = this._remapper
+        this._remapper = { finished: false, destroy() {} }
+        copied(remapper.mappings)
+      }
+    }
+  })
+
+  const mappings = await Promise.race([
+    done,
+    new Promise((resolve) => setTimeout(resolve, 30000, null))
+  ])
+  t.ok(mappings, 'the copies were made')
+  t.absent(first.auto.remapped, 'but the remap never finished')
+
+  const made = copies
+  t.ok(made > 0)
+
+  const dir = first.dir
+  await closeFixture(first)
+
+  const f = await openFixture(t, { dir, patch: (auto) => (auto._remapSettle = 200) })
+  t.teardown(() => closeFixture(f))
+
+  t.is(f.events.remap, 1, 'the remap finished')
+  t.is(copies, made, 'without copying anything again')
+  t.is((await mapped(f.auto)).length, mappings.views.length, 'through the same copies')
+})
