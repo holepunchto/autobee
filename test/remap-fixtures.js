@@ -617,7 +617,7 @@ test(
 )
 
 test(
-  'remap fixtures - a store that landed on an old head remaps after a restart',
+  'remap fixtures - a store that landed on an old head and restarts still remaps',
   { skip },
   async function (t) {
     const dir = await copyFixture(t)
