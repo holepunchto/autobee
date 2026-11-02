@@ -155,6 +155,7 @@ module.exports = class Autobee extends ReadyResource {
     this._preapply = handlers.preapply || null
     this._preApplied = false
     this._remapper = null
+    this._remapFailed = false
     this._remapSettle = handlers.remapSettle // override in tests
     this._forceAck = false
     this._warmup = handlers.warmup || null
@@ -708,10 +709,12 @@ module.exports = class Autobee extends ReadyResource {
 
     const remapper = new Remapper(this)
     this._remapper = remapper
+    this._remapFailed = false
 
     // a destroyed remap fails its reads after the fact, which says nothing
     const failed = (err) => {
       if (remapper.destroyed || this.closing) return
+      this._remapFailed = true
       this._onErrorBound(err)
     }
 
@@ -1679,7 +1682,10 @@ module.exports = class Autobee extends ReadyResource {
   // legacy: ungated boot straight onto a system head
   async _bootFromSystem(system) {
     try {
-      const ff = new FastForward(this, system, { timeout: FastForward.DEFAULT_TIMEOUT })
+      const ff = new FastForward(this, system, {
+        timeout: FastForward.DEFAULT_TIMEOUT,
+        force: true
+      })
       return await this._runFastForward(ff, { force: true })
     } catch (err) {
       safetyCatch(err)
