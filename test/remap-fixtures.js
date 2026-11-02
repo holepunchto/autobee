@@ -6,6 +6,7 @@ const os = require('os')
 
 const Hypercore = require('hypercore')
 const Autobee = require('../index.js')
+const FastForward = require('../lib/fast-forward.js')
 const { migrateCore, Remapper } = require('../lib/remap.js')
 const { ManifestData } = require('../lib/encoding.js')
 const {
@@ -580,30 +581,87 @@ test(
   }
 )
 
-test('remap fixtures - a peer only lands on a remapped head', { skip }, async function (t) {
-  const dir = await copyFixture(t)
-  const local = b4a.from(VIEW.meta.localKey, 'hex')
-  const before = await coreLength(dir, local)
+test(
+  'remap fixtures - a forced move onto an old head restarts the remap',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const local = b4a.from(VIEW.meta.localKey, 'hex')
+    const before = await coreLength(dir, local)
 
-  const a = await openFixture(t, { dir })
-  t.teardown(() => closeFixture(a))
+    const first = await openFixture(t, { dir })
+    const keys = await mapped(first.auto)
+    t.ok(first.auto.remapped)
 
-  const b = await openFixture(t, { dir: await t.tmp() })
-  t.teardown(() => closeFixture(b))
+    const run = Remapper.prototype.run
+    Remapper.prototype.run = () => new Promise(() => {})
 
-  const done = replicate(a.auto, b.auto)
-  t.teardown(() => done())
+    try {
+      t.ok(await first.auto.moveTo({ key: local, length: before }), 'landed on the old head')
+      t.is(first.auto.system.version, 3)
+      t.absent(first.auto.remapped, 'and does not count as remapped')
+      t.ok(first.auto._remapper !== null, 'a remap was started right away')
 
-  t.is(
-    await b.auto.moveTo({ key: local, length: before }),
-    null,
-    'not on the head from before the remap'
-  )
-  await b.auto.moveTo({ key: local, length: a.auto.local.length })
-  await sync(a.auto, b.auto)
-  t.alike(b.auto.system.bee.head(), a.auto.system.bee.head(), 'but on the one after')
-  t.is(b.auto.system.version, 4)
-})
+      await append(first.auto, [['after', 'landing']])
+      t.is(first.auto.system.version, 3, 'nothing written claims the new generation')
+
+      await closeFixture(first)
+    } finally {
+      Remapper.prototype.run = run
+    }
+
+    const f = await openFixture(t, { dir, patch: (auto) => (auto._remapSettle = 200) })
+    t.teardown(() => closeFixture(f))
+
+    t.ok(f.auto.remapped, 'the next boot remaps again')
+    t.is(f.auto.system.version, 4)
+    t.alike(await mapped(f.auto), keys, 'through the same copies')
+  }
+)
+
+test(
+  'remap fixtures - a failed remap warns and opens the store to old heads',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const local = b4a.from(VIEW.meta.localKey, 'hex')
+    const before = await coreLength(dir, local)
+
+    const run = Remapper.prototype.run
+    Remapper.prototype.run = () => Promise.reject(new Error('remap failed'))
+    t.teardown(() => (Remapper.prototype.run = run))
+
+    const errors = []
+    const warnings = []
+    const f = await openFixture(t, {
+      dir,
+      peer: false,
+      flush: false,
+      patch: (auto) => {
+        auto.on('error', (err) => errors.push(err))
+        auto.on('warning', (err) => warnings.push(err.message))
+      }
+    })
+    t.teardown(() => closeFixture(f))
+
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    t.alike(warnings, ['remap failed'])
+    t.is(errors.length, 0, 'no error')
+    t.absent(f.auto.closed, 'the store stays open')
+    t.ok(f.auto._remapFailed)
+    t.absent(f.auto.remapped)
+
+    const old = { key: local, length: before }
+    const ff = await FastForward.fromHead(f.auto, old, null, { skipGap: true, rewind: true })
+    t.ok(await ff.run(), 'an old head is accepted')
+    await ff.close()
+
+    Remapper.prototype.run = () => new Promise(() => {})
+    t.ok(await f.auto.moveTo(old), 'landed')
+    t.absent(f.auto._remapFailed, 'the landing clears the failure')
+    t.ok(f.auto._remapper !== null, 'and starts a new remap')
+  }
+)
 
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
