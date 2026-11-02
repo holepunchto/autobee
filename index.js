@@ -172,6 +172,7 @@ module.exports = class Autobee extends ReadyResource {
     this.interrupted = null
     this._interrupting = false
     this._onErrorBound = this._onError.bind(this)
+    this._warn = emitWarning.bind(this)
     this._onGroupUpdateBound = this._onGroupUpdate.bind(this)
 
     this.wakeupCapability = null
@@ -709,13 +710,12 @@ module.exports = class Autobee extends ReadyResource {
 
     const remapper = new Remapper(this)
     this._remapper = remapper
-    this._remapFailed = false
 
     // a destroyed remap fails its reads after the fact, which says nothing
     const failed = (err) => {
       if (remapper.destroyed || this.closing) return
       this._remapFailed = true
-      this._onErrorBound(err)
+      this._warn(err)
     }
 
     remapper.run({ settle: this._remapSettle }).then(this.bumpSoon.bind(this), failed)
@@ -843,7 +843,9 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (this._remapper !== null && this._remapper.finished) await this._finishRemap()
+    if (this._remapper !== null && this._remapper.finished && !this._remapFailed) {
+      await this._finishRemap()
+    }
     if (!this.remapped && this._remapper === null && this.fastForwardTo === null) this._startRemap()
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
@@ -1771,6 +1773,7 @@ module.exports = class Autobee extends ReadyResource {
     this._workingBee.move(this.system.view)
 
     if (this.system.version < MAPPED_AUTOBEE_VERSION) this.remapped = false
+    this._remapFailed = false
     if (!this.remapped && this._remapper === null) this._startRemap()
 
     this._approvalCheck = true
@@ -1852,4 +1855,9 @@ function crashSoon(err) {
     throw err
   })
   throw err
+}
+
+function emitWarning(err) {
+  safetyCatch(err)
+  this.emit('warning', err)
 }
