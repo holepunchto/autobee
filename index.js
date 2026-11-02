@@ -1682,10 +1682,7 @@ module.exports = class Autobee extends ReadyResource {
   // legacy: ungated boot straight onto a system head
   async _bootFromSystem(system) {
     try {
-      const ff = new FastForward(this, system, {
-        timeout: FastForward.DEFAULT_TIMEOUT,
-        force: true
-      })
+      const ff = new FastForward(this, system, { timeout: FastForward.DEFAULT_TIMEOUT })
       return await this._runFastForward(ff, { force: true })
     } catch (err) {
       safetyCatch(err)
