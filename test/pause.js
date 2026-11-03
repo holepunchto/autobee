@@ -45,7 +45,7 @@ test('pause - waits for the current drain and refuses new ones', async function 
 test('pause - resume with nothing pending is a no-op', async function (t) {
   const auto = await create(t)
 
-  auto.pause()
+  await auto.pause()
   await auto.resume()
 
   await auto.append(encode({ hello: 'world' }))
@@ -61,7 +61,7 @@ test('pause - a wakeup hint still pending at close is durably group-registered',
     const auto = await create(t, { storage })
     await auto.append(encode({ hello: 'world' }))
 
-    auto.pause()
+    await auto.pause()
     auto.hintWakeup({ key: ghostKey, length: 5 })
     t.ok(auto._wakeup.hints.size > 0, 'hint buffered in memory pre-close')
 
@@ -93,7 +93,7 @@ test('pause - two writers make many updates while paused, resume catches up once
   auto1.on('busy', () => events.push('busy'))
   auto1.on('idle', () => events.push('idle'))
 
-  auto1.pause()
+  await auto1.pause()
 
   const done = replicate(auto1, auto2, auto3)
 
@@ -210,7 +210,7 @@ test('pause - the last of overlapping pause/resume calls wins', async function (
 test('pause - overlapping resumes both settle', async function (t) {
   const auto = await create(t)
 
-  auto.pause()
+  await auto.pause()
 
   await Promise.all([auto.resume(), auto.resume()])
   t.absent(auto.paused)
@@ -258,7 +258,7 @@ test('pause - a -1 (unknown length) wakeup hint does not crash a close or a norm
     const auto = await create(t, { storage })
     await auto.append(encode({ hello: 'world' }))
 
-    auto.pause()
+    await auto.pause()
     auto.hintWakeup({ key: ghostKey, length: -1 })
 
     await auto.close()
@@ -357,7 +357,7 @@ test('pause - no busy event while paused, even straight after construction', asy
   const busyWhilePaused = []
   auto.on('busy', () => busyWhilePaused.push(auto.paused))
 
-  auto.pause()
+  await auto.pause()
   await auto.resume()
 
   await auto.append(encode({ hello: 'world' }))
@@ -374,7 +374,7 @@ test('pause - append() rejects without writing when paused mid-flight', async fu
   await auto.append(encode({ warmup: true }))
 
   const appending = auto.append(encode({ a: 1 }))
-  auto.pause()
+  await auto.pause()
   t.ok(auto.paused, 'paused before append() settles')
 
   await t.exception(appending, /Autobee paused/)
@@ -403,4 +403,25 @@ test('pause - update() and append() surface a boot error rather than "Autobee pa
   await t.exception(auto.append(encode({ a: 1 })), /Encryption key is expected/)
 
   await auto.close()
+})
+
+test('pause - an append rejected while paused does not mark its approvals as sent', async function (t) {
+  const auto = await create(t)
+  await auto.append(encode({ hello: 'world' }))
+
+  const key = crypto.randomBytes(32)
+  const hex = b4a.toString(key, 'hex')
+
+  auto._collectApprovals = async () => {
+    auto.system.promotions.changed = false
+    auto._approvalCheck = false
+    auto._approvedPending.set(hex, 2)
+    await auto.pause()
+    return [{ key, weight: 2 }]
+  }
+
+  await t.exception(auto.append(encode({ a: 1 })), /Autobee paused/)
+
+  t.absent(auto._approvedPending.has(hex), 'the approval is not marked as sent')
+  t.ok(auto._approvalCheck, 'approvals are collected again on the next append')
 })

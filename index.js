@@ -1396,6 +1396,12 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  _releaseApprovals(approvals) {
+    this._approvalCheck = true
+    if (!approvals) return
+    for (const a of approvals) this._approvedPending.delete(b4a.toString(a.key, 'hex'))
+  }
+
   async _collectApprovals() {
     if (!this.system.promotions.changed && !this._approvalCheck) return null
     if (!this.writers.writable) return null
@@ -1732,7 +1738,10 @@ module.exports = class Autobee extends ReadyResource {
 
     const approvals = optimistic ? null : await this._collectApprovals()
 
-    if (this._paused) throw new Error('Autobee paused')
+    if (this._paused) {
+      this._releaseApprovals(approvals)
+      throw new Error('Autobee paused')
+    }
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
