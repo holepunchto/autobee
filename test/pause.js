@@ -412,11 +412,13 @@ test('pause - an append rejected while paused does not mark its approvals as sen
   const key = crypto.randomBytes(32)
   const hex = b4a.toString(key, 'hex')
 
+  let pauseOnce = true
   auto._collectApprovals = async () => {
     auto.system.promotions.changed = false
-    auto._approvalCheck = false
-    auto._approvedPending.set(hex, 2)
-    await auto.pause()
+    if (pauseOnce) {
+      pauseOnce = false
+      await auto.pause()
+    }
     return [{ key, weight: 2 }]
   }
 
@@ -424,4 +426,10 @@ test('pause - an append rejected while paused does not mark its approvals as sen
 
   t.absent(auto._approvedPending.has(hex), 'the approval is not marked as sent')
   t.ok(auto._approvalCheck, 'approvals are collected again on the next append')
+
+  await auto.resume()
+  await auto.append(encode({ b: 1 }))
+
+  t.is(auto._approvedPending.get(hex), 2, 'the approval is marked as sent once the node is written')
+  t.absent(auto._approvalCheck, 'the pending check is cleared with the write')
 })

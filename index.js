@@ -1396,10 +1396,12 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
-  _releaseApprovals(approvals) {
-    this._approvalCheck = true
+  _commitApprovals(approvals) {
     if (!approvals) return
-    for (const a of approvals) this._approvedPending.delete(b4a.toString(a.key, 'hex'))
+    this._approvalCheck = false
+    for (const a of approvals) {
+      this._approvedPending.set(b4a.toString(a.key, 'hex'), a.weight)
+    }
   }
 
   async _collectApprovals() {
@@ -1410,8 +1412,14 @@ module.exports = class Autobee extends ReadyResource {
     if (standing <= 0) return null
 
     this.system.promotions.changed = false
-    this._approvalCheck = false
 
+    const approvals = await this._scanApprovals(standing)
+    if (approvals === null) this._approvalCheck = false
+
+    return approvals
+  }
+
+  async _scanApprovals(standing) {
     if (!this._pendingWork(standing)) return null
 
     const approvals = []
@@ -1431,13 +1439,7 @@ module.exports = class Autobee extends ReadyResource {
       throw err
     }
 
-    if (!approvals.length) return null
-
-    for (const a of approvals) {
-      this._approvedPending.set(b4a.toString(a.key, 'hex'), a.weight)
-    }
-
-    return approvals
+    return approvals.length ? approvals : null
 
     async function fetchApproval(key, weight, approvals) {
       const hex = b4a.toString(key, 'hex')
@@ -1738,10 +1740,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const approvals = optimistic ? null : await this._collectApprovals()
 
-    if (this._paused) {
-      this._releaseApprovals(approvals)
-      throw new Error('Autobee paused')
-    }
+    if (this._paused) throw new Error('Autobee paused')
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
@@ -1760,6 +1759,8 @@ module.exports = class Autobee extends ReadyResource {
       )
       batch.push(node)
     }
+
+    this._commitApprovals(approvals)
 
     return this._bump(false)
   }
