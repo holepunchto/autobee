@@ -31,7 +31,7 @@ const { Remapper } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
-const TaskQueue = require('./lib/task-queue.js')
+const ScopeLock = require('scope-lock')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const DEFAULT_ACK_THRESHOLD = 32
@@ -144,8 +144,10 @@ module.exports = class Autobee extends ReadyResource {
     this._draining = null
     this._updating = null
     this._paused = false
+    this._pauseRequested = false
     this._resuming = false
-    this._transitions = new TaskQueue()
+    this._transitionLock = new ScopeLock()
+    this._busy = false
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -228,6 +230,18 @@ module.exports = class Autobee extends ReadyResource {
 
   get paused() {
     return this._paused
+  }
+
+  _emitBusy() {
+    if (this._busy) return
+    this._busy = true
+    this.emit('busy')
+  }
+
+  _emitIdle() {
+    if (!this._busy || this.busy) return
+    this._busy = false
+    this.emit('idle')
   }
 
   async _getCorePreload(name) {
@@ -412,7 +426,8 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
-    this._transitions.destroy()
+    if (this._pauseRequested) this._paused = true
+    this._transitionLock.destroy()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -637,7 +652,7 @@ module.exports = class Autobee extends ReadyResource {
         await this.writers.add(this.bootstrap.key)
       }
 
-      await this._bump(true)
+      if (!this._paused) await this._bump(true)
     } catch (err) {
       this._bootOnlineGuard.destroy(err)
       return
@@ -665,28 +680,44 @@ module.exports = class Autobee extends ReadyResource {
       const draining = this._drain().catch((err) => {
         if (this._draining === draining) {
           this._draining = null
-          this.emit('idle')
+          this._emitIdle()
         }
         return this._onError(err)
       })
       this._draining = draining
+      this._emitBusy()
     }
 
     return this._draining
   }
 
   update() {
-    if (this._paused) return Promise.reject(new Error('Autobee paused'))
     return this._bump(false)
   }
 
-  pause() {
+  async pause() {
+    this._pauseRequested = true
     if (!this._resuming) this._paused = true
-    return this._transitions.queue(() => this._pause())
+
+    if (!(await this._transitionLock.lock())) return
+
+    try {
+      await this._pause()
+    } finally {
+      this._transitionLock.unlock()
+    }
   }
 
-  resume() {
-    return this._transitions.queue(() => this._resume())
+  async resume() {
+    this._pauseRequested = false
+
+    if (!(await this._transitionLock.lock())) return
+
+    try {
+      await this._resume()
+    } finally {
+      this._transitionLock.unlock()
+    }
   }
 
   async _pause() {
@@ -879,7 +910,6 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
-    this.emit('busy')
     if (this._updating) await this._updating
 
     await this._runPreApply()
@@ -945,7 +975,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._draining = null
     if (this._interrupting) {
-      this.emit('idle')
+      this._emitIdle()
       return
     }
 
@@ -958,7 +988,7 @@ module.exports = class Autobee extends ReadyResource {
     } finally {
       this._updating = null
       updating.resolve()
-      this.emit('idle')
+      this._emitIdle()
     }
   }
 
@@ -1667,14 +1697,14 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async append(values, { optimistic = false } = {}) {
-    if (this.closing) throw new Error('Autobee closed')
-    if (this._paused) throw new Error('Autobee paused')
-
     this.stats.appends++
 
     if (!Array.isArray(values)) values = [values]
 
     if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!this._bootOnlineGuard.opened) await this._bootOnlineGuard.ready()
+    if (this.closing) throw new Error('Autobee closed')
+    if (this._paused) throw new Error('Autobee paused')
 
     if (!optimistic && this.writers.localWriter.isRemoved) {
       throw new Error('Not writable')
@@ -1701,6 +1731,8 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     const approvals = optimistic ? null : await this._collectApprovals()
+
+    if (this._paused) throw new Error('Autobee paused')
 
     for (let i = 0; i < values.length; i++) {
       const value = values[i]

@@ -23,7 +23,6 @@ async function runTests() {
   await import('./migration.js')
   await import('./optimistic-race.js')
   await import('./pause.js')
-  await import('./task-queue.js')
   await import('./perf.js')
   await import('./triggers.js')
   await import('./untrusted-writers.js')

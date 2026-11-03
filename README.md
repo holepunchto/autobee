@@ -154,7 +154,7 @@ Wait until all known writers have been fully indexed.
 
 #### `db.busy`
 
-`true` while an apply cycle is running. The db emits `'busy'` when a cycle starts and `'idle'` when it has finished, including the `update` hook.
+`true` while an apply cycle is running, including the `update` hook. The db emits `'busy'` when it becomes busy and `'idle'` once it is idle again, so overlapping cycles produce a single busy/idle pair.
 
 #### `await db.pause()`
 

@@ -1,4 +1,5 @@
 const test = require('brittle')
+const b4a = require('b4a')
 const crypto = require('hypercore-crypto')
 const Corestore = require('corestore')
 const Autobee = require('../index.js')
@@ -6,6 +7,7 @@ const {
   apply,
   create,
   encode,
+  decode,
   encryptionKey,
   replicate,
   replicateAndSync,
@@ -273,4 +275,132 @@ test('pause - a -1 (unknown length) wakeup hint does not crash a close or a norm
 
     await auto.close()
   }
+})
+
+test('busy - idle is not emitted while an overlapping drain has already started', async function (t) {
+  let releaseUpdate = null
+  const updateGate = new Promise((resolve) => {
+    releaseUpdate = resolve
+  })
+  let updateHits = 0
+
+  const auto = await create(t, {
+    update: async () => {
+      updateHits++
+      if (updateHits === 2) await updateGate
+    }
+  })
+
+  await auto.append(encode({ hello: 'world' }))
+
+  const events = []
+  auto.on('busy', () => events.push(['busy', auto.busy]))
+  auto.on('idle', () => events.push(['idle', auto.busy]))
+
+  const appendA = auto.append(encode({ a: 1 }))
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  t.absent(auto._draining, 'drain A has nulled _draining while parked in the update hook')
+  t.ok(auto._updating, 'drain A is still mid its _updating phase')
+
+  auto.bumpSoon()
+  t.ok(auto._draining, 'drain B has already reassigned _draining')
+  const drainB = auto._draining
+
+  releaseUpdate()
+  await appendA
+  await drainB.catch(() => {})
+
+  t.alike(events, [
+    ['busy', true],
+    ['idle', false]
+  ])
+  t.absent(auto.busy)
+})
+
+test('pause - pause() racing close() during an in-flight resume() still ends up paused', async function (t) {
+  const storage = await t.tmp()
+  const ghostKey = crypto.randomBytes(32)
+  const auto = await create(t, { storage })
+
+  await auto.append(encode({ hello: 'world' }))
+  await auto.pause()
+
+  t.ok(await auto._transitionLock.lock())
+  auto._resuming = true
+  auto._paused = false
+
+  const pausing = auto.pause()
+  t.absent(auto.paused, 'pause defers to the in-flight resume')
+
+  auto.hintWakeup({ key: ghostKey, length: 5 })
+
+  const closing = auto.close()
+
+  auto._resuming = false
+  auto._transitionLock.unlock()
+
+  await Promise.allSettled([pausing, closing])
+
+  t.ok(auto.paused, 'the pause requested before close still took effect')
+
+  const store = new Corestore(storage)
+  const core = store.get({ key: ghostKey })
+  await core.ready()
+  t.ok(core.core.header.group, 'ghost core picked up the wakeup group on close')
+  await core.close()
+  await store.close()
+})
+
+test('pause - no busy event while paused, even straight after construction', async function (t) {
+  const auto = await create(t)
+
+  const busyWhilePaused = []
+  auto.on('busy', () => busyWhilePaused.push(auto.paused))
+
+  auto.pause()
+  await auto.resume()
+
+  await auto.append(encode({ hello: 'world' }))
+
+  t.ok(busyWhilePaused.length > 0, 'drains ran after resume')
+  t.ok(
+    busyWhilePaused.every((paused) => paused === false),
+    'busy never fired while paused'
+  )
+})
+
+test('pause - append() rejects without writing when paused mid-flight', async function (t) {
+  const auto = await create(t)
+  await auto.append(encode({ warmup: true }))
+
+  const appending = auto.append(encode({ a: 1 }))
+  auto.pause()
+  t.ok(auto.paused, 'paused before append() settles')
+
+  await t.exception(appending, /Autobee paused/)
+
+  await auto.resume()
+
+  const latest = await auto.bee.get(b4a.from('latest'))
+  t.alike(decode(latest.value), { warmup: true }, 'nothing was appended')
+})
+
+test('pause - update() and append() surface a boot error rather than "Autobee paused"', async function (t) {
+  const store = new Corestore(await t.tmp())
+  t.teardown(() => store.close())
+
+  const auto = new Autobee(store, {
+    apply,
+    encrypted: true,
+    encryptionKey: Promise.resolve(null)
+  })
+  auto.on('error', () => {})
+
+  await auto.pause()
+
+  await t.exception(auto.ready(), /Encryption key is expected/)
+  await t.exception(auto.update(), /Encryption key is expected/)
+  await t.exception(auto.append(encode({ a: 1 })), /Encryption key is expected/)
+
+  await auto.close()
 })
