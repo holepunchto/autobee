@@ -8,7 +8,6 @@ const Hypercore = require('hypercore')
 const Autobee = require('../index.js')
 const FastForward = require('../lib/fast-forward.js')
 const { migrateCore, Remapper } = require('../lib/remap.js')
-const { ManifestData } = require('../lib/encoding.js')
 const {
   replicate,
   replicateAsRecovery,
