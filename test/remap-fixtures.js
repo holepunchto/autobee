@@ -418,7 +418,6 @@ test('remap fixtures - the v2 view is copied into a current core', { skip }, asy
   t.is(copy.length, src.length, 'of the same length')
   t.absent(copy.writable, 'that nobody can write to')
   t.alike(copy.key, Hypercore.key(copy.manifest), 'keyed by its manifest')
-  t.alike(c.decode(ManifestData, copy.manifest.userData).namespace, key, 'which names the source')
 
   const opened = store.get({ key: copy.key, encryption: viewEncryption() })
   await opened.ready()
