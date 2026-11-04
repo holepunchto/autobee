@@ -52,3 +52,67 @@ test('wakeup after failed boot rejects with the boot error', async function (t) 
 
   await auto.close()
 })
+
+test('failed boot releases the exclusive local core', { timeout: 10000 }, async function (t) {
+  const { WriteBatch } = require(
+    require.resolve('rocksdb-native').replace(/index\.js$/, 'lib/batch.js')
+  )
+  const flush = WriteBatch.prototype._flush
+  let failing = false
+
+  WriteBatch.prototype._flush = async function () {
+    if (!failing) return flush.call(this)
+    if (this._handle === null) await this.ready()
+    await null
+    this._db._state.io.inc()
+    this._onwrite(new Error('injected write failure'))
+  }
+  t.teardown(() => {
+    WriteBatch.prototype._flush = flush
+  })
+
+  const store = new Corestore(await t.tmp())
+  t.teardown(() => store.close())
+
+  const db = new Autobee(store.session(), null, { apply })
+  await db.ready()
+  await db.append(Buffer.from(JSON.stringify({ value: 'hello' })))
+  const key = db.key
+  await db.close()
+
+  failing = true
+  const broken = new Autobee(store.session(), key, { apply })
+  broken.on('error', () => {})
+  await t.exception(broken.ready(), /Batch was not applied/)
+  await broken.close()
+  failing = false
+
+  const again = new Autobee(store.session(), key, { apply })
+  await again.ready()
+  t.pass('reopened after storage recovered')
+  await again.close()
+})
+
+test(
+  'post-boot open failure releases the exclusive local core',
+  { timeout: 10000 },
+  async function (t) {
+    const store = new Corestore(await t.tmp())
+    t.teardown(() => store.close())
+
+    const broken = new Autobee(store, {
+      apply,
+      encrypted: true,
+      encryptionKey: Promise.resolve(null)
+    })
+    broken.on('error', () => {})
+
+    await t.exception(broken.ready(), /Encryption key is expected/)
+    await broken.close()
+
+    const again = new Autobee(store, broken.key, { apply })
+    await again.ready()
+    t.pass('reopened after the open failure')
+    await again.close()
+  }
+)
