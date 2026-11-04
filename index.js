@@ -152,7 +152,7 @@ module.exports = class Autobee extends ReadyResource {
     this._bootOnlineGuard = new ReadyGuard()
     this._bootOnlineGuard.ready().catch(safetyCatch)
 
-    this._now = handlers.now || Date.now // overridable for clock-drift tests
+    this._now = handlers.now || now // overridable for clock-drift tests
     this._preapply = handlers.preapply || null
     this._preApplied = false
     this._remapper = null
@@ -1837,6 +1837,10 @@ function flushCandidates(candidates) {
 }
 
 function noop() {}
+
+function now() {
+  return Date.now()
+}
 
 function createAnchorCore(store, prologue, manifestData) {
   const manifest = {
