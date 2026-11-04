@@ -1,4 +1,6 @@
 const test = require('brittle')
+const b4a = require('b4a')
+const Autobee = require('../')
 const { create, replicateAndSync, encode } = require('./helpers')
 const encoding = require('../lib/encoding.js')
 
@@ -59,4 +61,58 @@ test('drift - absent on nodes that predate the field', async function (t) {
   delete oplog.drift
 
   t.is(encoding.decodeOplog(encoding.encodeOplog(oplog)).drift, 0, 'decodes as zero')
+})
+
+test('drift - append throws when our clock is too far behind', async function (t) {
+  const a = await create(t)
+
+  let skew = 0
+  const b = await create(t, a.key, { now: () => Date.now() + skew })
+
+  await a.append(encode({ addWriter: b.local.id, weight: 3 }))
+  await a.append(encode({ m: 'approve' }))
+  await replicateAndSync(a, b)
+
+  const length = b.local.length
+
+  skew = -(Autobee.MAX_FORWARD_TIME_DRIFT + SKEW)
+  await t.exception(b.append(encode({ m: 'from the past' })), /Clock is too far behind/)
+  t.is(b.local.length, length, 'nothing appended')
+
+  // within the limit we are stamped forward to the system ts as usual
+  skew = -(Autobee.MAX_FORWARD_TIME_DRIFT - SKEW)
+  const val = encode({ m: 'slightly behind' })
+  await b.append(val)
+
+  const node = await b.view.get(b4a.from('latest'))
+  t.alike(node.value, val, 'applied')
+  t.is(b.writers.localWriter.pending, null, 'nothing left pending')
+})
+
+test('drift - no acks while our clock is too far behind', async function (t) {
+  const a = await create(t)
+
+  let skew = 0
+  const b = await create(t, a.key, { now: () => Date.now() + skew })
+
+  await a.append(encode({ addWriter: b.local.id }))
+  await replicateAndSync(a, b)
+
+  await b.append(encode({ m: 'hello' }))
+  await replicateAndSync(a, b)
+
+  const length = b.local.length
+
+  // the clock jumps back after the system ts was set
+  skew = -(Autobee.MAX_FORWARD_TIME_DRIFT + SKEW)
+  b._forceAck = true
+  await b.update()
+
+  t.is(b.local.length, length, 'no ack appended')
+  t.is(b.writers.localWriter.pending, null, 'nothing left pending')
+
+  skew = 0
+  await b.update()
+
+  t.is(b.local.length, length + 1, 'acks once the clock is correct')
 })

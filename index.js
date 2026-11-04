@@ -15,7 +15,8 @@ const boot = require('./lib/boot.js')
 const {
   MAPPED_AUTOBEE_VERSION,
   MAPPED_MANIFEST_VERSION,
-  DEFAULT_MANIFEST_VERSION
+  DEFAULT_MANIFEST_VERSION,
+  MAX_FORWARD_TIME_DRIFT
 } = require('./lib/constants.js')
 
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
@@ -187,6 +188,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   static GENESIS = EMPTY_HEAD
+  static MAX_FORWARD_TIME_DRIFT = MAX_FORWARD_TIME_DRIFT
 
   static isAutobee(auto) {
     return auto instanceof Autobee
@@ -1366,6 +1368,9 @@ module.exports = class Autobee extends ReadyResource {
     const now = this._now()
     const t = Math.max(now, this.system.timestamp)
 
+    // same limit as append, but an ack is optional so just skip it
+    if (t - now > MAX_FORWARD_TIME_DRIFT) return false
+
     this.writers.appendLocal(null, t, { start: 0, end: 0 }, links, false, null, null, null, t - now)
     this._forceAck = false
     return true
@@ -1597,6 +1602,9 @@ module.exports = class Autobee extends ReadyResource {
     const now = this._now()
     const t = Math.max(now, this.system.timestamp)
     const drift = t - now
+
+    if (drift > MAX_FORWARD_TIME_DRIFT) throw new Error('Clock is too far behind the system')
+
     const batch = []
 
     const rec = await this.system.get(this.local.key)
