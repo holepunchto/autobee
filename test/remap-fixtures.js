@@ -661,6 +661,30 @@ test(
   }
 )
 
+test('remap fixtures - a remapped store refuses to read a v2 core', { skip }, async function (t) {
+  const f = await openFixture(t)
+  t.teardown(() => closeFixture(f))
+
+  const latest = VIEW.meta.versions[VIEW.meta.versions.length - 1]
+  const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+  t.alike(await entries(f.auto.view), latest)
+
+  const old = f.auto.bee.checkout({ key, length: VIEW.meta.view.length })
+  t.teardown(() => old.close())
+  t.alike(await entries(old), latest, 'an old head reads through the copies')
+
+  const ctx = { key, manifest: { version: 2 } }
+  await t.exception(
+    f.auto.getViewEncryption().getKeys(0, ctx),
+    /Legacy view core read after the remap/
+  )
+
+  f.auto.fastForwarding = {}
+  await t.execution(f.auto.getViewEncryption().getKeys(0, ctx), 'but not while fast-forwarding')
+  f.auto.fastForwarding = null
+})
+
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
   return {

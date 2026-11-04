@@ -742,6 +742,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this.system.mappings = mappings.systems
+    this.system.bee.context.mappings.add(mappings.systems)
     this._onremapped(mappings, true)
   }
 
