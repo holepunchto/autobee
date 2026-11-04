@@ -1116,7 +1116,7 @@ test(
   }
 )
 
-test.solo(
+test(
   'migration - an empty legacy system keeps its boot head and fast-forwards from it',
   { skip },
   async function (t) {
