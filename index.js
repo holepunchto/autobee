@@ -31,6 +31,7 @@ const { Remapper } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
+const ScopeLock = require('scope-lock')
 
 const EMPTY_HEAD = { length: 0, key: null }
 const DEFAULT_ACK_THRESHOLD = 32
@@ -142,6 +143,11 @@ module.exports = class Autobee extends ReadyResource {
 
     this._draining = null
     this._updating = null
+    this._paused = false
+    this._pauseRequested = false
+    this._resuming = false
+    this._transitionLock = new ScopeLock()
+    this._busy = false
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -220,6 +226,22 @@ module.exports = class Autobee extends ReadyResource {
 
   get busy() {
     return !!(this._draining || this._updating)
+  }
+
+  get paused() {
+    return this._paused
+  }
+
+  _emitBusy() {
+    if (this._busy) return
+    this._busy = true
+    this.emit('busy')
+  }
+
+  _emitIdle() {
+    if (!this._busy || this.busy) return
+    this._busy = false
+    this.emit('idle')
   }
 
   async _getCorePreload(name) {
@@ -404,6 +426,8 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
+    if (this._pauseRequested) this._paused = true
+    this._transitionLock.destroy()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -436,6 +460,9 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.writers) await this.writers.close()
     await this.system.close()
+
+    await this._registerPendingWakeup()
+
     await this._wakeup.close()
     if (this.bootstrap) await this.bootstrap.close()
 
@@ -625,7 +652,7 @@ module.exports = class Autobee extends ReadyResource {
         await this.writers.add(this.bootstrap.key)
       }
 
-      await this._bump(true)
+      if (!this._paused) await this._bump(true)
     } catch (err) {
       this._bootOnlineGuard.destroy(err)
       return
@@ -636,6 +663,7 @@ module.exports = class Autobee extends ReadyResource {
 
   bumpSoon() {
     this._bumpSignal.notify()
+    if (this._paused) return
     this._bump(false).catch(safetyCatch)
   }
 
@@ -644,10 +672,20 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!force && !this._bootOnlineGuard.opened) await this._bootOnlineGuard.ready()
 
+    if (!force && this._paused) throw new Error('Autobee paused')
+
     this.bumping++
 
     if (!this._draining) {
-      this._draining = this._drain().catch(this._onErrorBound)
+      const draining = this._drain().catch((err) => {
+        if (this._draining === draining) {
+          this._draining = null
+          this._emitIdle()
+        }
+        return this._onError(err)
+      })
+      this._draining = draining
+      this._emitBusy()
     }
 
     return this._draining
@@ -655,6 +693,54 @@ module.exports = class Autobee extends ReadyResource {
 
   update() {
     return this._bump(false)
+  }
+
+  async pause() {
+    this._pauseRequested = true
+    if (!this._resuming) this._paused = true
+
+    if (!(await this._transitionLock.lock())) return
+
+    try {
+      await this._pause()
+    } finally {
+      this._transitionLock.unlock()
+    }
+  }
+
+  async resume() {
+    this._pauseRequested = false
+
+    if (!(await this._transitionLock.lock())) return
+
+    try {
+      await this._resume()
+    } finally {
+      this._transitionLock.unlock()
+    }
+  }
+
+  async _pause() {
+    if (this.closing) return
+
+    this._paused = true
+
+    if (this._draining) await this._draining
+    if (this._updating) await this._updating
+  }
+
+  async _resume() {
+    if (!this._paused || this.closing) return
+
+    this._resuming = true
+    this._paused = false
+
+    try {
+      await this._drainBootHints()
+      await this._bump(false)
+    } finally {
+      this._resuming = false
+    }
   }
 
   async updated() {
@@ -852,7 +938,7 @@ module.exports = class Autobee extends ReadyResource {
     if (changes) changes.track()
 
     // Anything expecting work to be done during bumpSoon should do it here
-    while (!this._interrupting && this.bumping > 0) {
+    while (!this._interrupting && !this._paused && this.bumping > 0) {
       if (this._interrupting) break
 
       // Ensure we catch updates during the drain (i.e. setLocal will bump)
@@ -861,9 +947,9 @@ module.exports = class Autobee extends ReadyResource {
       }
 
       try {
-        while (!this._interrupting) {
+        while (!this._interrupting && !this._paused) {
           await this._flushWakeup()
-          if (this._interrupting) break
+          if (this._interrupting || this._paused) break
 
           if (this.fastForwardTo !== null) {
             await this._applyFastForward()
@@ -888,7 +974,10 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     this._draining = null
-    if (this._interrupting) return
+    if (this._interrupting) {
+      this._emitIdle()
+      return
+    }
 
     const updating = rrp()
     this._updating = updating.promise
@@ -899,10 +988,12 @@ module.exports = class Autobee extends ReadyResource {
     } finally {
       this._updating = null
       updating.resolve()
+      this._emitIdle()
     }
   }
 
   _onGroupUpdate({ key, length }) {
+    if (this._paused) return
     this._wakeup.hint({ key, length })
     this.bumpSoon()
   }
@@ -1125,6 +1216,7 @@ module.exports = class Autobee extends ReadyResource {
   async setLocal(key, { keyPair } = {}) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
+    if (this._paused) throw new Error('Autobee paused')
 
     const manifest = keyPair
       ? { version: this.store.manifestVersion, signers: [{ publicKey: keyPair.publicKey }] }
@@ -1311,6 +1403,14 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  _commitApprovals(approvals) {
+    if (!approvals) return
+    this._approvalCheck = false
+    for (const a of approvals) {
+      this._approvedPending.set(b4a.toString(a.key, 'hex'), a.weight)
+    }
+  }
+
   async _collectApprovals() {
     if (!this.system.promotions.changed && !this._approvalCheck) return null
     if (!this.writers.writable) return null
@@ -1319,8 +1419,14 @@ module.exports = class Autobee extends ReadyResource {
     if (standing <= 0) return null
 
     this.system.promotions.changed = false
-    this._approvalCheck = false
 
+    const approvals = await this._scanApprovals(standing)
+    if (approvals === null) this._approvalCheck = false
+
+    return approvals
+  }
+
+  async _scanApprovals(standing) {
     if (!this._pendingWork(standing)) return null
 
     const approvals = []
@@ -1340,13 +1446,7 @@ module.exports = class Autobee extends ReadyResource {
       throw err
     }
 
-    if (!approvals.length) return null
-
-    for (const a of approvals) {
-      this._approvedPending.set(b4a.toString(a.key, 'hex'), a.weight)
-    }
-
-    return approvals
+    return approvals.length ? approvals : null
 
     async function fetchApproval(key, weight, approvals) {
       const hex = b4a.toString(key, 'hex')
@@ -1404,6 +1504,8 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bumpPendingWriters({ local = false } = {}) {
+    if (this._paused && !local) return false
+
     if (!local && this._catchupMigratedNodes !== null) {
       const updated = await this._bumpMigratedWriters()
       this._catchupMigratedNodes = null
@@ -1540,6 +1642,33 @@ module.exports = class Autobee extends ReadyResource {
     }
   }
 
+  async _registerPendingWakeup() {
+    if (!this.wakeupCapability || !this._paused) return
+
+    const proms = []
+    for (const hex of this._wakeup.hints.keys()) {
+      const key = b4a.from(hex, 'hex')
+      const discoveryKey = crypto.discoveryKey(key)
+      if (this.store.cores.opened(b4a.toString(discoveryKey, 'hex'))) continue
+      proms.push(this._touchWakeupCore(key, discoveryKey))
+    }
+
+    await Promise.all(proms)
+  }
+
+  async _touchWakeupCore(key, discoveryKey) {
+    let core = null
+    try {
+      if (await this.store.storage.hasCore(discoveryKey)) return
+      core = this.openCore(key)
+      await core.ready()
+    } catch (err) {
+      safetyCatch(err)
+    } finally {
+      if (core) await core.close()
+    }
+  }
+
   async _storeBoot() {
     const proms = []
 
@@ -1583,13 +1712,14 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async append(values, { optimistic = false } = {}) {
-    if (this.closing) throw new Error('Autobee closed')
-
     this.stats.appends++
 
     if (!Array.isArray(values)) values = [values]
 
     if (!this._bootGuard.opened) await this._bootGuard.ready()
+    if (!this._bootOnlineGuard.opened) await this._bootOnlineGuard.ready()
+    if (this.closing) throw new Error('Autobee closed')
+    if (this._paused) throw new Error('Autobee paused')
 
     if (!optimistic && this.writers.localWriter.isRemoved) {
       throw new Error('Not writable')
@@ -1617,6 +1747,8 @@ module.exports = class Autobee extends ReadyResource {
 
     const approvals = optimistic ? null : await this._collectApprovals()
 
+    if (this._paused) throw new Error('Autobee paused')
+
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
       const buffer = typeof value === 'string' ? b4a.from(value) : value
@@ -1634,6 +1766,8 @@ module.exports = class Autobee extends ReadyResource {
       )
       batch.push(node)
     }
+
+    this._commitApprovals(approvals)
 
     return this._bump(false)
   }
@@ -1670,6 +1804,7 @@ module.exports = class Autobee extends ReadyResource {
   async moveTo(head, { timeout = 0 } = {}) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
+    if (this._paused) throw new Error('Autobee paused')
 
     // an explicit move goes wherever it is pointed, backwards included
     const ff = await FastForward.fromHead(this, head, null, { force: true, rewind: true, timeout })
