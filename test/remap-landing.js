@@ -5,7 +5,7 @@ const fs = require('fs/promises')
 const Autobee = require('../index.js')
 const FastForward = require('../lib/fast-forward.js')
 const { MAPPED_AUTOBEE_VERSION } = require('../lib/constants.js')
-const { apply, encode, recoveryPeers } = require('./helpers/index.js')
+const { apply, encode, recoveryPeers, same } = require('./helpers/index.js')
 
 // a room from the release before the remap: in sync, on v2 cores
 
@@ -165,7 +165,7 @@ test('remap landing - peers in lock step land on the writer that remapped', asyn
   }
 
   await settled([a, b, c])
-  t.alike(await a.system.get(b.local.key), await b.system.get(b.local.key), 'b caught up on a')
+  t.ok(await same(a, b, c), 'the views agree')
 })
 
 test('remap landing - a room a little ahead of the claim lands on it', async function (t) {
@@ -183,7 +183,7 @@ test('remap landing - a room a little ahead of the claim lands on it', async fun
   }
 
   await settled([a, b, c])
-  t.alike(await a.system.get(c.local.key), await c.system.get(c.local.key), 'nothing was lost')
+  t.ok(await same(a, b, c), 'nothing was lost')
 })
 
 test('remap landing - a room far ahead of the claim stays where it is', async function (t) {
@@ -201,7 +201,7 @@ test('remap landing - a room far ahead of the claim stays where it is', async fu
   }
 
   await settled([a, b, c])
-  t.alike(await a.system.get(c.local.key), await c.system.get(c.local.key), 'and keeps up')
+  t.ok(await same(a, b, c), 'and keeps up')
 })
 
 function noop() {}
