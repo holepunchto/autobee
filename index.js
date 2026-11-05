@@ -963,10 +963,17 @@ module.exports = class Autobee extends ReadyResource {
   async _filterTracked(key, length, results) {
     if (length) {
       const info = await this.system.get(key)
-      // if we've seen this already, ignore
-      if (info && info.length >= length) return
+      // if we've seen this already, ignore - unless we may still land on it
+      if (info && info.length >= length && !(await this._isLandingHead(key))) return
     }
     results.push({ key, length })
+  }
+
+  async _isLandingHead(key) {
+    if (!this._ffEnabled || this.system.isGenesis()) return false
+    if (this.system.version >= MAPPED_AUTOBEE_VERSION) return false
+    // if we are behind and the peer is trusted, check them anyway
+    return !!(await this.trusted.isTrusted(key, this._workingView.view))
   }
 
   async _flushWakeup() {
@@ -1718,6 +1725,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const result = await ff.run()
     const flushes = ff.system.flushes
+    const version = ff.system.version
     await ff.close()
 
     if (this.fastForwarding !== ff) return false
@@ -1725,11 +1733,16 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!result) return false
 
+    // a peer in lock step with the writer that remapped is never behind its claim
+    const landing =
+      this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
+    const slack = landing ? FastForward.MIN_GAP : 0
+
     // never move backwards, a boot head can be older than what we already have
-    if (!rewind && flushes < this.system.flushes) return false
+    if (!rewind && flushes < this.system.flushes - slack) return false
 
     // apply ran while we searched, only drop it if it no longer moves us forward
-    if (!force && flushes <= this.system.flushes) return false
+    if (!force && !landing && flushes <= this.system.flushes) return false
 
     this.fastForwardTo = result
     this.ff = rrp()
