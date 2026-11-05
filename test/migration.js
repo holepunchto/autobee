@@ -1115,3 +1115,69 @@ test(
     await done()
   }
 )
+
+test(
+  'migration - an empty legacy system keeps its boot head and fast-forwards from it',
+  { skip },
+  async function (t) {
+    const fixture = path.join(
+      __dirname,
+      'fixtures/migration/autobase-no-system-blocks-v7.28.1-linux'
+    )
+    const meta = JSON.parse(await fs.readFile(path.join(fixture, 'meta.json')))
+    const bootstrap = b4a.from(meta.bootstrap, 'hex')
+
+    function openPeer(dir, state, opts = {}) {
+      const store = new Corestore(dir, { allowBackup: true })
+
+      const auto = new Autobee(store, bootstrap, {
+        remapSettle: 200,
+        apply,
+        migrate: migrateHandler(store, state, bootstrap),
+        legacyViews: [LEGACY_VIEW_NAME],
+        encrypted: true,
+        encryptionKey: SECRET_KEY,
+        ...opts
+      })
+      t.teardown(() => auto.close())
+
+      return auto
+    }
+
+    const aDir = await t.tmp()
+    await fs.cp(path.join(fixture, 'a'), aDir, { recursive: true })
+
+    const aState = {}
+    const a = openPeer(aDir, aState)
+
+    await a.ready()
+    await a.flush()
+
+    t.is(aState.calls, 1, 'a migrated its legacy storage')
+
+    const eDir = await t.tmp()
+    await fs.cp(path.join(fixture, 'e'), eDir, { recursive: true })
+
+    const eState = {}
+    const e = openPeer(eDir, eState, {
+      fastForward: { boot: { head: localHead(a) } }
+    })
+
+    const done = replicate(a, e)
+
+    await e.ready()
+    await e.flush()
+
+    t.is(eState.calls, 1, 'migrate handler ran once, on the head we fast-forwarded to')
+    t.ok(e.system.flushes > 0, 'booted from the head instead of parking on an empty system')
+    t.is(e.stats.fastForwards, 1, 'the boot fast-forward ran')
+
+    await sync(a, e)
+
+    for (let i = 0; i < meta.viewLength; i++) {
+      t.is(await messageAt(e, i), meta.messages[i], `message ${i} matches`)
+    }
+
+    await done()
+  }
+)

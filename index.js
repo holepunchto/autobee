@@ -580,8 +580,8 @@ module.exports = class Autobee extends ReadyResource {
       this._migrating = true
       this._catchupMigratedNodes = result.migration.catchup
 
-      // ff boot invalidated by migration
-      this.bootFrom = null
+      // ff boot invalidated by migration, unless nothing migrated
+      if (system.length > 0) this.bootFrom = null
 
       for (const batch of result.migration.catchup) {
         const { key, length } = batch[batch.length - 1]
