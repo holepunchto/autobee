@@ -125,6 +125,7 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwarding = null
     this.fastForwardTo = null
     this._ffCandidates = new Map()
+    this._ffAttempts = new FastForward.Attempts()
     this._ffSearching = null
     this._bumpSignal = new Signal()
 
@@ -203,6 +204,13 @@ module.exports = class Autobee extends ReadyResource {
   // until the store is on the remapped generation, by its own remap or a landing
   get remapping() {
     return !this.remapped
+  }
+
+  // on the old generation with history: any remapped head is worth landing on
+  get upgrading() {
+    return (
+      !this.remapped && !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION
+    )
   }
 
   get writable() {
@@ -962,9 +970,14 @@ module.exports = class Autobee extends ReadyResource {
 
   async _filterTracked(key, length, results) {
     if (length) {
-      const info = await this.system.get(key)
-      // if we've seen this already, ignore
-      if (info && info.length >= length) return
+      // applied is not enough while upgrading: the head may carry the new generation
+      if (this.upgrading) {
+        if (this._ffAttempts.checked({ key, length })) return
+      } else {
+        const info = await this.system.get(key)
+        // if we've seen this already, ignore
+        if (info && info.length >= length) return
+      }
     }
     results.push({ key, length })
   }
@@ -1014,20 +1027,26 @@ module.exports = class Autobee extends ReadyResource {
         const hints = flushCandidates(this._ffCandidates)
 
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
+        this._ffAttempts.record(heads)
 
-        const ff = await FastForward.fromHeads(this, heads, {
+        const ffs = await FastForward.fromHeads(this, heads, {
           skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
           timeout: FastForward.DEFAULT_TIMEOUT
         })
 
-        if (ff === null) continue
+        while (ffs.length) {
+          const ff = ffs.shift()
 
-        if (this._interrupting || this.closing) {
-          await ff.close()
-          return
+          if (this._interrupting || this.closing) {
+            await Promise.all([ff, ...ffs].map((f) => f.close()))
+            return
+          }
+
+          if (await this._runFastForward(ff)) {
+            await Promise.all(ffs.map((f) => f.close()))
+            return
+          }
         }
-
-        if (await this._runFastForward(ff)) return
       }
     } catch (err) {
       safetyCatch(err)
@@ -1720,16 +1739,22 @@ module.exports = class Autobee extends ReadyResource {
     const flushes = ff.system.flushes
     await ff.close()
 
+    // a read that failed says nothing about the head, let it be announced again
+    if (ff.failed && ff.hint) this._ffAttempts.forget(ff.hint)
+
     if (this.fastForwarding !== ff) return false
     this.fastForwarding = null
 
     if (!result) return false
 
+    // a remapped head is taken by an old-generation store wherever it sits
+    const upgrade = this.upgrading && ff.system.version >= MAPPED_AUTOBEE_VERSION
+
     // never move backwards, a boot head can be older than what we already have
-    if (!rewind && flushes < this.system.flushes) return false
+    if (!rewind && !upgrade && flushes < this.system.flushes) return false
 
     // apply ran while we searched, only drop it if it no longer moves us forward
-    if (!force && flushes <= this.system.flushes) return false
+    if (!force && !upgrade && flushes <= this.system.flushes) return false
 
     this.fastForwardTo = result
     this.ff = rrp()
@@ -1791,6 +1816,7 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._updateAcking()
 
+    this._ffAttempts.clear()
     this.stats.fastForwards++
     this.emit('move-to', to, from)
     this.ff.resolve({ to, from })

@@ -13,6 +13,7 @@ const {
   replicateAsRecovery,
   sync,
   recoveryPeers,
+  caughtUp,
   remapped: settled
 } = require('./helpers/index.js')
 
@@ -147,6 +148,27 @@ async function mapped(auto) {
 async function append(auto, puts, dels = []) {
   await auto.append(b4a.from(JSON.stringify({ puts, dels })))
   await auto.update()
+}
+
+// the same old-generation state booted by a different writer: a fresh local
+// core carries the fixture's boot record and the bootstrap points at it
+async function asOtherMember(dir, fixture = VIEW) {
+  const store = new Corestore(dir, { allowBackup: true, manifestVersion: 2 })
+  const bootstrap = store.get({ key: b4a.from(fixture.meta.baseKey, 'hex'), active: false })
+  await bootstrap.ready()
+  const local = store.get({ key: await bootstrap.getUserData('autobee/local'), active: false })
+  const other = store.get({ name: 'other-member', active: false })
+  await Promise.all([local.ready(), other.ready()])
+
+  for (const name of ['autobee/head', 'autobee/encryption', 'autobee/previous-drain', 'referrer']) {
+    const value = await local.getUserData(name)
+    if (value) await other.setUserData(name, value)
+  }
+  await bootstrap.setUserData('autobee/local', other.key)
+
+  await Promise.all([bootstrap.close(), local.close(), other.close()])
+  await store.close()
+  return dir
 }
 
 async function copyFixture(t, fixture = VIEW) {
@@ -658,6 +680,117 @@ test(
     t.ok(await f.auto.moveTo(old), 'landed')
     t.absent(f.auto._remapFailed, 'the landing clears the failure')
     t.ok(f.auto._remapper !== null, 'and starts a new remap')
+  }
+)
+
+test(
+  'remap fixtures - a member that applied the remapped head still lands on it',
+  { skip, timeout: 90000 },
+  async function (t) {
+    const a = await openFixture(t)
+    t.teardown(() => closeFixture(a))
+    t.is(a.auto.system.version, 4)
+
+    // a member on the old generation, with no recovery peer of its own and
+    // fast-forward held off while it applies the writer's remap ack as a plain node
+    const b = await openFixture(t, {
+      dir: await asOtherMember(await copyFixture(t)),
+      peer: false,
+      flush: false,
+      patch: (auto) => (auto._ffEnabled = false)
+    })
+    t.teardown(() => closeFixture(b))
+
+    const done = replicate(a.auto, b.auto)
+    t.teardown(() => done())
+
+    await caughtUp(b.auto, a.auto)
+    t.is(b.auto.system.version, 3, 'still on the old generation')
+    t.absent(b.auto.remapped)
+    t.is(b.auto.stats.fastForwards, 0)
+
+    b.auto._ffEnabled = true
+    b.auto.hintWakeup({ key: a.auto.local.key, length: a.auto.local.length })
+
+    const until = Date.now() + 15000
+    while (b.auto.system.version < 4 && Date.now() < until) {
+      await b.auto.update()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
+    t.is(b.auto.stats.fastForwards, 1, 'landed on the remapped head it had already applied')
+    t.is(b.auto.system.version, 4)
+    t.ok(b.auto.remapped)
+    t.alike(await entries(b.auto.view), VIEW.meta.versions[VIEW.meta.versions.length - 1])
+  }
+)
+
+test(
+  'remap fixtures - a refused old head does not hide the remapped one ranked below it',
+  { skip, timeout: 90000 },
+  async function (t) {
+    const a = await openFixture(t)
+    t.teardown(() => closeFixture(a))
+
+    const b = await openFixture(t, {
+      dir: await asOtherMember(await copyFixture(t)),
+      peer: false,
+      flush: false,
+      patch: (auto) => (auto._ffEnabled = false)
+    })
+    t.teardown(() => closeFixture(b))
+
+    const done = replicate(a.auto, b.auto)
+    t.teardown(() => done())
+    await caughtUp(b.auto, a.auto)
+
+    // the search hands back the old generation first, as a busier old writer would rank
+    const fromHeads = FastForward.fromHeads
+    FastForward.fromHeads = async () => [
+      new FastForward(
+        b.auto,
+        { key: b4a.from(VIEW.meta.systemView.key, 'hex'), length: VIEW.meta.systemView.length },
+        { timeout: 5000 }
+      ),
+      new FastForward(b.auto, a.auto.system.bee.head(), { timeout: 5000 })
+    ]
+    t.teardown(() => (FastForward.fromHeads = fromHeads))
+
+    b.auto._ffEnabled = true
+    b.auto.hintWakeup({ key: a.auto.local.key, length: a.auto.local.length })
+
+    const until = Date.now() + 15000
+    while (b.auto.system.version < 4 && Date.now() < until) {
+      await b.auto.update()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
+    t.is(b.auto.stats.fastForwards, 1, 'landed on the second candidate')
+    t.is(b.auto.system.version, 4)
+    t.alike(b.auto.system.bee.head(), a.auto.system.bee.head())
+  }
+)
+
+test(
+  'remap fixtures - reopening a remapped store with an older boot head does not rewind it',
+  { skip },
+  async function (t) {
+    const first = await openFixture(t)
+    const dir = first.dir
+    const local = b4a.from(VIEW.meta.localKey, 'hex')
+
+    await append(first.auto, [['after', 'remap']])
+    const older = { key: local, length: first.auto.local.length - 1 }
+    const flushes = first.auto.system.flushes
+    await closeFixture(first)
+
+    const f = await openFixture(t, { dir, patch: (auto) => (auto.bootFrom = older) })
+    t.teardown(() => closeFixture(f))
+
+    t.is(f.auto.stats.fastForwards, 0, 'the older head was not landed on')
+    t.is(f.auto.system.flushes, flushes)
+    t.is(f.auto.system.version, 4)
+    t.ok((await entries(f.auto.view)).some(([k]) => k === 'after'))
   }
 )
 
