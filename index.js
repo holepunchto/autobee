@@ -125,6 +125,7 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwarding = null
     this.fastForwardTo = null
     this._ffCandidates = new Map()
+    this._ffChecked = new Map()
     this._ffSearching = null
     this._bumpSignal = new Signal()
 
@@ -203,6 +204,11 @@ module.exports = class Autobee extends ReadyResource {
   // until the store is on the remapped generation, by its own remap or a landing
   get remapping() {
     return !this.remapped
+  }
+
+  // on the old generation with history: any remapped head is worth landing on
+  get upgrading() {
+    return !this.remapped && !this.system.isGenesis()
   }
 
   get writable() {
@@ -962,9 +968,14 @@ module.exports = class Autobee extends ReadyResource {
 
   async _filterTracked(key, length, results) {
     if (length) {
-      const info = await this.system.get(key)
-      // if we've seen this already, ignore
-      if (info && info.length >= length) return
+      // applied is not enough while upgrading: the head may carry the new generation
+      if (this.upgrading) {
+        if ((this._ffChecked.get(b4a.toString(key, 'hex')) || 0) >= length) return
+      } else {
+        const info = await this.system.get(key)
+        // if we've seen this already, ignore
+        if (info && info.length >= length) return
+      }
     }
     results.push({ key, length })
   }
@@ -1012,6 +1023,7 @@ module.exports = class Autobee extends ReadyResource {
         if (this._interrupting || this.closing || this.bootFrom) return
 
         const hints = flushCandidates(this._ffCandidates)
+        for (const { key, length } of hints) this._ffChecked.set(b4a.toString(key, 'hex'), length)
 
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
@@ -1725,11 +1737,14 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!result) return false
 
+    // a remapped head is taken by an old-generation store wherever it sits
+    const upgrade = this.upgrading && ff.system.version >= MAPPED_AUTOBEE_VERSION
+
     // never move backwards, a boot head can be older than what we already have
-    if (!rewind && flushes < this.system.flushes) return false
+    if (!rewind && !upgrade && flushes < this.system.flushes) return false
 
     // apply ran while we searched, only drop it if it no longer moves us forward
-    if (!force && flushes <= this.system.flushes) return false
+    if (!force && !upgrade && flushes <= this.system.flushes) return false
 
     this.fastForwardTo = result
     this.ff = rrp()
@@ -1791,6 +1806,7 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._updateAcking()
 
+    this._ffChecked.clear()
     this.stats.fastForwards++
     this.emit('move-to', to, from)
     this.ff.resolve({ to, from })
