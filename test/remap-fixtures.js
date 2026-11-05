@@ -771,6 +771,29 @@ test(
   }
 )
 
+test(
+  'remap fixtures - reopening a remapped store with an older boot head does not rewind it',
+  { skip },
+  async function (t) {
+    const first = await openFixture(t)
+    const dir = first.dir
+    const local = b4a.from(VIEW.meta.localKey, 'hex')
+
+    await append(first.auto, [['after', 'remap']])
+    const older = { key: local, length: first.auto.local.length - 1 }
+    const flushes = first.auto.system.flushes
+    await closeFixture(first)
+
+    const f = await openFixture(t, { dir, patch: (auto) => (auto.bootFrom = older) })
+    t.teardown(() => closeFixture(f))
+
+    t.is(f.auto.stats.fastForwards, 0, 'the older head was not landed on')
+    t.is(f.auto.system.flushes, flushes)
+    t.is(f.auto.system.version, 4)
+    t.ok((await entries(f.auto.view)).some(([k]) => k === 'after'))
+  }
+)
+
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
   return {

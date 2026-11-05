@@ -208,7 +208,9 @@ module.exports = class Autobee extends ReadyResource {
 
   // on the old generation with history: any remapped head is worth landing on
   get upgrading() {
-    return !this.remapped && !this.system.isGenesis()
+    return (
+      !this.remapped && !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION
+    )
   }
 
   get writable() {
@@ -1023,9 +1025,9 @@ module.exports = class Autobee extends ReadyResource {
         if (this._interrupting || this.closing || this.bootFrom) return
 
         const hints = flushCandidates(this._ffCandidates)
-        this._ffAttempts.record(hints)
 
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
+        this._ffAttempts.record(heads)
 
         const ffs = await FastForward.fromHeads(this, heads, {
           skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
@@ -1736,6 +1738,9 @@ module.exports = class Autobee extends ReadyResource {
     const result = await ff.run()
     const flushes = ff.system.flushes
     await ff.close()
+
+    // a read that failed says nothing about the head, let it be announced again
+    if (ff.failed && ff.hint) this._ffAttempts.forget(ff.hint)
 
     if (this.fastForwarding !== ff) return false
     this.fastForwarding = null
