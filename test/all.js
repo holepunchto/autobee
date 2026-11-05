@@ -30,6 +30,7 @@ async function runTests() {
   await import('./view-consistency.js')
   await import('./view-range.js')
   await import('./remap-fixtures.js')
+  await import('./remap-landing.js')
   await import('./wakeup.js')
   await import('./weight-hint.js')
   await import('./wire-compat.js')
