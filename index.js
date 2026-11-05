@@ -963,10 +963,17 @@ module.exports = class Autobee extends ReadyResource {
   async _filterTracked(key, length, results) {
     if (length) {
       const info = await this.system.get(key)
-      // if we've seen this already, ignore
-      if (info && info.length >= length) return
+      // if we've seen this already, ignore - unless we may still land on it
+      if (info && info.length >= length && !(await this._isLandingHead(key))) return
     }
     results.push({ key, length })
+  }
+
+  async _isLandingHead(key) {
+    if (!this._ffEnabled || this.system.isGenesis()) return false
+    if (this.system.version >= MAPPED_AUTOBEE_VERSION) return false
+    // if we are behind and the peer is trusted, check them anyway
+    return !!(await this.trusted.isTrusted(key, this._workingView.view))
   }
 
   async _flushWakeup() {
