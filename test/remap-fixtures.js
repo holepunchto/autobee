@@ -725,6 +725,52 @@ test(
   }
 )
 
+test(
+  'remap fixtures - a refused old head does not hide the remapped one ranked below it',
+  { skip, timeout: 90000 },
+  async function (t) {
+    const a = await openFixture(t)
+    t.teardown(() => closeFixture(a))
+
+    const b = await openFixture(t, {
+      dir: await asOtherMember(await copyFixture(t)),
+      peer: false,
+      flush: false,
+      patch: (auto) => (auto._ffEnabled = false)
+    })
+    t.teardown(() => closeFixture(b))
+
+    const done = replicate(a.auto, b.auto)
+    t.teardown(() => done())
+    await caughtUp(b.auto, a.auto)
+
+    // the search hands back the old generation first, as a busier old writer would rank
+    const fromHeads = FastForward.fromHeads
+    FastForward.fromHeads = async () => [
+      new FastForward(
+        b.auto,
+        { key: b4a.from(VIEW.meta.systemView.key, 'hex'), length: VIEW.meta.systemView.length },
+        { timeout: 5000 }
+      ),
+      new FastForward(b.auto, a.auto.system.bee.head(), { timeout: 5000 })
+    ]
+    t.teardown(() => (FastForward.fromHeads = fromHeads))
+
+    b.auto._ffEnabled = true
+    b.auto.hintWakeup({ key: a.auto.local.key, length: a.auto.local.length })
+
+    const until = Date.now() + 15000
+    while (b.auto.system.version < 4 && Date.now() < until) {
+      await b.auto.update()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
+    t.is(b.auto.stats.fastForwards, 1, 'landed on the second candidate')
+    t.is(b.auto.system.version, 4)
+    t.alike(b.auto.system.bee.head(), a.auto.system.bee.head())
+  }
+)
+
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
   return {

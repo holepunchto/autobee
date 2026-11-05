@@ -1027,19 +1027,24 @@ module.exports = class Autobee extends ReadyResource {
 
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
-        const ff = await FastForward.fromHeads(this, heads, {
+        const ffs = await FastForward.fromHeads(this, heads, {
           skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
           timeout: FastForward.DEFAULT_TIMEOUT
         })
 
-        if (ff === null) continue
+        while (ffs.length) {
+          const ff = ffs.shift()
 
-        if (this._interrupting || this.closing) {
-          await ff.close()
-          return
+          if (this._interrupting || this.closing) {
+            await Promise.all([ff, ...ffs].map((f) => f.close()))
+            return
+          }
+
+          if (await this._runFastForward(ff)) {
+            await Promise.all(ffs.map((f) => f.close()))
+            return
+          }
         }
-
-        if (await this._runFastForward(ff)) return
       }
     } catch (err) {
       safetyCatch(err)
