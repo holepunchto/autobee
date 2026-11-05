@@ -125,7 +125,7 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwarding = null
     this.fastForwardTo = null
     this._ffCandidates = new Map()
-    this._ffChecked = new Map()
+    this._ffAttempts = new FastForward.Attempts()
     this._ffSearching = null
     this._bumpSignal = new Signal()
 
@@ -970,7 +970,7 @@ module.exports = class Autobee extends ReadyResource {
     if (length) {
       // applied is not enough while upgrading: the head may carry the new generation
       if (this.upgrading) {
-        if ((this._ffChecked.get(b4a.toString(key, 'hex')) || 0) >= length) return
+        if (this._ffAttempts.checked({ key, length })) return
       } else {
         const info = await this.system.get(key)
         // if we've seen this already, ignore
@@ -1023,7 +1023,7 @@ module.exports = class Autobee extends ReadyResource {
         if (this._interrupting || this.closing || this.bootFrom) return
 
         const hints = flushCandidates(this._ffCandidates)
-        for (const { key, length } of hints) this._ffChecked.set(b4a.toString(key, 'hex'), length)
+        this._ffAttempts.record(hints)
 
         const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
 
@@ -1806,7 +1806,7 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._updateAcking()
 
-    this._ffChecked.clear()
+    this._ffAttempts.clear()
     this.stats.fastForwards++
     this.emit('move-to', to, from)
     this.ff.resolve({ to, from })
