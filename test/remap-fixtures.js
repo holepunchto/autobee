@@ -661,6 +661,95 @@ test(
   }
 )
 
+test(
+  'remap fixtures - a remap that cannot get its cores in time fails over to the old generation',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const local = b4a.from(VIEW.meta.localKey, 'hex')
+    const before = await coreLength(dir, local)
+
+    // no recovery peer ever shows up: the gate gives up instead of waiting forever
+    const warnings = []
+    const a = await openFixture(t, {
+      dir,
+      peer: false,
+      flush: false,
+      patch: (auto) => {
+        auto._remapTimeout = 1000
+        auto.on('warning', (err) => warnings.push(err.message))
+      }
+    })
+    t.teardown(() => closeFixture(a))
+
+    const until = Date.now() + 15000
+    while (!a.auto._remapFailed && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+
+    t.ok(a.auto._remapFailed, 'the remap failed instead of waiting')
+    t.is(warnings.length, 1, 'and warned')
+    t.absent(a.auto.closed, 'the store stays open')
+    t.absent(a.auto.remapped)
+    t.is(a.auto.system.version, 3)
+
+    const ff = await FastForward.fromHead(a.auto, { key: local, length: before }, null, {
+      skipGap: true,
+      rewind: true
+    })
+    t.ok(await ff.run(), 'an old head is accepted again')
+    await ff.close()
+  }
+)
+
+test(
+  'remap fixtures - the walk is announced before the download waits on it',
+  { skip },
+  async function (t) {
+    let walked = null
+    const f = await openFixture(t, {
+      patch: (auto) => auto.on('remap-walk', (cores) => (walked = cores))
+    })
+    t.teardown(() => closeFixture(f))
+
+    t.ok(walked, 'remap-walk was emitted')
+    t.is(walked.views.length, (await mapped(f.auto)).length, 'with every view core that was copied')
+    t.is(walked.systems.length, 1, 'and the system core')
+  }
+)
+
+test(
+  'remap fixtures - an interrupted copy resumes on its staging core',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const store = openStore(t, dir)
+    const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+    const copy = await migrateCore(store, key, viewEncryption())
+    const staging = store.get({ name: 'remap/' + VIEW.meta.view.key + '/' + copy.length })
+    await staging.ready()
+    t.is(staging.length, copy.length, 'the copy was staged on a core named for it')
+    t.is(
+      staging.core.state.storage.core.dataPointer,
+      copy.core.state.storage.core.dataPointer,
+      'and the copy is that storage'
+    )
+
+    const again = await migrateCore(store, key, viewEncryption())
+    t.alike(again.key, copy.key, 'copying again reuses it')
+    t.is(staging.length, copy.length)
+
+    for (let i = 0; i < copy.length; i++) {
+      t.alike(await again.get(i), await copy.get(i), 'block ' + i)
+    }
+
+    await staging.close()
+    await again.close()
+    await copy.close()
+  }
+)
+
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
   return {
@@ -668,6 +757,7 @@ function remapperFor(store, views) {
     bootstrap: { key: b4a.from(VIEW.meta.baseKey, 'hex') },
     getViewEncryption: () => viewEncryption(),
     getSystemEncryption: () => null,
-    _unmappedCores: async () => ({ views, systems: [] })
+    _unmappedCores: async () => ({ views, systems: [] }),
+    emit() {}
   }
 }

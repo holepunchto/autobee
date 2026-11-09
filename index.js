@@ -15,7 +15,8 @@ const boot = require('./lib/boot.js')
 const {
   MAPPED_AUTOBEE_VERSION,
   MAPPED_MANIFEST_VERSION,
-  DEFAULT_MANIFEST_VERSION
+  DEFAULT_MANIFEST_VERSION,
+  DEFAULT_REMAP_TIMEOUT
 } = require('./lib/constants.js')
 
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
@@ -157,6 +158,8 @@ module.exports = class Autobee extends ReadyResource {
     this._remapper = null
     this._remapFailed = false
     this._remapSettle = handlers.remapSettle // override in tests
+    this._remapTimeout =
+      handlers.remapTimeout === undefined ? DEFAULT_REMAP_TIMEOUT : handlers.remapTimeout
     this._forceAck = false
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
@@ -718,7 +721,9 @@ module.exports = class Autobee extends ReadyResource {
       this._warn(err)
     }
 
-    remapper.run({ settle: this._remapSettle }).then(this.bumpSoon.bind(this), failed)
+    remapper
+      .run({ settle: this._remapSettle, timeout: this._remapTimeout })
+      .then(this.bumpSoon.bind(this), failed)
   }
 
   // applies ran meanwhile, but only a landing could have linked new cores and
