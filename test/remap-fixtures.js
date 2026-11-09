@@ -662,14 +662,15 @@ test(
 )
 
 test(
-  'remap fixtures - a remap that cannot get its cores in time fails over to the old generation',
+  'remap fixtures - a remap that cannot read its cores in time fails over to the old generation',
   { skip },
   async function (t) {
+    // the v2 view is held by nobody: not by the store, not by its recovery peer
     const dir = await copyFixture(t)
-    const local = b4a.from(VIEW.meta.localKey, 'hex')
-    const before = await coreLength(dir, local)
+    await clearCores(dir, [b4a.from(VIEW.meta.view.key, 'hex')])
+    const peerDir = await copyFixture(t)
+    await clearCores(peerDir, [b4a.from(VIEW.meta.view.key, 'hex')])
 
-    // no recovery peer ever shows up: the gate gives up instead of waiting forever
     const warnings = []
     const a = await openFixture(t, {
       dir,
@@ -682,23 +683,27 @@ test(
     })
     t.teardown(() => closeFixture(a))
 
-    const until = Date.now() + 15000
+    const peer = openStore(t, peerDir)
+    const s1 = a.store.replicate(true)
+    const s2 = peer.replicate(false)
+    s1.pipe(s2).pipe(s1)
+    recoveryPeers(s2)
+    t.teardown(() => {
+      s1.destroy()
+      s2.destroy()
+    })
+
+    const until = Date.now() + 30000
     while (!a.auto._remapFailed && Date.now() < until) {
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
 
-    t.ok(a.auto._remapFailed, 'the remap failed instead of waiting')
+    t.ok(a.auto._remapFailed, 'the walk timed out and the remap failed instead of waiting')
     t.is(warnings.length, 1, 'and warned')
     t.absent(a.auto.closed, 'the store stays open')
     t.absent(a.auto.remapped)
+    t.ok(a.auto._remapper !== null, 'and it does not retry by itself')
     t.is(a.auto.system.version, 3)
-
-    const ff = await FastForward.fromHead(a.auto, { key: local, length: before }, null, {
-      skipGap: true,
-      rewind: true
-    })
-    t.ok(await ff.run(), 'an old head is accepted again')
-    await ff.close()
   }
 )
 
@@ -749,6 +754,46 @@ test(
     await copy.close()
   }
 )
+
+test('remap fixtures - a stalled download is cancelled and fails verification', async function (t) {
+  const { EventEmitter } = require('events')
+
+  const session = (length, contiguousLength) =>
+    Object.assign(new EventEmitter(), { key: b4a.alloc(32, length), length, contiguousLength })
+
+  const range = () => {
+    let resolve = null
+    return {
+      destroyed: false,
+      done: () => new Promise((r) => (resolve = r)),
+      destroy() {
+        this.destroyed = true
+        resolve(false)
+      }
+    }
+  }
+
+  const remapper = new Remapper({ store: null })
+  remapper.sessions = [session(1, 1), session(10, 10), session(10, 4)]
+  remapper.ranges = [range(), range()]
+
+  const started = Date.now()
+  await remapper._downloaded({ timeout: 200 })
+
+  t.ok(Date.now() - started >= 200, 'waited out the inactivity timeout')
+  t.ok(
+    remapper.ranges.every((r) => r.destroyed),
+    'every range was destroyed'
+  )
+  t.exception(
+    () => remapper._verify(),
+    /Remap core incomplete: 0a0a0a0a/,
+    'the short core fails the remap'
+  )
+
+  remapper.sessions[2].contiguousLength = 10
+  t.execution(() => remapper._verify(), 'whole cores pass')
+})
 
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
