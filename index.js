@@ -713,6 +713,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const remapper = new Remapper(this)
     this._remapper = remapper
+    this._remapFailed = false
 
     // a destroyed remap fails its reads after the fact, which says nothing
     const failed = (err) => {
