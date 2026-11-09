@@ -783,7 +783,7 @@ test(
     const copy = await migrateCore(store, NAMESPACE, key, viewEncryption())
     t.is(copy.length, VIEW.meta.view.length, 'the resumed copy is whole')
 
-    const expected = await migrateCore(openStore(tNAMESPACE, , await copyFixture(t)), key, viewEncryption())
+    const expected = await migrateCore(openStore(t, await copyFixture(t)), NAMESPACE, key, viewEncryption())
     t.alike(copy.key, expected.key, 'and is the same core an uninterrupted copy makes')
     for (let i = 0; i < copy.length; i++) {
       t.alike(await copy.get(i), await expected.get(i), 'block ' + i)
