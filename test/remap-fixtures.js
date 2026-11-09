@@ -734,7 +734,9 @@ test(
     const key = b4a.from(VIEW.meta.view.key, 'hex')
 
     const copy = await migrateCore(store, NAMESPACE, key, viewEncryption())
-    const staging = store.get({ name: 'remap/' + VIEW.meta.view.key + '/' + copy.length })
+    const staging = store.get({
+      name: 'remap/' + NAMESPACE + '/' + VIEW.meta.view.key + '/' + copy.length
+    })
     await staging.ready()
     t.is(staging.length, copy.length, 'the copy was staged on a core named for it')
     t.is(
@@ -767,7 +769,9 @@ test(
     // one block per append, cancelled once two are on disk
     const first = new Corestore(dir, { allowBackup: true, manifestVersion: 2 })
     let appended = 0
-    const spy = first.get({ name: 'remap/' + VIEW.meta.view.key + '/' + VIEW.meta.view.length })
+    const spy = first.get({
+      name: 'remap/' + NAMESPACE + '/' + VIEW.meta.view.key + '/' + VIEW.meta.view.length
+    })
     await spy.ready()
     spy.on('append', () => appended++)
 
@@ -870,6 +874,7 @@ test('remap fixtures - a stalled download is cancelled and fails verification', 
 function remapperFor(store, views) {
   return {
     store,
+    key: b4a.from(VIEW.meta.baseKey, 'hex'),
     bootstrap: { key: b4a.from(VIEW.meta.baseKey, 'hex') },
     getViewEncryption: () => viewEncryption(),
     getSystemEncryption: () => null,
