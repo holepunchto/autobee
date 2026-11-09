@@ -755,11 +755,72 @@ test(
   }
 )
 
-test('remap fixtures - a stalled download is cancelled and fails verification', async function (t) {
-  const { EventEmitter } = require('events')
+test(
+  'remap fixtures - a copy cancelled part way resumes after a reopen',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const key = b4a.from(VIEW.meta.view.key, 'hex')
 
-  const session = (length, contiguousLength) =>
-    Object.assign(new EventEmitter(), { key: b4a.alloc(32, length), length, contiguousLength })
+    // one block per append, cancelled once two are on disk
+    const first = new Corestore(dir, { allowBackup: true, manifestVersion: 2 })
+    let appended = 0
+    const spy = first.get({ name: 'remap/' + VIEW.meta.view.key + '/' + VIEW.meta.view.length })
+    await spy.ready()
+    spy.on('append', () => appended++)
+
+    await t.exception(
+      migrateCore(first, key, viewEncryption(), { batchBytes: 1, cancelled: () => appended >= 2 }),
+      /Copy cancelled/
+    )
+    t.is(spy.length, 2, 'two blocks were staged before the cancel')
+    await spy.close()
+    await first.close()
+
+    const store = openStore(t, dir)
+    const copy = await migrateCore(store, key, viewEncryption())
+    t.is(copy.length, VIEW.meta.view.length, 'the resumed copy is whole')
+
+    const expected = await migrateCore(openStore(t, await copyFixture(t)), key, viewEncryption())
+    t.alike(copy.key, expected.key, 'and is the same core an uninterrupted copy makes')
+    for (let i = 0; i < copy.length; i++) {
+      t.alike(await copy.get(i), await expected.get(i), 'block ' + i)
+    }
+
+    await copy.close()
+    await expected.close()
+  }
+)
+
+test(
+  'remap fixtures - concurrent copies of one source are serialised',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const store = openStore(t, dir)
+    const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+    const [a, b] = await Promise.all([
+      migrateCore(store, key, viewEncryption(), { batchBytes: 1 }),
+      migrateCore(store, key, viewEncryption(), { batchBytes: 1 })
+    ])
+
+    t.alike(a.key, b.key, 'both land on the same copy')
+    t.is(a.length, VIEW.meta.view.length, 'with no repeated blocks')
+    await a.close()
+    await b.close()
+  }
+)
+
+test('remap fixtures - a stalled download is cancelled and fails verification', async function (t) {
+  // only what _downloaded touches: progress events are wired but never fire
+  const session = (length, contiguousLength) => ({
+    key: b4a.alloc(32, length),
+    length,
+    contiguousLength,
+    on() {},
+    off() {}
+  })
 
   const range = () => {
     let resolve = null
