@@ -16,6 +16,8 @@ const {
   remapped: settled
 } = require('./helpers/index.js')
 
+const NAMESPACE = 'test-namespace'
+
 const skip = !['linux', 'darwin'].includes(os.platform())
 
 const path = skip ? null : require('path')
@@ -410,7 +412,7 @@ test('remap fixtures - the v2 view is copied into a current core', { skip }, asy
   t.teardown(() => src.close())
   t.is(src.manifest.version, 2)
 
-  const copy = await migrateCore(store, key, viewEncryption())
+  const copy = await migrateCore(store, NAMESPACE, key, viewEncryption())
   t.teardown(() => copy.close())
 
   t.is(copy.manifest.version, 3, 'the copy is a current core')
@@ -423,7 +425,7 @@ test('remap fixtures - the v2 view is copied into a current core', { skip }, asy
   t.alike(await blocks(opened), await blocks(src), 'the copy reads as the source')
   await opened.close()
 
-  const again = await migrateCore(store, key, viewEncryption())
+  const again = await migrateCore(store, NAMESPACE, key, viewEncryption())
   t.alike(again.key, copy.key, 'copying again gives the same core')
   await again.close()
 })
@@ -437,8 +439,8 @@ test(
     const a = openStore(t, await copyFixture(t))
     const b = openStore(t, await copyFixture(t))
 
-    const ca = await migrateCore(a, key, viewEncryption())
-    const cb = await migrateCore(b, key, viewEncryption())
+    const ca = await migrateCore(a, NAMESPACE, key, viewEncryption())
+    const cb = await migrateCore(b, NAMESPACE, key, viewEncryption())
     t.teardown(() => ca.close())
     t.teardown(() => cb.close())
 
@@ -465,7 +467,7 @@ test('remap fixtures - the remapper fetches the v2 view from a peer', { skip }, 
   const auto = remapperFor(store, [key])
   const mappings = await new Remapper(auto).run()
 
-  const expected = await migrateCore(source, key, viewEncryption())
+  const expected = await migrateCore(source, NAMESPACE, key, viewEncryption())
   t.teardown(() => expected.close())
 
   t.alike(mappings, { views: [{ from: key, to: expected.key }], systems: [] }, 'the same copy')
@@ -731,7 +733,7 @@ test(
     const store = openStore(t, dir)
     const key = b4a.from(VIEW.meta.view.key, 'hex')
 
-    const copy = await migrateCore(store, key, viewEncryption())
+    const copy = await migrateCore(store, NAMESPACE, key, viewEncryption())
     const staging = store.get({ name: 'remap/' + VIEW.meta.view.key + '/' + copy.length })
     await staging.ready()
     t.is(staging.length, copy.length, 'the copy was staged on a core named for it')
@@ -741,7 +743,7 @@ test(
       'and the copy is that storage'
     )
 
-    const again = await migrateCore(store, key, viewEncryption())
+    const again = await migrateCore(store, NAMESPACE, key, viewEncryption())
     t.alike(again.key, copy.key, 'copying again reuses it')
     t.is(staging.length, copy.length)
 
@@ -770,7 +772,7 @@ test(
     spy.on('append', () => appended++)
 
     await t.exception(
-      migrateCore(first, key, viewEncryption(), { batchBytes: 1, cancelled: () => appended >= 2 }),
+      migrateCore(first, NAMESPACE, key, viewEncryption(), { batchBytes: 1, cancelled: () => appended >= 2 }),
       /Copy cancelled/
     )
     t.is(spy.length, 2, 'two blocks were staged before the cancel')
@@ -778,10 +780,10 @@ test(
     await first.close()
 
     const store = openStore(t, dir)
-    const copy = await migrateCore(store, key, viewEncryption())
+    const copy = await migrateCore(store, NAMESPACE, key, viewEncryption())
     t.is(copy.length, VIEW.meta.view.length, 'the resumed copy is whole')
 
-    const expected = await migrateCore(openStore(t, await copyFixture(t)), key, viewEncryption())
+    const expected = await migrateCore(openStore(tNAMESPACE, , await copyFixture(t)), key, viewEncryption())
     t.alike(copy.key, expected.key, 'and is the same core an uninterrupted copy makes')
     for (let i = 0; i < copy.length; i++) {
       t.alike(await copy.get(i), await expected.get(i), 'block ' + i)
@@ -801,8 +803,8 @@ test(
     const key = b4a.from(VIEW.meta.view.key, 'hex')
 
     const [a, b] = await Promise.all([
-      migrateCore(store, key, viewEncryption(), { batchBytes: 1 }),
-      migrateCore(store, key, viewEncryption(), { batchBytes: 1 })
+      migrateCore(store, NAMESPACE, key, viewEncryption(), { batchBytes: 1 }),
+      migrateCore(store, NAMESPACE, key, viewEncryption(), { batchBytes: 1 })
     ])
 
     t.alike(a.key, b.key, 'both land on the same copy')
