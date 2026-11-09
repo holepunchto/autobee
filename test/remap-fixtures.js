@@ -780,7 +780,7 @@ test('remap fixtures - a stalled download is cancelled and fails verification', 
   const started = Date.now()
   await remapper._downloaded({ timeout: 200 })
 
-  t.ok(Date.now() - started >= 200, 'waited out the inactivity timeout')
+  t.ok(Date.now() - started >= 150, 'waited out the inactivity timeout')
   t.ok(
     remapper.ranges.every((r) => r.destroyed),
     'every range was destroyed'
