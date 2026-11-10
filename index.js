@@ -1046,14 +1046,15 @@ module.exports = class Autobee extends ReadyResource {
 
     for (const { key, length } of hints) {
       if (length === 0) continue
-      promises.push(this._resolveOplogHint(key, length, { timeout }))
+      // a head we cannot read is skipped, the rest are still searched
+      promises.push(this._resolveOplogHint(key, length, { timeout }).catch(safetyCatch))
     }
 
     const ops = await Promise.all(promises)
     const heads = []
 
     for (const res of ops) {
-      if (res === null) continue
+      if (!res) continue
 
       heads.push({ key: res.key, length: res.length })
     }
