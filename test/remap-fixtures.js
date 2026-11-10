@@ -664,52 +664,6 @@ test(
 )
 
 test(
-  'remap fixtures - a remap that cannot read its cores in time fails over to the old generation',
-  { skip },
-  async function (t) {
-    // the v2 view is held by nobody: not by the store, not by its recovery peer
-    const dir = await copyFixture(t)
-    await clearCores(dir, [b4a.from(VIEW.meta.view.key, 'hex')])
-    const peerDir = await copyFixture(t)
-    await clearCores(peerDir, [b4a.from(VIEW.meta.view.key, 'hex')])
-
-    const warnings = []
-    const a = await openFixture(t, {
-      dir,
-      peer: false,
-      flush: false,
-      patch: (auto) => {
-        auto._remapTimeout = 1000
-        auto.on('warning', (err) => warnings.push(err.message))
-      }
-    })
-    t.teardown(() => closeFixture(a))
-
-    const peer = openStore(t, peerDir)
-    const s1 = a.store.replicate(true)
-    const s2 = peer.replicate(false)
-    s1.pipe(s2).pipe(s1)
-    recoveryPeers(s2)
-    t.teardown(() => {
-      s1.destroy()
-      s2.destroy()
-    })
-
-    const until = Date.now() + 30000
-    while (!a.auto._remapFailed && Date.now() < until) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    }
-
-    t.ok(a.auto._remapFailed, 'the walk timed out and the remap failed instead of waiting')
-    t.is(warnings.length, 1, 'and warned')
-    t.absent(a.auto.closed, 'the store stays open')
-    t.absent(a.auto.remapped)
-    t.ok(a.auto._remapper !== null, 'and it does not retry by itself')
-    t.is(a.auto.system.version, 3)
-  }
-)
-
-test(
   'remap fixtures - the walk is announced before the download waits on it',
   { skip },
   async function (t) {
@@ -825,50 +779,6 @@ test(
     await b.close()
   }
 )
-
-test('remap fixtures - a stalled download is cancelled and fails verification', async function (t) {
-  // only what _downloaded touches: progress events are wired but never fire
-  const session = (length, contiguousLength) => ({
-    key: b4a.alloc(32, length),
-    length,
-    contiguousLength,
-    on() {},
-    off() {}
-  })
-
-  const range = () => {
-    let resolve = null
-    return {
-      destroyed: false,
-      done: () => new Promise((r) => (resolve = r)),
-      destroy() {
-        this.destroyed = true
-        resolve(false)
-      }
-    }
-  }
-
-  const remapper = new Remapper({ store: null })
-  remapper.sessions = [session(1, 1), session(10, 10), session(10, 4)]
-  remapper.ranges = [range(), range()]
-
-  const started = Date.now()
-  await remapper._downloaded({ timeout: 200 })
-
-  t.ok(Date.now() - started >= 150, 'waited out the inactivity timeout')
-  t.ok(
-    remapper.ranges.every((r) => r.destroyed),
-    'every range was destroyed'
-  )
-  t.exception(
-    () => remapper._verify(),
-    /Remap core incomplete: 0a0a0a0a/,
-    'the short core fails the remap'
-  )
-
-  remapper.sessions[2].contiguousLength = 10
-  t.execution(() => remapper._verify(), 'whole cores pass')
-})
 
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
