@@ -791,6 +791,145 @@ test(
   }
 )
 
+test(
+  'remap fixtures - the copy is made at the verified length and never waits',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const store = openStore(t, dir)
+    const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+    const short = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption(), { length: 3 })
+    t.is(short.length, 3, 'copied at the length asked for')
+    await short.close()
+
+    const whole = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption())
+    t.is(whole.length, VIEW.meta.view.length)
+    t.unlike(whole.key, short.key, 'a different copy from a different length')
+    await whole.close()
+
+    // a block that is not held locally fails the copy instead of waiting for a peer
+    const src = store.get({ key, active: false })
+    await src.ready()
+    await src.clear(4, 6)
+    await src.close()
+
+    const other = { auto: { key: b4a.alloc(32, 2) }, destroyed: false }
+    await t.exception(
+      migrateCore(store, other, key, viewEncryption()),
+      /Remap block missing: 4/,
+      'the copy fails at once'
+    )
+  }
+)
+
+test(
+  'remap fixtures - an old head is refused while the remap is finished',
+  { skip },
+  async function (t) {
+    // the mappings write is held open: the remap has committed but not claimed
+    let release = null
+    const held = new Promise((resolve) => (release = resolve))
+    let reached = null
+    const parked = new Promise((resolve) => (reached = resolve))
+
+    const f = await openFixture(t, {
+      flush: false,
+      patch: (auto) => {
+        const write = auto._workingBee.write.bind(auto._workingBee)
+        auto._workingBee.write = (opts) => {
+          const w = write(opts)
+          if (opts && opts.mappings) {
+            const flush = w.flush.bind(w)
+            w.flush = async () => {
+              reached()
+              await held
+              return flush()
+            }
+          }
+          return w
+        }
+      }
+    })
+    t.teardown(() => closeFixture(f))
+
+    let driving = true
+    const driver = (async () => {
+      while (driving) {
+        await f.auto.update()
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+    })()
+    await parked
+    driving = false
+
+    t.absent(f.auto.remapped, 'not claimed yet')
+    t.ok(f.auto.committing, 'but still committing')
+
+    const head = f.auto.system.bee.head()
+    const old = {
+      system: { flushes: f.auto.system.flushes + 16, version: 3 },
+      run: async () => ({ head: { key: head.key, length: head.length }, migrate: null }),
+      close: async () => {}
+    }
+    t.absent(await f.auto._runFastForward(old), 'an old head is refused')
+    t.absent(f.auto.fastForwardTo)
+
+    release()
+    await driver
+    await settled(f.auto)
+
+    t.ok(f.auto.remapped)
+    t.is(f.auto.system.version, 4)
+    t.is(f.auto.stats.fastForwards, 0, 'nothing landed')
+    t.is(f.events.remap, 1)
+  }
+)
+
+test(
+  'remap fixtures - a run interrupted before its claim resolves its root on the next run',
+  { skip },
+  async function (t) {
+    t.timeout(120000)
+    const dir = await copyFixture(t)
+    const v2 = b4a.from(VIEW.meta.view.key, 'hex')
+
+    // the mappings checkpoint is written, then the store dies before the claim
+    let died = false
+    const first = await openFixture(t, {
+      dir,
+      flush: false,
+      patch: (auto) => {
+        auto.on('error', () => {})
+        auto._onremapped = () => {
+          died = true
+          throw new Error('simulated crash before the claim')
+        }
+      }
+    })
+    while (!died) {
+      await first.auto.update()
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    await closeFixture(first).catch(() => {})
+
+    const again = await openFixture(t, { dir })
+    t.ok(again.auto.remapped, 'the next run remaps')
+    t.is(again.auto.system.version, 4)
+    t.unlike(again.auto.system.view.key, v2, 'the claim does not point at the original')
+    t.unlike(again.auto._workingBee.context.core.key, v2, 'nor does the root')
+    t.alike(await entries(again.auto.view), VIEW.meta.versions[VIEW.meta.versions.length - 1])
+    await closeFixture(again)
+
+    // the original is not needed any more
+    await clearCores(dir, [v2])
+    const last = await openFixture(t, { dir, peer: false })
+    t.teardown(() => closeFixture(last))
+    t.ok(last.auto.remapped)
+    t.alike(await entries(last.auto.view), VIEW.meta.versions[VIEW.meta.versions.length - 1])
+  }
+)
+
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
   return {
