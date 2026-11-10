@@ -5,6 +5,7 @@ const fs = require('fs/promises')
 const Autobee = require('../index.js')
 const FastForward = require('../lib/fast-forward.js')
 const { MAPPED_AUTOBEE_VERSION } = require('../lib/constants.js')
+const { Remapper } = require('../lib/remap.js')
 const { apply, encode, recoveryPeers, same } = require('./helpers/index.js')
 
 // a room from the release before the remap: in sync, on v2 cores
@@ -659,6 +660,114 @@ test('remap scenarios - a user that remapped itself lands on a later admin remap
   t.is(c.auto.stats.fastForwards, 1)
   t.absent(c.auto._remapper, 'and gave up remapping itself')
   t.ok(await same(a.auto, b.auto, c.auto), 'the views agree')
+})
+
+test('remap scenarios - a landing accepted during a landing keeps the remap cancelled', async function (t) {
+  const { a, b, c, join } = await room(t)
+
+  await a.update()
+  const remapper = a._remapper
+  const release = hold(remapper, '_walk')
+
+  const leave = join()
+  t.ok(await until([a, b, c], () => remapper.recovered), 'the remap passed the gate')
+  leave()
+  await rounds([b, c], 20)
+  const older = { key: b.local.key, length: b.local.length - 2 }
+  join()
+
+  // a second landing is accepted while the first one is still being applied
+  const applyFastForward = a._applyFastForward.bind(a)
+  const storeBoot = a._storeBoot.bind(a)
+  let applying = false
+  let second = null
+  a._applyFastForward = async () => {
+    applying = true
+    try {
+      return await applyFastForward()
+    } finally {
+      applying = false
+    }
+  }
+  a._storeBoot = async () => {
+    if (applying && second === null) {
+      second = a.moveTo(older)
+      for (let i = 0; i < 1000 && a.fastForwardTo === null; i++) {
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+    }
+    return storeBoot()
+  }
+
+  const seen = []
+  a.on('move-to', () =>
+    seen.push([a.stats.fastForwards, remapper.cancelled, a.fastForwardTo !== null])
+  )
+
+  t.ok(await until([a, b, c], () => a.stats.fastForwards > 1), 'both landed')
+  t.ok(second !== null && a.fastForwardTo === null)
+  t.alike(seen[0], [1, true, true], 'the first landing left the remap cancelled for the second')
+  t.alike(seen[1], [2, false, false], 'which restarted it')
+
+  release()
+  t.ok(await landed([a, b, c]), 'every peer is on the remapped generation')
+  t.ok(remapper.finished && remapper.mappings !== null, 'by the same remap')
+  t.ok(await same(a, b, c), 'the views agree')
+})
+
+test('remap scenarios - a remap that fails after being replaced does not fail the store', async function (t) {
+  const { dirs, key } = await seed(t)
+  const blind = await mirror(t, dirs.a)
+
+  // the first remap breaks in its walk, but its failure only surfaces later
+  let release = null
+  const held = new Promise((resolve) => (release = resolve))
+  const run = Remapper.prototype.run
+  Remapper.prototype.run = function (opts) {
+    Remapper.prototype.run = run
+    this._walk = async () => {
+      throw new Error('walk broke')
+    }
+    return run.call(this, opts).catch(async (err) => {
+      await held
+      throw err
+    })
+  }
+  t.teardown(() => (Remapper.prototype.run = run))
+
+  const a = open(t, dirs.a, null)
+  connect(t, a.store, blind, { recovery: true })
+  await a.auto.ready()
+  await a.auto.update()
+  const remapper = a.auto._remapper
+  t.ok(await until([a.auto], () => remapper.finished), 'the first remap is over')
+  t.absent(a.auto._remapFailed, 'but has not failed yet')
+  t.is(a.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
+
+  // the others run ahead, a lands on them and the finished remap is replaced
+  const b = open(t, dirs.b, key, { previous: true })
+  const c = open(t, dirs.c, key, { previous: true })
+  await b.auto.ready()
+  await c.auto.ready()
+  connect(t, b.store, c.store)
+  await rounds([b.auto, c.auto], 20)
+  connect(t, a.store, b.store)
+  connect(t, a.store, c.store)
+
+  const autos = [a.auto, b.auto, c.auto]
+  t.ok(await until(autos, () => a.auto.stats.fastForwards > 0), 'a landed on the old head')
+  t.ok(a.auto._remapper !== null && a.auto._remapper !== remapper, 'a new remap started')
+
+  const warnings = []
+  a.auto.on('warning', (err) => warnings.push(err.message))
+  release()
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  t.absent(a.auto._remapFailed, 'the late failure is not the new remap failing')
+  t.alike(warnings, [], 'and is not warned about')
+
+  t.ok(await landed(autos), 'every peer is on the remapped generation')
+  t.ok(a.auto.remapped)
+  t.ok(await same(...autos), 'the views agree')
 })
 
 function headOf(auto) {

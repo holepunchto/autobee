@@ -718,8 +718,9 @@ module.exports = class Autobee extends ReadyResource {
     this._remapFailed = false
 
     // a destroyed remap fails its reads after the fact, which says nothing
+    // a remap that was replaced meanwhile fails on its own, not the store's
     const failed = (err) => {
-      if (remapper.destroyed || this.closing) return
+      if (remapper.destroyed || this.closing || this._remapper !== remapper) return
       this._remapFailed = true
       this._warn(err)
     }
@@ -863,7 +864,7 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (this._remapper !== null && this._remapper.finished && !this._remapFailed) {
+    if (this._remapper !== null && this._remapper.mappings !== null && !this._remapFailed) {
       await this._finishRemap()
     }
     if (!this.remapped && this._remapper === null && this.fastForwardTo === null) this._startRemap()
@@ -1838,7 +1839,8 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._updateAcking()
 
-    if (this._remapper !== null) this._remapper.restart()
+    // a landing accepted meanwhile cancelled the remap again: it restarts it
+    if (this._remapper !== null && this.fastForwardTo === null) this._remapper.restart()
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
