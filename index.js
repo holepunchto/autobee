@@ -205,6 +205,11 @@ module.exports = class Autobee extends ReadyResource {
     return !this.remapped
   }
 
+  // the commit of a remap is the only thing a landing waits for
+  get committing() {
+    return this._remapper !== null && this._remapper.committing
+  }
+
   get writable() {
     return this.writers ? this.writers.writable : false
   }
@@ -710,6 +715,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const remapper = new Remapper(this)
     this._remapper = remapper
+    this._remapFailed = false
 
     // a destroyed remap fails its reads after the fact, which says nothing
     const failed = (err) => {
@@ -1734,23 +1740,33 @@ module.exports = class Autobee extends ReadyResource {
     if (!result) return false
 
     // a peer in lock step with the writer that remapped is never behind its claim
-    const landing =
+    const isRemap =
       this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
-    const slack = landing ? FastForward.MIN_GAP : 0
+    const slack = isRemap ? FastForward.MIN_GAP : 0
 
     // never move backwards, a boot head can be older than what we already have
     if (!rewind && flushes < this.system.flushes - slack) return false
 
     // apply ran while we searched, only drop it if it no longer moves us forward
-    if (!force && !landing && flushes <= this.system.flushes) return false
+    if (!force && !isRemap && flushes - this.system.flushes < FastForward.MIN_GAP) return false
+
+    // an old head is never accepted from the new generation or while committing
+    const old = version < MAPPED_AUTOBEE_VERSION
+    if (old && !force && !this.system.isGenesis() && (this.remapped || this.committing)) {
+      return false
+    }
 
     this.fastForwardTo = result
     this.ff = rrp()
 
     // a remapped head replaces whatever we were about to remap ourselves
     if (this._remapper !== null) {
-      this._remapper.destroy()
-      this._remapper = null
+      if (isRemap) {
+        this._remapper.destroy()
+        this._remapper = null
+      } else {
+        this._remapper.cancel()
+      }
     }
 
     this.bumpSoon()
@@ -1787,6 +1803,9 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.system.version < MAPPED_AUTOBEE_VERSION) this.remapped = false
     this._remapFailed = false
+
+    // a remap that already ended is replaced, a cancelled one picks up from here
+    if (this._remapper !== null && this._remapper.finished) this._remapper = null
     if (!this.remapped && this._remapper === null) this._startRemap()
 
     this._approvalCheck = true
@@ -1803,6 +1822,8 @@ module.exports = class Autobee extends ReadyResource {
     await this._storeBoot()
 
     await this._updateAcking()
+
+    if (this._remapper !== null) this._remapper.restart()
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
