@@ -90,10 +90,10 @@ async function mirror(t, dir) {
 async function seed(t) {
   const dirs = { a: await t.tmp(), b: await t.tmp(), c: await t.tmp() }
 
-  let a = open(t, dirs.a, null, { previous: true })
+  const a = open(t, dirs.a, null, { previous: true })
   await a.auto.ready()
-  let b = open(t, dirs.b, a.auto.key, { previous: true })
-  let c = open(t, dirs.c, a.auto.key, { previous: true })
+  const b = open(t, dirs.b, a.auto.key, { previous: true })
+  const c = open(t, dirs.c, a.auto.key, { previous: true })
   await b.auto.ready()
   await c.auto.ready()
 
