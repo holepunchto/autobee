@@ -321,7 +321,7 @@ module.exports = class Autobee extends ReadyResource {
   // the cores a mirror should pin: our writer core, our views when we are
   // trusted, and (with wait) the most recent trusted head so a mirror that
   // forgets to add one still pins a valid entrypoint
-  async cores({ wait = true, local = true, all = false } = {}) {
+  async cores({ wait = true, local = true, all = false, recursive = false, timeout } = {}) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
 
     const result = { key: this.key, views: null, writers: [] }
@@ -342,7 +342,7 @@ module.exports = class Autobee extends ReadyResource {
       const head = await this.trusted.mostRecentTrusted(this.view, null)
 
       if (head && (!local || !b4a.equals(head.key, this.local.key))) {
-        const oplog = await this._resolveOplogHint(head.key, head.length)
+        const oplog = await this._resolveOplogHint(head.key, head.length, { timeout })
         if (oplog && oplog.op.views) {
           const skey = oplog.op.views.system.key
           const vkey = oplog.op.views.view.key
@@ -362,8 +362,8 @@ module.exports = class Autobee extends ReadyResource {
 
       if (all) {
         const [viewCores, systemCores] = await Promise.all([
-          this.bee.cores({ local: false }),
-          this.system.bee.cores({ local: false })
+          this.bee.cores({ local: false, recursive, timeout }),
+          this.system.bee.cores({ local: false, recursive, timeout })
         ])
 
         for (const key of viewCores) {
