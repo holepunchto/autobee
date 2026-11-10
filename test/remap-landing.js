@@ -59,21 +59,41 @@ async function settled(autos) {
 }
 
 async function landed(autos, { ticks = 200 } = {}) {
+  return until(autos, () => autos.every((a) => a.system.version >= MAPPED_AUTOBEE_VERSION), {
+    ticks
+  })
+}
+
+async function until(autos, cond, { ticks = 200 } = {}) {
   for (let i = 0; i < ticks; i++) {
     for (const a of autos) await a.update()
-    if (autos.every((a) => a.system.version >= MAPPED_AUTOBEE_VERSION)) return true
+    if (cond()) {
+      // the version moves first, the landing that moved it may still be applying
+      for (const a of autos) await a.updated()
+      return true
+    }
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
   return false
 }
 
-async function room(t) {
+// a copy of a store, serving as its recovery peer
+async function mirror(t, dir) {
+  const copy = await t.tmp()
+  await fs.cp(dir, copy, { recursive: true })
+  const blind = new Corestore(copy, { manifestVersion: 2, allowBackup: true })
+  await blind.ready()
+  t.teardown(() => blind.close())
+  return blind
+}
+
+async function seed(t) {
   const dirs = { a: await t.tmp(), b: await t.tmp(), c: await t.tmp() }
 
-  let a = open(t, dirs.a, null, { previous: true })
+  const a = open(t, dirs.a, null, { previous: true })
   await a.auto.ready()
-  let b = open(t, dirs.b, a.auto.key, { previous: true })
-  let c = open(t, dirs.c, a.auto.key, { previous: true })
+  const b = open(t, dirs.b, a.auto.key, { previous: true })
+  const c = open(t, dirs.c, a.auto.key, { previous: true })
   await b.auto.ready()
   await c.auto.ready()
 
@@ -108,17 +128,19 @@ async function room(t) {
     await p.store.close()
   }
 
-  // only a gets a recovery peer
-  dirs.blind = await t.tmp()
-  await fs.cp(dirs.a, dirs.blind, { recursive: true })
-  const blind = new Corestore(dirs.blind, { manifestVersion: 2, allowBackup: true })
-  await blind.ready()
-  t.teardown(() => blind.close())
+  return { dirs, key: a.auto.key }
+}
 
-  a = open(t, dirs.a, null)
+async function room(t) {
+  const { dirs } = await seed(t)
+
+  // only a gets a recovery peer
+  const blind = await mirror(t, dirs.a)
+
+  const a = open(t, dirs.a, null)
   await a.auto.ready()
-  b = open(t, dirs.b, a.auto.key)
-  c = open(t, dirs.c, a.auto.key)
+  const b = open(t, dirs.b, a.auto.key)
+  const c = open(t, dirs.c, a.auto.key)
   await b.auto.ready()
   await c.auto.ready()
 
@@ -195,6 +217,9 @@ test('remap landing - a room far ahead of the claim stays where it is', async fu
 
   t.absent(await landed([a, b, c], { ticks: 40 }), 'the claim is too old to land on')
 
+  t.is(a.system.version, MAPPED_AUTOBEE_VERSION)
+  t.is(a.stats.fastForwards, 0, 'and the writer that remapped never goes back')
+
   for (const peer of [b, c]) {
     t.is(peer.system.version, MAPPED_AUTOBEE_VERSION - 1)
     t.is(peer.stats.fastForwards, 0)
@@ -202,6 +227,140 @@ test('remap landing - a room far ahead of the claim stays where it is', async fu
 
   await settled([a, b, c])
   t.ok(await same(a, b, c), 'and keeps up')
+})
+
+test('remap landing - phase one reports its progress', async function (t) {
+  const { a } = await room(t)
+
+  await a.update()
+  const remapper = a._remapper
+  t.ok(remapper, 'the remap started')
+
+  t.alike(
+    [
+      remapper.recovered,
+      remapper.walked,
+      remapper.downloaded,
+      remapper.committing,
+      remapper.finished
+    ],
+    [false, false, false, false, false],
+    'waiting at the gate'
+  )
+
+  const seen = []
+  a.on('remap-walk', () => seen.push('walk ' + remapper.recovered + ' ' + remapper.walked))
+
+  const commit = remapper._commit.bind(remapper)
+  remapper._commit = () => {
+    seen.push('commit ' + remapper.downloaded + ' ' + remapper.committing)
+    return commit()
+  }
+
+  t.ok(await landed([a]), 'a remapped on its own')
+
+  t.alike(seen, ['walk true false', 'commit true true'], 'the stages ran in order')
+  t.ok(remapper.recovered && remapper.walked && remapper.downloaded, 'phase one is complete')
+  t.ok(remapper.committing && remapper.finished, 'and so is phase two')
+  t.absent(a._remapper, 'the remap was picked up')
+})
+
+test('remap landing - an old head lands during phase one and restarts it', async function (t) {
+  const { dirs, key } = await seed(t)
+
+  // b remaps but has no recovery peer, so phase one waits at the gate
+  const b = open(t, dirs.b, key)
+  await b.auto.ready()
+  await b.auto.update()
+
+  const remapper = b.auto._remapper
+  t.ok(remapper, 'the remap started')
+  t.absent(remapper.recovered, 'and waits at the gate')
+
+  // meanwhile a runs far ahead on the old generation
+  let a = open(t, dirs.a, null, { previous: true })
+  await a.auto.ready()
+  for (let i = 0; i < 20; i++) await a.auto.append(encode({ busy: i }))
+  await a.auto.update()
+  t.ok(a.auto.system.flushes - b.auto.system.flushes > FastForward.MIN_GAP, 'far ahead')
+  await a.auto.close()
+  await a.store.close()
+
+  const blind = await mirror(t, dirs.a)
+
+  a = open(t, dirs.a, null, { previous: true })
+  await a.auto.ready()
+  connect(t, a.store, b.store)
+
+  t.ok(
+    await until([a.auto, b.auto], () => b.auto.stats.fastForwards > 0),
+    'b landed on the old head'
+  )
+  t.is(b.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
+  t.is(b.auto.system.flushes, a.auto.system.flushes)
+  t.is(b.auto._remapper, remapper, 'the remap is the same one')
+  t.absent(remapper.destroyed)
+  t.absent(remapper.cancelled, 'and was restarted')
+  t.absent(b.auto._remapFailed)
+
+  // a recovery peer turns up: phase one runs from the head it landed on
+  connect(t, b.store, blind, { recovery: true })
+
+  t.ok(await landed([a.auto, b.auto]), 'b remapped on its own')
+  t.is(b.auto.stats.fastForwards, 1)
+  t.ok(b.auto.remapped)
+  t.absent(b.auto._remapper)
+  t.ok(remapper.finished)
+
+  await settled([a.auto, b.auto])
+  t.ok(await same(a.auto, b.auto), 'the views agree')
+})
+
+test('remap landing - an old head does not land during phase two', async function (t) {
+  const peers = await room(t)
+  const { a, b, c, join } = peers
+
+  await a.update()
+  const remapper = a._remapper
+  t.ok(remapper, 'the remap started')
+
+  // hold the commit open
+  let release = null
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const commit = remapper._commit.bind(remapper)
+  remapper._commit = async () => {
+    await held
+    return commit()
+  }
+
+  t.ok(await until([a], () => remapper.committing), 'phase two started')
+  t.ok(a.committing)
+  t.is(a.system.version, MAPPED_AUTOBEE_VERSION - 1)
+
+  // b and c run far ahead on the old generation meanwhile
+  for (let i = 0; i < 20; i++) {
+    await b.append(encode({ busy: i }))
+    await c.append(encode({ busy: i }))
+    await settled([b, c])
+  }
+  t.ok(b.system.flushes - a.system.flushes > FastForward.MIN_GAP, 'far ahead')
+
+  join()
+
+  t.absent(await until([a, b, c], () => a.stats.fastForwards > 0, { ticks: 40 }), 'a stays put')
+  t.ok(remapper.committing, 'the commit was not cancelled')
+
+  release()
+
+  // a caught up on the old generation meanwhile, so its claim is current
+  t.ok(await landed([a, b, c]), 'every peer is on the remapped generation')
+  t.is(a.stats.fastForwards, 0, 'a never went back')
+  for (const peer of [b, c]) t.is(peer.stats.fastForwards, 1, 'landed on the writer')
+
+  await settled([a, b, c])
+  t.ok(await same(a, b, c), 'the views agree')
 })
 
 function noop() {}
