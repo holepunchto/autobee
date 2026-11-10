@@ -731,24 +731,38 @@ module.exports = class Autobee extends ReadyResource {
   // a landing destroys the remap, so what the walk found is all there is
   async _finishRemap() {
     const remapper = this._remapper
-    this._remapper = null
 
-    if (remapper.destroyed || this.remapped) return
-
-    const mappings = remapper.mappings
-
-    if (mappings.views.length === 0 && mappings.systems.length === 0) {
-      this._onremapped(null, true)
+    if (remapper.destroyed || this.remapped) {
+      this._remapper = null
       return
     }
 
-    if (mappings.views.length > 0) {
-      await this._workingBee.write({ mappings: mappings.views }).flush()
-      this.bee.move(this._workingBee.head())
-    }
+    const mappings = remapper.mappings
 
-    this.system.mappings = mappings.systems
-    this._onremapped(mappings, true)
+    // the remap stays in place until the claim, so an old head is still refused
+    try {
+      if (mappings.views.length === 0 && mappings.systems.length === 0) {
+        this._onremapped(null, true)
+        return
+      }
+
+      if (mappings.views.length > 0) {
+        await this._workingBee.write({ mappings: mappings.views }).flush()
+        if (remapper.destroyed) return
+
+        // the table may have been known before the write (a run interrupted
+        // before its claim), in which case the root is still the original:
+        // moving onto the head resolves it through the table
+        const head = this._workingBee.head()
+        this._workingBee.move(head)
+        this.bee.move(head)
+      }
+
+      this.system.mappings = mappings.systems
+      this._onremapped(mappings, true)
+    } finally {
+      if (this._remapper === remapper) this._remapper = null
+    }
   }
 
   _onremapped(mappings, ack) {
