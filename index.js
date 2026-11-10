@@ -1759,9 +1759,10 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwardTo = result
     this.ff = rrp()
 
-    // a remapped head replaces whatever we were about to remap ourselves
+    // a remapped head replaces whatever we were about to remap ourselves, as
+    // does a forced move during the commit: its walk no longer covers the head
     if (this._remapper !== null) {
-      if (isRemap) {
+      if (isRemap || this._remapper.committing) {
         this._remapper.destroy()
         this._remapper = null
       } else {

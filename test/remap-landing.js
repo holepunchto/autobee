@@ -363,4 +363,50 @@ test('remap landing - an old head does not land during phase two', async functio
   t.ok(await same(a, b, c), 'the views agree')
 })
 
+test('remap landing - a forced move during phase two replaces the remap', async function (t) {
+  const peers = await room(t)
+  const { a, b, c, join } = peers
+
+  await a.update()
+  const remapper = a._remapper
+  t.ok(remapper, 'the remap started')
+
+  let release = null
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const commit = remapper._commit.bind(remapper)
+  remapper._commit = async () => {
+    await held
+    return commit()
+  }
+
+  t.ok(await until([a], () => remapper.committing), 'phase two started')
+
+  for (let i = 0; i < 20; i++) {
+    await b.append(encode({ busy: i }))
+    await c.append(encode({ busy: i }))
+    await settled([b, c])
+  }
+
+  join()
+  t.ok(await until([a, b, c], () => a.system.flushes === b.system.flushes), 'a caught up')
+
+  // an explicit move onto the old head goes through regardless
+  const old = { key: b.local.key, length: b.local.length }
+  t.ok(await a.moveTo(old), 'moved')
+
+  t.ok(remapper.destroyed, 'the committing remap was destroyed')
+  t.not(a._remapper, remapper, 'and replaced')
+  t.ok(a._remapper, 'by a new one')
+  t.absent(a.remapped)
+
+  release()
+  await a.update()
+  t.absent(a._remapFailed, 'the destroyed commit is not a failure')
+
+  t.ok(await landed([a, b, c]), 'every peer is on the remapped generation')
+  t.ok(await same(a, b, c), 'the views agree')
+})
+
 function noop() {}
