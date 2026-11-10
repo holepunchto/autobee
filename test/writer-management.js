@@ -280,7 +280,7 @@ test('writer-management - indexer flag', async function (t) {
   const writerInfo = await auto1.system.get(auto2.local.key)
 
   t.ok(writerInfo, 'writer info exists')
-  // Check if isIndexer flag is present and has expected value
+  // the granted indexer capability lives in maxWeight
   t.is(writerInfo.maxWeight, 2, 'weight has been updated')
 })
 

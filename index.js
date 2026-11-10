@@ -191,10 +191,6 @@ module.exports = class Autobee extends ReadyResource {
     return auto instanceof Autobee
   }
 
-  get isIndexer() {
-    return this.writers ? this.writers.localWriter.isIndexer : false
-  }
-
   get appending() {
     return this.writers ? this.writers.localWriter.appending : false
   }

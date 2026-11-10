@@ -115,10 +115,6 @@ Alias for `db.view`.
 
 `true` if this instance has been added as a writer.
 
-#### `db.isIndexer`
-
-`true` if this writer is an indexer.
-
 #### `await db.append(value | values)`
 
 Append one or more values to the local writer. Triggers an apply cycle.
