@@ -404,6 +404,7 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
+    if (this.ff !== null) this.ff.reject(new Error('Autobee closed'))
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -1683,9 +1684,10 @@ module.exports = class Autobee extends ReadyResource {
     const running = this._runFastForward(ff, { force: true, rewind: true })
     if (previous !== null) await previous.close()
 
-    if (!(await running)) return null
+    const landing = await running
+    if (!landing) return null
 
-    return this.ff.promise
+    return landing.promise
   }
 
   // legacy: ungated boot straight onto a system head
@@ -1744,8 +1746,12 @@ module.exports = class Autobee extends ReadyResource {
     // apply ran while we searched, only drop it if it no longer moves us forward
     if (!force && !landing && flushes <= this.system.flushes) return false
 
+    // the move settles once this head is applied, or never will be
+    const move = rrp()
+    move.promise.catch(safetyCatch)
+
     this.fastForwardTo = result
-    this.ff = rrp()
+    this.ff = move
 
     // a remapped head replaces whatever we were about to remap ourselves
     if (this._remapper !== null) {
@@ -1755,7 +1761,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.bumpSoon()
 
-    return true
+    return move
   }
 
   async _runMigration() {
@@ -1770,6 +1776,17 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyFastForward() {
+    const landing = this.ff
+
+    try {
+      await this._applyLanding(landing)
+    } catch (err) {
+      landing.reject(err)
+      throw err
+    }
+  }
+
+  async _applyLanding(landing) {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
@@ -1806,7 +1823,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
-    this.ff.resolve({ to, from })
+    landing.resolve({ to, from })
   }
 
   replay() {
