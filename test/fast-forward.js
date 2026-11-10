@@ -843,3 +843,84 @@ test('an explicit move cancels a fast-forward that is still running', async func
   t.is(await background, false, 'the one in flight was cancelled')
   t.alike(auto2.system.bee.head(), auto1.system.bee.head(), 'on the head it was pointed at')
 })
+
+// a move settles exactly once, with its own landing, whatever happens to the store
+
+function timeboxed(promise, ms = 5000) {
+  return Promise.race([
+    promise.then(
+      (value) => ({ value }),
+      (error) => ({ error })
+    ),
+    new Promise((resolve) => setTimeout(resolve, ms, { hung: true }))
+  ])
+}
+
+test('a move whose apply fails is rejected instead of hanging', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key)
+  auto2.on('error', () => {})
+  t.teardown(replicate(auto1, auto2))
+
+  // the apply breaks after the move, the drain error closes the store
+  auto2._updateAcking = async () => {
+    throw new Error('apply broke')
+  }
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const outcome = await timeboxed(auto2.moveTo(head))
+
+  t.absent(outcome.hung, 'the move settled')
+  t.ok(outcome.error, 'by rejecting')
+  t.ok(auto2.closing, 'the store is closing')
+})
+
+test('a move settles with its own landing when another is accepted meanwhile', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key)
+  t.teardown(replicate(auto1, auto2))
+
+  const newer = { key: auto1.local.key, length: auto1.local.length }
+  const older = { key: auto1.local.key, length: auto1.local.length - 10 }
+
+  // a second move is accepted while the first is still being applied
+  const applyFastForward = auto2._applyFastForward.bind(auto2)
+  const storeBoot = auto2._storeBoot.bind(auto2)
+  let applying = false
+  let second = null
+  auto2._applyFastForward = async () => {
+    applying = true
+    try {
+      return await applyFastForward()
+    } finally {
+      applying = false
+    }
+  }
+  auto2._storeBoot = async () => {
+    if (applying && second === null) {
+      second = auto2.moveTo(older)
+      for (let i = 0; i < 1000 && auto2.fastForwardTo === null; i++) {
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+      t.ok(auto2.fastForwardTo !== null, 'the second move was accepted during the first')
+    }
+    return storeBoot()
+  }
+
+  const first = await timeboxed(auto2.moveTo(newer))
+  t.absent(first.hung, 'the first move settled')
+  t.ok(first.value, 'with a landing')
+
+  const other = await timeboxed(second)
+  t.absent(other.hung, 'the second move settled')
+  t.ok(other.value, 'with a landing')
+
+  t.is(auto2.stats.fastForwards, 2)
+  const heads = [first, other].map((r) => (r.value ? r.value.to : null))
+  t.unlike(heads[0], heads[1], 'each with its own head')
+  t.alike(heads[1], auto2.system.bee.head(), 'the second one being where the store is')
+})
