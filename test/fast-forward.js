@@ -843,3 +843,39 @@ test('an explicit move cancels a fast-forward that is still running', async func
   t.is(await background, false, 'the one in flight was cancelled')
   t.alike(auto2.system.bee.head(), auto1.system.bee.head(), 'on the head it was pointed at')
 })
+
+test('reading the hinted heads skips one nobody serves', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 20; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key)
+  await replicateAndSync(auto1, auto2)
+
+  const hints = [
+    { key: auto1.local.key, length: auto1.local.length },
+    { key: b4a.alloc(32, 1), length: 10 }
+  ]
+
+  const heads = await auto2._readCandidateHeads(hints, 500)
+
+  t.is(heads.length, 1, 'the head that could be read is kept')
+  t.alike(heads[0].key, auto1.local.key)
+})
+
+test('reading the signalled heads skips one nobody serves', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 20; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key)
+  await replicateAndSync(auto1, auto2)
+
+  const heads = [
+    { key: auto1.local.key, length: auto1.local.length },
+    { key: b4a.alloc(32, 1), length: 10 }
+  ]
+
+  const oplogs = await FastForward.flushHeads(auto2, heads, 500)
+
+  t.is(oplogs.length, 1, 'the head that could be read is kept')
+  t.alike(oplogs[0].key, auto1.local.key)
+})
