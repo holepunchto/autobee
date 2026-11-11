@@ -7,7 +7,7 @@ const os = require('os')
 const Hypercore = require('hypercore')
 const Autobee = require('../index.js')
 const FastForward = require('../lib/fast-forward.js')
-const { migrateCore, Remapper } = require('../lib/remap.js')
+const { migrateCore, Remapper, REMAPPED_USER_DATA } = require('../lib/remap.js')
 const {
   replicate,
   replicateAsRecovery,
@@ -281,6 +281,26 @@ test('remap fixtures - opening a store with v2 views remaps them', { skip }, asy
     remapped(VIEW.meta.versions),
     'every batch reads through the copies'
   )
+
+  // every v2 core the walk found carries the mark, the copies do not
+  const systemFrom = [...f.auto.system.bee.context.mappings.known.keys()].map((h) =>
+    b4a.from(h, 'hex')
+  )
+  t.is(systemFrom.length, 1, 'one system core was mapped')
+  for (const [key, marked] of [
+    [v2, true],
+    [systemFrom[0], true],
+    [copy, false]
+  ]) {
+    const core = f.store.get({ key, active: false })
+    await core.ready()
+    t.alike(
+      await core.getUserData(REMAPPED_USER_DATA),
+      marked ? b4a.alloc(0) : null,
+      marked ? 'the v2 core is marked' : 'the copy is not'
+    )
+    await core.close()
+  }
 })
 
 test('remap fixtures - writes after the remap land on the v3 core', { skip }, async function (t) {
