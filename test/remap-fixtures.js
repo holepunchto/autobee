@@ -885,7 +885,9 @@ async function poll(cond, { ticks = 400 } = {}) {
   return false
 }
 
-// drives the store until it is parked in its mappings write
+// drives the store until it is parked in its mappings write. The driver is
+// handed back, not awaited: its last update is the parked one, so it only
+// ends once the write is released
 async function park(auto, parked) {
   let driving = true
   const driver = (async () => {
@@ -896,7 +898,7 @@ async function park(auto, parked) {
   })()
   await parked
   driving = false
-  return driver
+  return { driver }
 }
 
 test(
@@ -907,7 +909,7 @@ test(
     const f = await openFixture(t, { flush: false, patch })
     t.teardown(() => closeFixture(f))
 
-    const driver = await park(f.auto, parked)
+    const { driver } = await park(f.auto, parked)
 
     t.absent(f.auto.remapped, 'not claimed yet')
     t.ok(f.auto.committing, 'but still committing')
@@ -988,7 +990,7 @@ test(
     const f = await openFixture(t, { dir, flush: false, patch })
     t.teardown(() => closeFixture(f))
 
-    const driver = await park(f.auto, parked)
+    const { driver } = await park(f.auto, parked)
     const remapper = f.auto._remapper
     t.ok(f.auto.committing, 'committing')
 
