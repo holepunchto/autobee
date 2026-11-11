@@ -869,6 +869,34 @@ test('remap scenarios - old heads within the gap are refused before the warmup',
   t.is(warmups, 0, 'nor warmed up a head it did not land on')
 })
 
+test('remap scenarios - a legacy boot pointer within the gap is still booted onto', async function (t) {
+  const { dirs, key } = await seed(t)
+
+  // a moves a few flushes ahead on the old generation
+  let a = open(t, dirs.a, null, { previous: true })
+  await a.auto.ready()
+  for (let i = 0; i < 3; i++) await a.auto.append(encode({ i }))
+  await a.auto.update()
+  const system = a.auto.system.bee.head()
+  const flushes = a.auto.system.flushes
+  await a.auto.close()
+  await a.store.close()
+
+  const blind = await mirror(t, dirs.a)
+
+  // b opens pointed straight at that system head, the legacy boot form
+  const b = open(t, dirs.b, key, {
+    fastForward: { boot: { key: system.key, length: system.length } }
+  })
+  connect(t, b.store, blind)
+  await b.auto.ready()
+  t.ok(flushes - b.auto.system.flushes < FastForward.MIN_GAP, 'within the gap')
+
+  t.ok(await until([b.auto], () => b.auto.stats.fastForwards > 0), 'booted onto it anyway')
+  t.is(b.auto.system.flushes, flushes)
+  t.is(b.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
+})
+
 function headOf(auto) {
   return { key: auto.local.key, length: auto.local.length }
 }
