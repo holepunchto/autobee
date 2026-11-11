@@ -1762,7 +1762,7 @@ module.exports = class Autobee extends ReadyResource {
     // never move backwards, a boot head can be older than what we already have
     if (!rewind && flushes < this.system.flushes - slack) return false
 
-    // apply ran while we searched, only drop it if it no longer moves us forward
+    // apply ran while we searched, only drop it if it no longer moves us forward enough
     if (!force && !isRemap && flushes - this.system.flushes < FastForward.MIN_GAP) return false
 
     // an old head is never accepted from the new generation or while committing

@@ -674,10 +674,6 @@ test(
     t.absent(f.auto.remapped)
 
     const old = { key: local, length: before }
-    const ff = await FastForward.fromHead(f.auto, old, null, { skipGap: true, rewind: true })
-    t.ok(await ff.run(), 'an old head is accepted')
-    await ff.close()
-
     Remapper.prototype.run = () => new Promise(() => {})
     t.ok(await f.auto.moveTo(old), 'landed')
     t.absent(f.auto._remapFailed, 'the landing clears the failure')

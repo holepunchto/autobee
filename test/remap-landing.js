@@ -843,6 +843,32 @@ test('remap scenarios - old heads within the gap are not landed on', async funct
   t.ok(await same(a, b, c), 'the views agree')
 })
 
+test('remap scenarios - old heads within the gap are refused before the warmup', async function (t) {
+  const { dirs, key } = await seed(t)
+
+  // no recovery peer: a stays on the old generation and keeps up by applying
+  let warmups = 0
+  const a = open(t, dirs.a, null, { warmup: async () => warmups++ })
+  const b = open(t, dirs.b, key, { previous: true })
+  const c = open(t, dirs.c, key, { previous: true })
+  await a.auto.ready()
+  await b.auto.ready()
+  await c.auto.ready()
+  connect(t, a.store, b.store)
+  connect(t, a.store, c.store)
+  connect(t, b.store, c.store)
+
+  for (let i = 0; i < 10; i++) {
+    await b.auto.append(encode({ i }))
+    await c.auto.append(encode({ i }))
+    await settled([a.auto, b.auto, c.auto])
+  }
+
+  t.is(a.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
+  t.is(a.auto.stats.fastForwards, 0, 'a never landed')
+  t.is(warmups, 0, 'nor warmed up a head it did not land on')
+})
+
 function headOf(auto) {
   return { key: auto.local.key, length: auto.local.length }
 }
