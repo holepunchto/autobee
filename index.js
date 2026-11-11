@@ -409,6 +409,7 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
+    if (this.ff !== null) this.ff.reject(new Error('Autobee closed'))
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -1704,9 +1705,10 @@ module.exports = class Autobee extends ReadyResource {
     const running = this._runFastForward(ff, { force: true, rewind: true })
     if (previous !== null) await previous.close()
 
-    if (!(await running)) return null
+    const landing = await running
+    if (!landing) return null
 
-    return this.ff.promise
+    return landing.promise
   }
 
   // legacy: ungated boot straight onto a system head
@@ -1757,6 +1759,9 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!result) return false
 
+    // shutdown began while the head was read: nothing would apply the move
+    if (this.closing !== null || this._interrupting) return false
+
     // a peer in lock step with the writer that remapped is never behind its claim
     const isRemap =
       this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
@@ -1774,8 +1779,12 @@ module.exports = class Autobee extends ReadyResource {
       return false
     }
 
+    // the move settles once this head is applied, or never will be
+    const move = rrp()
+    move.promise.catch(noop)
+
     this.fastForwardTo = result
-    this.ff = rrp()
+    this.ff = move
 
     // a remapped head replaces whatever we were about to remap ourselves, as
     // does a forced move during the commit: its walk no longer covers the head
@@ -1790,7 +1799,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.bumpSoon()
 
-    return true
+    return move
   }
 
   async _runMigration() {
@@ -1805,6 +1814,17 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _applyFastForward() {
+    const landing = this.ff
+
+    try {
+      await this._applyLanding(landing)
+    } catch (err) {
+      landing.reject(err)
+      throw err
+    }
+  }
+
+  async _applyLanding(landing) {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
@@ -1850,7 +1870,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
-    this.ff.resolve({ to, from })
+    landing.resolve({ to, from })
   }
 
   replay() {
