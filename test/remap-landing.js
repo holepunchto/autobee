@@ -145,12 +145,9 @@ async function seed(t) {
 
   for (const p of [a, b, c]) t.is(p.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
 
-  // the v2 cores a user landing on a's head reads: a's own view and system
-  const cores = [
-    ...(await a.auto._workingBee.cores({ recursive: true })),
-    ...(await a.auto.system.bee.cores({ recursive: true }))
-  ]
-  t.ok(cores.length > 0, 'the room has v2 cores')
+  // only the oplogs are v2 here: the view and system cores are current ones,
+  // so a remap in this room copies nothing and claims on its own
+  t.alike(await a.auto._unmappedCores(), { views: [], systems: [] }, 'nothing to copy')
 
   for (const s of streams) s.destroy()
   for (const p of [a, b, c]) {
@@ -158,7 +155,7 @@ async function seed(t) {
     await p.store.close()
   }
 
-  return { dirs, key: a.auto.key, cores }
+  return { dirs, key: a.auto.key }
 }
 
 async function room(t) {
@@ -257,6 +254,15 @@ test('remap landing - a room far ahead of the claim stays where it is', async fu
 
   await settled([a, b, c])
   t.ok(await same(a, b, c), 'and keeps up')
+  t.is(a.stats.fastForwards, 0, 'still without going back')
+
+  // the writer's next write claims again, at the current flushes
+  await a.append(encode({ claim: 'again' }))
+  t.ok(await landed([a, b, c]), 'and the room lands on that')
+  t.is(a.stats.fastForwards, 0)
+  for (const peer of [b, c]) t.is(peer.stats.fastForwards, 1, 'landed on the writer')
+  await settled([a, b, c])
+  t.ok(await same(a, b, c), 'the views agree')
 })
 
 test('remap landing - phase one reports its progress', async function (t) {
@@ -768,6 +774,69 @@ test('remap scenarios - a remap that fails after being replaced does not fail th
   t.ok(await landed(autos), 'every peer is on the remapped generation')
   t.ok(a.auto.remapped)
   t.ok(await same(...autos), 'the views agree')
+})
+
+test('remap scenarios - a commit that fails resets the store', async function (t) {
+  const { a, b, c, join } = await room(t)
+
+  await a.update()
+  const remapper = a._remapper
+  remapper._commit = async () => {
+    throw new Error('commit broke')
+  }
+
+  const warnings = []
+  a.on('warning', (err) => warnings.push(err.message))
+
+  t.ok(await until([a], () => a._remapFailed), 'the remap failed')
+  t.ok(remapper.finished)
+  t.absent(remapper.committing, 'and is no longer committing')
+  t.absent(a.committing, 'so neither is the store')
+  t.alike(warnings, ['commit broke'])
+  t.is(a.system.version, MAPPED_AUTOBEE_VERSION - 1)
+  t.absent(a.remapped)
+
+  // the room runs on, nothing retries by itself
+  const leave = join()
+  await rounds([a, b, c], 5)
+  t.ok(await same(a, b, c), 'the views agree')
+  t.is(a._remapper, remapper, 'nothing retried by itself')
+
+  // a landing gives it another go
+  leave()
+  await rounds([b, c], 20)
+  t.ok(b.system.flushes - a.system.flushes > FastForward.MIN_GAP, 'far ahead')
+  join()
+
+  t.ok(await until([a, b, c], () => a.stats.fastForwards > 0), 'a landed on the old head')
+  t.absent(a._remapFailed, 'the failure is forgotten')
+  t.not(a._remapper, remapper, 'a new remap started')
+  t.ok(await landed([a, b, c]), 'every peer is on the remapped generation')
+  t.ok(await same(a, b, c), 'the views agree')
+})
+
+test('remap scenarios - old heads within the gap are not landed on', async function (t) {
+  const { a, b, c, join } = await room(t)
+
+  await a.update()
+  const remapper = a._remapper
+  const release = hold(remapper, '_walk')
+  join()
+  t.ok(await until([a, b, c], () => remapper.recovered), 'the remap passed the gate')
+
+  // the others post while a keeps up by applying: no head is far enough ahead
+  for (let i = 0; i < 20; i++) {
+    await b.append(encode({ i }))
+    await c.append(encode({ i }))
+    await settled([a, b, c])
+  }
+  t.is(a.stats.fastForwards, 0, 'a never landed')
+  t.is(remapper.epoch, 0, 'and the remap was never cancelled')
+  t.absent(remapper.cancelled)
+
+  release()
+  t.ok(await landed([a, b, c]), 'every peer is on the remapped generation')
+  t.ok(await same(a, b, c), 'the views agree')
 })
 
 function headOf(auto) {
