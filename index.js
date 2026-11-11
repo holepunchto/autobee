@@ -1751,7 +1751,7 @@ module.exports = class Autobee extends ReadyResource {
 
     // the move settles once this head is applied, or never will be
     const move = rrp()
-    move.promise.catch(safetyCatch)
+    move.promise.catch(noop)
 
     this.fastForwardTo = result
     this.ff = move
