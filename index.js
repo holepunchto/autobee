@@ -1735,6 +1735,9 @@ module.exports = class Autobee extends ReadyResource {
 
     if (!result) return false
 
+    // shutdown began while the head was read: nothing would apply the move
+    if (this.closing !== null || this._interrupting) return false
+
     // a peer in lock step with the writer that remapped is never behind its claim
     const landing =
       this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION

@@ -877,6 +877,38 @@ test('a move whose apply fails is rejected instead of hanging', async function (
   t.ok(auto2.closing, 'the store is closing')
 })
 
+test('a move accepted as the store closes settles instead of hanging', async function (t) {
+  const auto1 = await create(t)
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key)
+  t.teardown(replicate(auto1, auto2))
+
+  // the store starts closing while the move still reads its head
+  let release = null
+  const held = new Promise((resolve) => (release = resolve))
+  const run = FastForward.prototype.run
+  FastForward.prototype.run = async function () {
+    FastForward.prototype.run = run
+    const result = await run.call(this)
+    await held
+    return result
+  }
+  t.teardown(() => (FastForward.prototype.run = run))
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const moving = timeboxed(auto2.moveTo(head))
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const closing = auto2.close()
+  release()
+
+  const outcome = await moving
+  t.absent(outcome.hung, 'the move settled')
+  t.absent(outcome.value, 'without a landing')
+  await closing
+  t.is(auto2.stats.fastForwards, 0, 'nothing was applied')
+})
+
 test('a move settles with its own landing when another is accepted meanwhile', async function (t) {
   const auto1 = await create(t)
   for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
