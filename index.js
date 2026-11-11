@@ -205,6 +205,11 @@ module.exports = class Autobee extends ReadyResource {
     return !this.remapped
   }
 
+  // the commit of a remap is the only thing a landing waits for
+  get committing() {
+    return this._remapper !== null && this._remapper.committing
+  }
+
   get writable() {
     return this.writers ? this.writers.writable : false
   }
@@ -710,10 +715,12 @@ module.exports = class Autobee extends ReadyResource {
 
     const remapper = new Remapper(this)
     this._remapper = remapper
+    this._remapFailed = false
 
     // a destroyed remap fails its reads after the fact, which says nothing
+    // a remap that was replaced meanwhile fails on its own, not the store's
     const failed = (err) => {
-      if (remapper.destroyed || this.closing) return
+      if (remapper.destroyed || this.closing || this._remapper !== remapper) return
       this._remapFailed = true
       this._warn(err)
     }
@@ -725,24 +732,38 @@ module.exports = class Autobee extends ReadyResource {
   // a landing destroys the remap, so what the walk found is all there is
   async _finishRemap() {
     const remapper = this._remapper
-    this._remapper = null
 
-    if (remapper.destroyed || this.remapped) return
-
-    const mappings = remapper.mappings
-
-    if (mappings.views.length === 0 && mappings.systems.length === 0) {
-      this._onremapped(null, true)
+    if (this.remapped) {
+      this._remapper = null
       return
     }
 
-    if (mappings.views.length > 0) {
-      await this._workingBee.write({ mappings: mappings.views }).flush()
-      this.bee.move(this._workingBee.head())
-    }
+    const mappings = remapper.mappings
 
-    this.system.mappings = mappings.systems
-    this._onremapped(mappings, true)
+    // the remap stays in place until the claim, so an old head is still refused
+    try {
+      if (mappings.views.length === 0 && mappings.systems.length === 0) {
+        this._onremapped(null, true)
+        return
+      }
+
+      if (mappings.views.length > 0) {
+        await this._workingBee.write({ mappings: mappings.views }).flush()
+        if (remapper.destroyed) return
+
+        // the table may have been known before the write (a run interrupted
+        // before its claim), in which case the root is still the original:
+        // moving onto the head resolves it through the table
+        const head = this._workingBee.head()
+        this._workingBee.move(head)
+        this.bee.move(head)
+      }
+
+      this.system.mappings = mappings.systems
+      this._onremapped(mappings, true)
+    } finally {
+      if (this._remapper === remapper) this._remapper = null
+    }
   }
 
   _onremapped(mappings, ack) {
@@ -843,7 +864,7 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (this._remapper !== null && this._remapper.finished && !this._remapFailed) {
+    if (this._remapper !== null && this._remapper.mappings !== null && !this._remapFailed) {
       await this._finishRemap()
     }
     if (!this.remapped && this._remapper === null && this.fastForwardTo === null) this._startRemap()
@@ -1691,7 +1712,10 @@ module.exports = class Autobee extends ReadyResource {
   // legacy: ungated boot straight onto a system head
   async _bootFromSystem(system) {
     try {
-      const ff = new FastForward(this, system, { timeout: FastForward.DEFAULT_TIMEOUT })
+      const ff = new FastForward(this, system, {
+        timeout: FastForward.DEFAULT_TIMEOUT,
+        force: true
+      })
       return await this._runFastForward(ff, { force: true })
     } catch (err) {
       safetyCatch(err)
@@ -1734,23 +1758,34 @@ module.exports = class Autobee extends ReadyResource {
     if (!result) return false
 
     // a peer in lock step with the writer that remapped is never behind its claim
-    const landing =
+    const isRemap =
       this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
-    const slack = landing ? FastForward.MIN_GAP : 0
+    const slack = isRemap ? FastForward.MIN_GAP : 0
 
     // never move backwards, a boot head can be older than what we already have
     if (!rewind && flushes < this.system.flushes - slack) return false
 
-    // apply ran while we searched, only drop it if it no longer moves us forward
-    if (!force && !landing && flushes <= this.system.flushes) return false
+    // apply ran while we searched, only drop it if it no longer moves us forward enough
+    if (!force && !isRemap && flushes - this.system.flushes < FastForward.MIN_GAP) return false
+
+    // an old head is never accepted from the new generation or while committing
+    const old = version < MAPPED_AUTOBEE_VERSION
+    if (old && !force && !this.system.isGenesis() && (this.remapped || this.committing)) {
+      return false
+    }
 
     this.fastForwardTo = result
     this.ff = rrp()
 
-    // a remapped head replaces whatever we were about to remap ourselves
+    // a remapped head replaces whatever we were about to remap ourselves, as
+    // does a forced move during the commit: its walk no longer covers the head
     if (this._remapper !== null) {
-      this._remapper.destroy()
-      this._remapper = null
+      if (isRemap || this._remapper.committing) {
+        this._remapper.destroy()
+        this._remapper = null
+      } else {
+        this._remapper.cancel()
+      }
     }
 
     this.bumpSoon()
@@ -1787,6 +1822,9 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.system.version < MAPPED_AUTOBEE_VERSION) this.remapped = false
     this._remapFailed = false
+
+    // a remap that already ended is replaced, a cancelled one picks up from here
+    if (this._remapper !== null && this._remapper.finished) this._remapper = null
     if (!this.remapped && this._remapper === null) this._startRemap()
 
     this._approvalCheck = true
@@ -1803,6 +1841,12 @@ module.exports = class Autobee extends ReadyResource {
     await this._storeBoot()
 
     await this._updateAcking()
+
+    // a landing accepted meanwhile cancelled the remap again: it restarts it.
+    // the guards _startRemap has are not needed here: a remap only exists once
+    // the boot migration is over, and a migration the landing brought along was
+    // run above, before the remap is touched
+    if (this._remapper !== null && this.fastForwardTo === null) this._remapper.restart()
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)

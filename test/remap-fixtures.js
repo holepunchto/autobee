@@ -7,7 +7,7 @@ const os = require('os')
 const Hypercore = require('hypercore')
 const Autobee = require('../index.js')
 const FastForward = require('../lib/fast-forward.js')
-const { migrateCore, Remapper } = require('../lib/remap.js')
+const { migrateCore, Remapper, REMAPPED_USER_DATA } = require('../lib/remap.js')
 const {
   replicate,
   replicateAsRecovery,
@@ -15,6 +15,13 @@ const {
   recoveryPeers,
   remapped: settled
 } = require('./helpers/index.js')
+
+const MOCK_REMAPPER = {
+  auto: { key: b4a.alloc(32, 1) },
+  destroyed: false
+}
+
+const NAMESPACE = b4a.toString(MOCK_REMAPPER.auto.key, 'hex')
 
 const skip = !['linux', 'darwin'].includes(os.platform())
 
@@ -25,6 +32,7 @@ const FIXTURES = skip ? null : path.join(__dirname, 'fixtures/migration')
 const VIEW = skip ? null : fixture('autobee-v2-view-linux')
 const HEADS = skip ? null : fixture('autobee-v2-heads-linux')
 const EMPTY = skip ? null : fixture('autobee-v2-empty-view-linux')
+const WRITERS = skip ? null : fixture('autobee-v2-writers-linux')
 
 const SECRET_KEY = b4a.alloc(32).fill('secret')
 
@@ -54,7 +62,7 @@ async function apply(batch, view, base) {
 
 async function openFixture(
   t,
-  { fixture = VIEW, dir = null, patch = null, peer = true, flush = true } = {}
+  { fixture = VIEW, dir = null, patch = null, peer = true, flush = true, opts = {} } = {}
 ) {
   if (dir === null) {
     dir = await t.tmp()
@@ -67,7 +75,8 @@ async function openFixture(
     migrate: () => Promise.resolve(),
     legacyViews: ['not-a-view'],
     encrypted: true,
-    encryptionKey: SECRET_KEY
+    encryptionKey: SECRET_KEY,
+    ...opts
   })
 
   const events = { remap: 0 }
@@ -149,10 +158,25 @@ async function append(auto, puts, dels = []) {
   await auto.update()
 }
 
-async function copyFixture(t, fixture = VIEW) {
+async function copyFixture(t, fixture = VIEW, member = 'a') {
   const dir = await t.tmp()
-  await fs.cp(path.join(fixture.dir, 'a'), dir, { recursive: true })
+  await fs.cp(path.join(fixture.dir, member), dir, { recursive: true })
   return dir
+}
+
+// a stage that hangs like a read nobody serves and fails like one once cancelled
+function stall(remapper, stage) {
+  const real = remapper[stage].bind(remapper)
+  let stalled = false
+  remapper[stage] = async (...args) => {
+    if (stalled) return real(...args)
+    stalled = true
+    const epoch = remapper.epoch
+    while (epoch === remapper.epoch && !remapper.destroyed) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    throw new Error('request destroyed')
+  }
 }
 
 // a blind peer holding the fixture, the remap waits to have what it has
@@ -257,6 +281,26 @@ test('remap fixtures - opening a store with v2 views remaps them', { skip }, asy
     remapped(VIEW.meta.versions),
     'every batch reads through the copies'
   )
+
+  // every v2 core the walk found carries the mark, the copies do not
+  const systemFrom = [...f.auto.system.bee.context.mappings.known.keys()].map((h) =>
+    b4a.from(h, 'hex')
+  )
+  t.is(systemFrom.length, 1, 'one system core was mapped')
+  for (const [key, marked] of [
+    [v2, true],
+    [systemFrom[0], true],
+    [copy, false]
+  ]) {
+    const core = f.store.get({ key, active: false })
+    await core.ready()
+    t.alike(
+      await core.getUserData(REMAPPED_USER_DATA),
+      marked ? b4a.alloc(0) : null,
+      marked ? 'the v2 core is marked' : 'the copy is not'
+    )
+    await core.close()
+  }
 })
 
 test('remap fixtures - writes after the remap land on the v3 core', { skip }, async function (t) {
@@ -410,7 +454,7 @@ test('remap fixtures - the v2 view is copied into a current core', { skip }, asy
   t.teardown(() => src.close())
   t.is(src.manifest.version, 2)
 
-  const copy = await migrateCore(store, key, viewEncryption())
+  const copy = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption())
   t.teardown(() => copy.close())
 
   t.is(copy.manifest.version, 3, 'the copy is a current core')
@@ -423,7 +467,7 @@ test('remap fixtures - the v2 view is copied into a current core', { skip }, asy
   t.alike(await blocks(opened), await blocks(src), 'the copy reads as the source')
   await opened.close()
 
-  const again = await migrateCore(store, key, viewEncryption())
+  const again = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption())
   t.alike(again.key, copy.key, 'copying again gives the same core')
   await again.close()
 })
@@ -437,8 +481,8 @@ test(
     const a = openStore(t, await copyFixture(t))
     const b = openStore(t, await copyFixture(t))
 
-    const ca = await migrateCore(a, key, viewEncryption())
-    const cb = await migrateCore(b, key, viewEncryption())
+    const ca = await migrateCore(a, MOCK_REMAPPER, key, viewEncryption())
+    const cb = await migrateCore(b, MOCK_REMAPPER, key, viewEncryption())
     t.teardown(() => ca.close())
     t.teardown(() => cb.close())
 
@@ -465,7 +509,7 @@ test('remap fixtures - the remapper fetches the v2 view from a peer', { skip }, 
   const auto = remapperFor(store, [key])
   const mappings = await new Remapper(auto).run()
 
-  const expected = await migrateCore(source, key, viewEncryption())
+  const expected = await migrateCore(source, MOCK_REMAPPER, key, viewEncryption())
   t.teardown(() => expected.close())
 
   t.alike(mappings, { views: [{ from: key, to: expected.key }], systems: [] }, 'the same copy')
@@ -650,10 +694,6 @@ test(
     t.absent(f.auto.remapped)
 
     const old = { key: local, length: before }
-    const ff = await FastForward.fromHead(f.auto, old, null, { skipGap: true, rewind: true })
-    t.ok(await ff.run(), 'an old head is accepted')
-    await ff.close()
-
     Remapper.prototype.run = () => new Promise(() => {})
     t.ok(await f.auto.moveTo(old), 'landed')
     t.absent(f.auto._remapFailed, 'the landing clears the failure')
@@ -661,13 +701,623 @@ test(
   }
 )
 
+test(
+  'remap fixtures - an interrupted copy resumes on its staging core',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const store = openStore(t, dir)
+    const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+    const copy = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption())
+    const staging = store.get({
+      name: 'remap/' + NAMESPACE + '/' + VIEW.meta.view.key + '/' + copy.length
+    })
+    await staging.ready()
+    t.is(staging.length, copy.length, 'the copy was staged on a core named for it')
+    t.is(
+      staging.core.state.storage.core.dataPointer,
+      copy.core.state.storage.core.dataPointer,
+      'and the copy is that storage'
+    )
+
+    const again = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption())
+    t.alike(again.key, copy.key, 'copying again reuses it')
+    t.is(staging.length, copy.length)
+
+    for (let i = 0; i < copy.length; i++) {
+      t.alike(await again.get(i), await copy.get(i), 'block ' + i)
+    }
+
+    await staging.close()
+    await again.close()
+    await copy.close()
+  }
+)
+
+test(
+  'remap fixtures - a copy cancelled part way resumes after a reopen',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+    // one block per append, cancelled once two are on disk
+    const first = new Corestore(dir, { allowBackup: true, manifestVersion: 2 })
+    let appended = 0
+    const spy = first.get({
+      name: 'remap/' + NAMESPACE + '/' + VIEW.meta.view.key + '/' + VIEW.meta.view.length
+    })
+    await spy.ready()
+    spy.on('append', () => appended++)
+
+    const cancellableRemapper = {
+      auto: { key: b4a.alloc(32, 1) },
+      get destroyed() {
+        return appended >= 2
+      }
+    }
+
+    await t.exception(
+      migrateCore(first, cancellableRemapper, key, viewEncryption(), {
+        batchBytes: 1
+      }),
+      /Copy cancelled/
+    )
+    t.is(spy.length, 2, 'two blocks were staged before the cancel')
+    await spy.close()
+    await first.close()
+
+    const store = openStore(t, dir)
+    const copy = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption())
+    t.is(copy.length, VIEW.meta.view.length, 'the resumed copy is whole')
+
+    const expected = await migrateCore(
+      openStore(t, await copyFixture(t)),
+      MOCK_REMAPPER,
+      key,
+      viewEncryption()
+    )
+    t.alike(copy.key, expected.key, 'and is the same core an uninterrupted copy makes')
+    for (let i = 0; i < copy.length; i++) {
+      t.alike(await copy.get(i), await expected.get(i), 'block ' + i)
+    }
+
+    await copy.close()
+    await expected.close()
+  }
+)
+
+test(
+  'remap fixtures - concurrent copies of one source are serialised',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const store = openStore(t, dir)
+    const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+    const [a, b] = await Promise.all([
+      migrateCore(store, MOCK_REMAPPER, key, viewEncryption(), { batchBytes: 1 }),
+      migrateCore(store, MOCK_REMAPPER, key, viewEncryption(), { batchBytes: 1 })
+    ])
+
+    t.alike(a.key, b.key, 'both land on the same copy')
+    t.is(a.length, VIEW.meta.view.length, 'with no repeated blocks')
+    await a.close()
+    await b.close()
+  }
+)
+
+test(
+  'remap fixtures - the copy is made at the verified length and never waits',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const store = openStore(t, dir)
+    const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+    const short = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption(), { length: 3 })
+    t.is(short.length, 3, 'copied at the length asked for')
+    await short.close()
+
+    const whole = await migrateCore(store, MOCK_REMAPPER, key, viewEncryption())
+    t.is(whole.length, VIEW.meta.view.length)
+    t.unlike(whole.key, short.key, 'a different copy from a different length')
+    await whole.close()
+
+    // a block that is not held locally fails the copy instead of waiting for a peer
+    const src = store.get({ key, active: false })
+    await src.ready()
+    await src.clear(4, 6)
+    await src.close()
+
+    const other = { auto: { key: b4a.alloc(32, 2) }, destroyed: false }
+    await t.exception(
+      migrateCore(store, other, key, viewEncryption()),
+      /Remap block missing: 4/,
+      'the copy fails at once'
+    )
+  }
+)
+
+// the mappings write is held open: the remap has committed but not claimed
+function holdMappingsWrite() {
+  let release = null
+  const held = new Promise((resolve) => (release = resolve))
+  let reached = null
+  const parked = new Promise((resolve) => (reached = resolve))
+
+  const patch = (auto) => {
+    const write = auto._workingBee.write.bind(auto._workingBee)
+    auto._workingBee.write = (opts) => {
+      const w = write(opts)
+      if (opts && opts.mappings) {
+        const flush = w.flush.bind(w)
+        w.flush = async () => {
+          reached()
+          await held
+          return flush()
+        }
+      }
+      return w
+    }
+  }
+
+  return { patch, parked, release }
+}
+
+// drives the store until the condition holds
+async function drive(auto, cond, { ticks = 400 } = {}) {
+  for (let i = 0; i < ticks; i++) {
+    await auto.update()
+    if (cond()) return true
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return false
+}
+
+// waits for the condition without driving the store, for when its drain is parked
+async function poll(cond, { ticks = 400 } = {}) {
+  for (let i = 0; i < ticks; i++) {
+    if (cond()) return true
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return false
+}
+
+// drives the store until it is parked in its mappings write. The driver is
+// handed back, not awaited: its last update is the parked one, so it only
+// ends once the write is released
+async function park(auto, parked) {
+  let driving = true
+  const driver = (async () => {
+    while (driving) {
+      await auto.update()
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  })()
+  await parked
+  driving = false
+  return { driver }
+}
+
+test(
+  'remap fixtures - an old head is refused while the remap is finished',
+  { skip },
+  async function (t) {
+    const { patch, parked, release } = holdMappingsWrite()
+    const f = await openFixture(t, { flush: false, patch })
+    t.teardown(() => closeFixture(f))
+
+    const { driver } = await park(f.auto, parked)
+
+    t.absent(f.auto.remapped, 'not claimed yet')
+    t.ok(f.auto.committing, 'but still committing')
+
+    const head = f.auto.system.bee.head()
+    const old = {
+      system: { flushes: f.auto.system.flushes + 16, version: 3 },
+      run: async () => ({ head: { key: head.key, length: head.length }, migrate: null }),
+      close: async () => {}
+    }
+    t.absent(await f.auto._runFastForward(old), 'an old head is refused')
+    t.absent(f.auto.fastForwardTo)
+
+    release()
+    await driver
+    await settled(f.auto)
+
+    t.ok(f.auto.remapped)
+    t.is(f.auto.system.version, 4)
+    t.is(f.auto.stats.fastForwards, 0, 'nothing landed')
+    t.is(f.events.remap, 1)
+  }
+)
+
+test(
+  'remap fixtures - a run interrupted before its claim resolves its root on the next run',
+  { skip },
+  async function (t) {
+    t.timeout(120000)
+    const dir = await copyFixture(t)
+    const v2 = b4a.from(VIEW.meta.view.key, 'hex')
+
+    // the mappings checkpoint is written, then the store dies before the claim
+    let died = false
+    const first = await openFixture(t, {
+      dir,
+      flush: false,
+      patch: (auto) => {
+        auto.on('error', () => {})
+        auto._onremapped = () => {
+          died = true
+          throw new Error('simulated crash before the claim')
+        }
+      }
+    })
+    while (!died) {
+      await first.auto.update()
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    await closeFixture(first).catch(() => {})
+
+    const again = await openFixture(t, { dir })
+    t.ok(again.auto.remapped, 'the next run remaps')
+    t.is(again.auto.system.version, 4)
+    t.unlike(again.auto.system.view.key, v2, 'the claim does not point at the original')
+    t.unlike(again.auto._workingBee.context.core.key, v2, 'nor does the root')
+    t.alike(await entries(again.auto.view), VIEW.meta.versions[VIEW.meta.versions.length - 1])
+    await closeFixture(again)
+
+    // the original is not needed any more
+    await clearCores(dir, [v2])
+    const last = await openFixture(t, { dir, peer: false })
+    t.teardown(() => closeFixture(last))
+    t.ok(last.auto.remapped)
+    t.alike(await entries(last.auto.view), VIEW.meta.versions[VIEW.meta.versions.length - 1])
+  }
+)
+
+test(
+  'remap fixtures - a forced move during the finish does not claim',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const local = b4a.from(VIEW.meta.localKey, 'hex')
+    const before = await coreLength(dir, local)
+
+    const { patch, parked, release } = holdMappingsWrite()
+    const f = await openFixture(t, { dir, flush: false, patch })
+    t.teardown(() => closeFixture(f))
+
+    const { driver } = await park(f.auto, parked)
+    const remapper = f.auto._remapper
+    t.ok(f.auto.committing, 'committing')
+
+    // the remap the move starts is kept from running, so the outcome is stable
+    const run = Remapper.prototype.run
+    Remapper.prototype.run = () => new Promise(() => {})
+    t.teardown(() => (Remapper.prototype.run = run))
+
+    const moved = f.auto.moveTo({ key: local, length: before })
+    t.ok(await poll(() => remapper.destroyed), 'the move destroyed the finishing remap')
+    t.ok(f.auto.fastForwardTo !== null, 'and is scheduled')
+
+    release()
+    await driver
+    t.ok(await moved, 'moved')
+
+    t.absent(f.auto.remapped, 'the finished remap did not claim')
+    t.is(f.auto.system.version, 3, 'the store is on the old generation')
+    t.is(f.events.remap, 0, 'no remap event')
+    t.ok(f.auto._remapper !== null && f.auto._remapper !== remapper, 'a new remap started')
+    t.absent(f.auto._remapFailed)
+  }
+)
+
+test(
+  'remap fixtures - a copy destroyed by a forced move is not a failure',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const local = b4a.from(VIEW.meta.localKey, 'hex')
+    const before = await coreLength(dir, local)
+
+    const f = await openFixture(t, { dir, flush: false })
+    t.teardown(() => closeFixture(f))
+
+    await f.auto.update()
+    const remapper = f.auto._remapper
+    t.ok(remapper, 'the remap started')
+
+    // the first block read of the first copy is held, so the move lands mid-copy
+    let release = null
+    const held = new Promise((resolve) => (release = resolve))
+    let reached = null
+    const copying = new Promise((resolve) => (reached = resolve))
+    let hooked = false
+    const get = f.auto.store.get.bind(f.auto.store)
+    f.auto.store.get = (opts) => {
+      const core = get(opts)
+      if (!hooked && remapper.committing && opts && opts.encryption && opts.active === true) {
+        hooked = true
+        const read = core.get.bind(core)
+        core.get = async (...args) => {
+          reached()
+          await held
+          return read(...args)
+        }
+      }
+      return core
+    }
+
+    let result = null
+    const commit = remapper._commit.bind(remapper)
+    remapper._commit = async () => {
+      try {
+        return (result = { mappings: await commit() }).mappings
+      } catch (err) {
+        result = { err }
+        throw err
+      }
+    }
+
+    await copying
+    t.ok(remapper.committing && f.auto.committing, 'phase two is reading its first block')
+    t.ok(remapper.cores.length > 0, 'with cores to copy')
+
+    const warnings = []
+    f.auto.on('warning', (err) => warnings.push(err.message))
+
+    const run = Remapper.prototype.run
+    Remapper.prototype.run = () => new Promise(() => {})
+    t.teardown(() => (Remapper.prototype.run = run))
+
+    const moved = f.auto.moveTo({ key: local, length: before })
+    t.ok(await drive(f.auto, () => remapper.destroyed), 'the committing remap was destroyed')
+    t.ok(await drive(f.auto, () => f.auto.fastForwardTo === null), 'the move applied')
+    t.ok(await moved, 'moved')
+
+    release()
+    t.ok(await drive(f.auto, () => result !== null), 'the commit ended')
+    t.ok(result.err && /Copy cancelled/.test(result.err.message), 'the copy was cancelled')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    t.absent(f.auto._remapFailed, 'which is not a failure')
+    t.alike(warnings, [], 'and is not warned about')
+    t.absent(f.auto.remapped)
+    t.is(f.auto.system.version, 3)
+  }
+)
+
+test(
+  'remap fixtures - the commit copies the length that was verified',
+  { skip },
+  async function (t) {
+    const dir = await copyFixture(t)
+    const v2 = b4a.from(VIEW.meta.view.key, 'hex')
+
+    let release = null
+    const held = new Promise((resolve) => (release = resolve))
+    let mappings = null
+
+    const f = await openFixture(t, {
+      dir,
+      flush: false,
+      // the claim is captured instead of acked: the copy is deliberately short
+      patch: (auto) => {
+        auto._onremapped = (m) => {
+          mappings = m
+          auto.remapped = true
+        }
+      }
+    })
+    t.teardown(() => closeFixture(f))
+
+    await f.auto.update()
+    const remapper = f.auto._remapper
+    const commit = remapper._commit.bind(remapper)
+    remapper._commit = async () => {
+      await held
+      return commit()
+    }
+
+    // the recovery peer takes a retry to notice each core
+    t.ok(await drive(f.auto, () => remapper.committing, { ticks: 1200 }), 'phase two started')
+    const view = remapper.cores.find((core) => b4a.equals(core.key, v2))
+    t.is(view.length, VIEW.meta.view.length, 'the verified length was recorded')
+
+    // the source is longer than what was verified by the time the commit copies it
+    view.length = 3
+    release()
+    t.ok(await drive(f.auto, () => mappings !== null), 'the remap finished')
+
+    const mapping = mappings.views.find((m) => b4a.equals(m.from, v2))
+    const copy = f.store.get({ key: mapping.to, active: false })
+    await copy.ready()
+    t.is(copy.length, 3, 'the copy is as long as was verified')
+    await copy.close()
+
+    const expected = await migrateCore(f.store, remapper, v2, viewEncryption(), { length: 3 })
+    t.alike(mapping.to, expected.key, 'the copy made at that length')
+    await expected.close()
+  }
+)
+
+test('remap fixtures - the copy refuses what it cannot copy', { skip }, async function (t) {
+  const store = openStore(t, await copyFixture(t))
+  const key = b4a.from(VIEW.meta.view.key, 'hex')
+
+  const empty = store.get({ name: 'empty' })
+  await empty.ready()
+  await t.exception(
+    migrateCore(store, MOCK_REMAPPER, empty.key, null),
+    /Cannot migrate an empty core/,
+    'an empty source'
+  )
+
+  // a staging core for length 2 that already holds 3 blocks
+  const staging = store.get({ name: 'remap/' + NAMESPACE + '/' + VIEW.meta.view.key + '/2' })
+  await staging.ready()
+  await staging.append([b4a.from('x'), b4a.from('y'), b4a.from('z')])
+  await staging.close()
+  await t.exception(
+    migrateCore(store, MOCK_REMAPPER, key, viewEncryption(), { length: 2 }),
+    /Staging core ahead of its source: 3 > 2/,
+    'a staging core past its source'
+  )
+
+  await t.exception(
+    migrateCore(store, MOCK_REMAPPER, key, viewEncryption(), {
+      length: VIEW.meta.view.length + 5
+    }),
+    /Source core shorter than its copy/,
+    'a length the source does not have'
+  )
+})
+
+test(
+  'remap fixtures - a restarted walk copies the head it landed on',
+  { skip },
+  async function (t) {
+    t.timeout(180000)
+    const meta = WRITERS.meta
+    const coresOf = (m) => [b4a.from(m.view.key, 'hex'), b4a.from(m.systemCore, 'hex')]
+    const [aView, aSystem] = coresOf(meta.a)
+    const [bView, bSystem] = coresOf(meta.b)
+    const hex = (keys) => keys.map((k) => b4a.toString(k, 'hex')).sort()
+
+    // a user boots onto a's head, with a copy of a's store as its recovery peer
+    const user = await openFixture(t, {
+      fixture: WRITERS,
+      dir: await t.tmp(),
+      peer: false,
+      flush: false,
+      opts: {
+        fastForward: {
+          boot: { head: { key: b4a.from(meta.a.localKey, 'hex'), length: meta.a.localLength } }
+        }
+      }
+    })
+    t.teardown(() => closeFixture(user))
+
+    const mirrorA = openStore(t, await copyFixture(t, WRITERS, 'a'))
+    const a1 = user.store.replicate(true)
+    const a2 = mirrorA.replicate(false)
+    a1.pipe(a2).pipe(a1)
+    recoveryPeers(a2)
+    const leaveA = () => {
+      a1.destroy()
+      a2.destroy()
+    }
+    t.teardown(leaveA)
+
+    t.ok(await drive(user.auto, () => user.auto.stats.fastForwards > 0), 'the user landed on a')
+    const remapper = user.auto._remapper
+    t.ok(remapper, 'and started remapping')
+    stall(remapper, '_download')
+
+    t.ok(await drive(user.auto, () => remapper.walked, { ticks: 1200 }), 'the walk found')
+    t.alike(hex(remapper.cores.map((c) => c.key)), hex([aView, aSystem]), "a's v2 view and system")
+
+    // meanwhile a and b carry on on the old generation, far past that head
+    const previous = (auto) => (auto._startRemap = noop)
+    const dirB = await copyFixture(t, WRITERS, 'b')
+    let b = await openFixture(t, {
+      fixture: WRITERS,
+      dir: dirB,
+      peer: false,
+      flush: false,
+      patch: previous
+    })
+    const a = await openFixture(t, {
+      fixture: WRITERS,
+      dir: await copyFixture(t, WRITERS, 'a'),
+      peer: false,
+      flush: false,
+      patch: previous
+    })
+    const done = replicate(a.auto, b.auto)
+    for (let i = 0; i < 20; i++) {
+      await a.auto.append(b4a.from(JSON.stringify({ puts: [['a-later' + i, 'x']] })))
+      await b.auto.append(b4a.from(JSON.stringify({ puts: [['b-later' + i, 'x']] })))
+      await sync(a.auto, b.auto)
+    }
+    t.ok(b.auto.system.flushes - user.auto.system.flushes > FastForward.MIN_GAP, 'far ahead')
+    t.is(b.auto.system.version, 3, 'still on the old generation')
+    const head = { key: b.auto.local.key, length: b.auto.local.length }
+    const expected = await entries(b.auto.view)
+    await done()
+    await closeFixture(a)
+    await closeFixture(b)
+
+    // b comes back, and a copy of it serves as the user's recovery peer for b's cores
+    const mirror = openStore(
+      t,
+      await copyFixture(t, { dir: path.dirname(dirB), meta }, path.basename(dirB))
+    )
+    b = await openFixture(t, {
+      fixture: WRITERS,
+      dir: dirB,
+      peer: false,
+      flush: false,
+      patch: previous
+    })
+    t.teardown(() => closeFixture(b))
+    const s1 = user.store.replicate(true)
+    const s2 = mirror.replicate(false)
+    s1.pipe(s2).pipe(s1)
+    recoveryPeers(s2)
+    const undo = replicate(user.auto, b.auto)
+    t.teardown(() => {
+      s1.destroy()
+      s2.destroy()
+      return undo()
+    })
+
+    // the user lands on b's head: the walk is restarted from there
+    t.ok(await user.auto.moveTo(head), 'the user moved onto b')
+    t.is(user.auto._remapper, remapper, 'the remap was restarted, not replaced')
+    t.absent(remapper.destroyed)
+
+    t.ok(await drive(user.auto, () => user.auto.remapped, { ticks: 2400 }), 'and finished')
+    t.ok(remapper.finished && remapper.mappings !== null, 'by the same remap')
+
+    t.alike(hex(remapper.mappings.views.map((m) => m.from)), hex([bView]), "it copied b's view")
+    t.alike(hex(remapper.mappings.systems.map((m) => m.from)), hex([bSystem]), "and b's system")
+    t.absent(
+      remapper.mappings.views.some((m) => b4a.equals(m.from, aView)),
+      "not a's, which the user no longer reads"
+    )
+    t.alike(await entries(user.auto.view), expected, 'the view is whole')
+
+    // a's cores stay in the user's own core table, from the nodes it applied
+    // while on a's head: a table lists what an undo could still need. The
+    // user's lineage is b's now, which cannot undo onto those nodes, so with
+    // a's v2 view gone and nobody serving it the view still reads whole
+    leaveA()
+    const stale = user.store.get({ key: aView, active: false })
+    await stale.ready()
+    await stale.clear(0, stale.length)
+    await stale.close()
+    const out = []
+    for await (const { key, value } of user.auto.view.createReadStream({ timeout: 5000 })) {
+      out.push([b4a.toString(key), b4a.toString(value)])
+    }
+    t.alike(out, expected, "and reads none of a's v2 view")
+  }
+)
+
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
   return {
     store,
+    key: b4a.from(VIEW.meta.baseKey, 'hex'),
     bootstrap: { key: b4a.from(VIEW.meta.baseKey, 'hex') },
     getViewEncryption: () => viewEncryption(),
     getSystemEncryption: () => null,
-    _unmappedCores: async () => ({ views, systems: [] })
+    _unmappedCores: async () => ({ views, systems: [] }),
+    emit() {}
   }
 }
+
+function noop() {}
