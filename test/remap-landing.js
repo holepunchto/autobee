@@ -873,7 +873,7 @@ test('remap scenarios - a legacy boot pointer within the gap is still booted ont
   const { dirs, key } = await seed(t)
 
   // a moves a few flushes ahead on the old generation
-  let a = open(t, dirs.a, null, { previous: true })
+  const a = open(t, dirs.a, null, { previous: true })
   await a.auto.ready()
   for (let i = 0; i < 3; i++) await a.auto.append(encode({ i }))
   await a.auto.update()
