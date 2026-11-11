@@ -733,7 +733,7 @@ module.exports = class Autobee extends ReadyResource {
   async _finishRemap() {
     const remapper = this._remapper
 
-    if (remapper.destroyed || this.remapped) {
+    if (this.remapped) {
       this._remapper = null
       return
     }
@@ -1839,7 +1839,10 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._updateAcking()
 
-    // a landing accepted meanwhile cancelled the remap again: it restarts it
+    // a landing accepted meanwhile cancelled the remap again: it restarts it.
+    // the guards _startRemap has are not needed here: a remap only exists once
+    // the boot migration is over, and a migration the landing brought along was
+    // run above, before the remap is touched
     if (this._remapper !== null && this.fastForwardTo === null) this._remapper.restart()
 
     this.stats.fastForwards++

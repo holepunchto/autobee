@@ -686,22 +686,6 @@ test(
 )
 
 test(
-  'remap fixtures - the walk is announced before the download waits on it',
-  { skip },
-  async function (t) {
-    let walked = null
-    const f = await openFixture(t, {
-      patch: (auto) => auto.on('remap-walk', (cores) => (walked = cores))
-    })
-    t.teardown(() => closeFixture(f))
-
-    t.ok(walked, 'remap-walk was emitted')
-    t.is(walked.views.length, (await mapped(f.auto)).length, 'with every view core that was copied')
-    t.is(walked.systems.length, 1, 'and the system core')
-  }
-)
-
-test(
   'remap fixtures - an interrupted copy resumes on its staging core',
   { skip },
   async function (t) {

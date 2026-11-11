@@ -285,7 +285,11 @@ test('remap landing - phase one reports its progress', async function (t) {
   )
 
   const seen = []
-  a.on('remap-walk', () => seen.push('walk ' + remapper.recovered + ' ' + remapper.walked))
+  const walk = remapper._walk.bind(remapper)
+  remapper._walk = async () => {
+    await walk()
+    seen.push('walk ' + remapper.recovered + ' ' + remapper.walked)
+  }
 
   const commit = remapper._commit.bind(remapper)
   remapper._commit = () => {
