@@ -142,6 +142,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this._draining = null
     this._updating = null
+    this._changes = null
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -871,6 +872,7 @@ module.exports = class Autobee extends ReadyResource {
 
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
+    this._changes = changes
 
     // Anything expecting work to be done during bumpSoon should do it here
     while (!this._interrupting && this.bumping > 0) {
@@ -1475,6 +1477,7 @@ module.exports = class Autobee extends ReadyResource {
       this.stats.undos++
       this.trusted.clear()
       t.view = await this.system.undo(t.undo)
+      if (this._changes !== null) this._changes.undo(this.system.flushes)
     }
 
     return t
