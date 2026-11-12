@@ -141,7 +141,6 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
 
     this._draining = null
-    this._updating = null
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -192,10 +191,6 @@ module.exports = class Autobee extends ReadyResource {
     return auto instanceof Autobee
   }
 
-  get isIndexer() {
-    return this.writers ? this.writers.localWriter.isIndexer : false
-  }
-
   get appending() {
     return this.writers ? this.writers.localWriter.appending : false
   }
@@ -224,7 +219,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   get busy() {
-    return !!(this._draining || this._updating)
+    return !!this._draining
   }
 
   async _getCorePreload(name) {
@@ -460,7 +455,6 @@ module.exports = class Autobee extends ReadyResource {
     await this.store.close()
 
     if (this._ffSearching) await this._ffSearching
-    if (this._updating) await this._updating
     if (this._draining) await this._draining
 
     // let in-flight writer adds finish
@@ -845,8 +839,6 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
-    if (this._updating) await this._updating
-
     await this._runPreApply()
 
     this.stats.drains++
@@ -869,58 +861,54 @@ module.exports = class Autobee extends ReadyResource {
     }
     if (!this.remapped && this._remapper === null && this.fastForwardTo === null) this._startRemap()
 
-    const changes = this._hasUpdate ? new UpdateChanges(this) : null
-    if (changes) changes.track()
+    while (!this._interrupting) {
+      const changes = this._hasUpdate ? new UpdateChanges(this) : null
+      if (changes) changes.track()
 
-    // Anything expecting work to be done during bumpSoon should do it here
-    while (!this._interrupting && this.bumping > 0) {
-      if (this._interrupting) break
-
-      // Ensure we catch updates during the drain (i.e. setLocal will bump)
-      if (this._updateLocalCore !== null) {
-        await this._rotateLocalWriter(this._updateLocalCore)
-      }
-
-      try {
-        while (!this._interrupting) {
-          await this._flushWakeup()
-          if (this._interrupting) break
-
-          if (this.fastForwardTo !== null) {
-            await this._applyFastForward()
-            if (changes) changes.track()
-            this._needsUpdate = false
-            break // revaluate conditions...
-          }
-
-          if (await this._bumpPendingWriters()) continue
-
-          if (!(await this._appendAck())) break
-          this._needsUpdate = true
+      // Anything expecting work to be done during bumpSoon should do it here
+      while (!this._interrupting && this.bumping > 0) {
+        // Ensure we catch updates during the drain (i.e. setLocal will bump)
+        if (this._updateLocalCore !== null) {
+          await this._rotateLocalWriter(this._updateLocalCore)
         }
 
-        await this._flushLocal()
+        try {
+          while (!this._interrupting) {
+            await this._flushWakeup()
+            if (this._interrupting) break
 
-        if (!this._interrupting) await this.writers.refresh()
-      } finally {
-        if (this.bumping === 1) this.bumping = 0
-        else this.bumping = 1
+            if (this.fastForwardTo !== null) {
+              await this._applyFastForward()
+              if (changes) changes.track()
+              this._needsUpdate = false
+              break // revaluate conditions...
+            }
+
+            if (await this._bumpPendingWriters()) continue
+
+            if (!(await this._appendAck())) break
+            this._needsUpdate = true
+          }
+
+          await this._flushLocal()
+
+          if (!this._interrupting) await this.writers.refresh()
+        } finally {
+          if (this.bumping === 1) this.bumping = 0
+          else this.bumping = 1
+        }
       }
+
+      if (this._interrupting) break
+
+      if (this._needsUpdate) await this._update(changes, false)
+      await this._storeBoot()
+
+      // bumps that landed during update or storeBoot get one more pass
+      if (this.bumping === 0) break
     }
 
     this._draining = null
-    if (this._interrupting) return
-
-    const updating = rrp()
-    this._updating = updating.promise
-
-    try {
-      if (this._needsUpdate) await this._update(changes, false)
-      await this._storeBoot()
-    } finally {
-      this._updating = null
-      updating.resolve()
-    }
   }
 
   _onGroupUpdate({ key, length }) {

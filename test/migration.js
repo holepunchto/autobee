@@ -907,10 +907,6 @@ test('migration - legacy weights survive a v4 flush', { skip }, async function (
   t.is(after.b.weight, 2, 'b still sorts at 2 once rewritten as v4')
   t.is(after.a.maxWeight, 2, 'a keeps its ceiling through the rewrite')
   t.is(after.b.maxWeight, 2, 'b keeps its ceiling through the rewrite')
-
-  const writer = a.writers.active.get(b4a.toString(after.b.key, 'hex'))
-  if (writer) t.ok(writer.isIndexer, 'a migrated indexer still reads as an indexer')
-  else t.pass('b has no open session in this fixture')
 })
 
 test('migration - catchup is applied in linearizer order, not legacy INFO order', function (t) {

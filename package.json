@@ -57,7 +57,7 @@
     "bare-os": "^3.9.3",
     "bare-path": "^3.1.2",
     "brittle": "^4.1.0",
-    "corestore": "^7.12.2",
+    "corestore": "^7.14.0",
     "hypercore-crypto": "^3.6.1",
     "lunte": "^1.6.0",
     "prettier": "^3.8.1",
