@@ -27,7 +27,7 @@ const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
-const { Remapper } = require('./lib/remap.js')
+const { Remapper, recoveryPeersConfigured } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
@@ -710,6 +710,16 @@ module.exports = class Autobee extends ReadyResource {
     // a system of the remapped generation reads current cores only
     if (this.system.isGenesis() || this.system.version >= MAPPED_AUTOBEE_VERSION) {
       this._onremapped(null, false)
+      return
+    }
+
+    // without recovery peers nothing the remap reads can be trusted: not
+    // attempted, and said once until a landing asks again
+    if (!recoveryPeersConfigured()) {
+      if (!this._remapFailed) {
+        this._remapFailed = true
+        this._warn(new Error('No recovery peers configured'))
+      }
       return
     }
 

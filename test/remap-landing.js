@@ -6,6 +6,7 @@ const Autobee = require('../index.js')
 const FastForward = require('../lib/fast-forward.js')
 const { MAPPED_AUTOBEE_VERSION } = require('../lib/constants.js')
 const { Remapper } = require('../lib/remap.js')
+const Hypercore = require('hypercore')
 const { apply, encode, recoveryPeers, same } = require('./helpers/index.js')
 
 // a room from the release before the remap: in sync, on v2 cores
@@ -895,6 +896,44 @@ test('remap scenarios - a legacy boot pointer within the gap is still booted ont
   t.ok(await until([b.auto], () => b.auto.stats.fastForwards > 0), 'booted onto it anyway')
   t.is(b.auto.system.flushes, flushes)
   t.is(b.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
+})
+
+test('remap scenarios - without recovery peers configured the remap fails and ff goes on', async function (t) {
+  const { dirs, key } = await seed(t)
+
+  // the host has not told hypercore about any recovery peers at all
+  Hypercore.setRecoveryPeers(null)
+  t.teardown(() => recoveryPeers())
+
+  const warnings = []
+  const a = open(t, dirs.a, null)
+  await a.auto.ready()
+  a.auto.on('warning', (err) => warnings.push(err.message))
+  t.ok(await until([a.auto], () => a.auto._remapFailed), 'the remap was not attempted')
+  t.absent(a.auto._remapper, 'no remap was started')
+  t.is(warnings.length, 1)
+
+  // the others run ahead on the old generation: a still lands on them
+  const b = open(t, dirs.b, key, { previous: true })
+  const c = open(t, dirs.c, key, { previous: true })
+  await b.auto.ready()
+  await c.auto.ready()
+  connect(t, b.store, c.store)
+  await rounds([b.auto, c.auto], 20)
+  t.ok(b.auto.system.flushes - a.auto.system.flushes > FastForward.MIN_GAP, 'far ahead')
+  connect(t, a.store, b.store)
+  connect(t, a.store, c.store)
+
+  const autos = [a.auto, b.auto, c.auto]
+  t.ok(await until(autos, () => a.auto.stats.fastForwards > 0), 'a landed on the old head')
+  t.is(a.auto.system.flushes, b.auto.system.flushes)
+  t.ok(await until(autos, () => a.auto._remapFailed), 'the landing tried again, the same way')
+  t.absent(a.auto._remapper)
+  t.is(warnings.length, 2)
+
+  // and a keeps up from there
+  await rounds([b.auto, c.auto], 3, [a.auto])
+  t.ok(await same(...autos), 'the views agree')
 })
 
 function headOf(auto) {
