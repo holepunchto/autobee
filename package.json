@@ -49,6 +49,7 @@
     "ready-resource": "^1.2.0",
     "resolve-reject-promise": "^1.1.0",
     "safety-catch": "^1.0.3",
+    "scope-lock": "^1.2.4",
     "signal-promise": "^1.0.3",
     "sodium-native": "^5.1.0"
   },
