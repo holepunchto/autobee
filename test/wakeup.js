@@ -248,6 +248,46 @@ test('wakeup - previous drain does not skip an unapplied writer', async function
   )
 })
 
+test('wakeup - previous drain does not skip an unknown optimistic writer', async function (t) {
+  const dir = await t.tmp()
+
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+  const auto3 = await create(t, auto1.key, { storage: dir })
+  const auto4 = await create(t, auto1.key)
+
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2, auto3)
+
+  await auto2.append(encode({ hello: 'dep' }))
+  await replicateAndSync(auto2, auto4)
+  await auto4.append(encode({ hello: 'optimistic' }), { optimistic: true })
+
+  const group = auto3.wakeupCapability.discoveryKey
+  await auto3.close()
+
+  const store = new Corestore(dir, { manifestVersion: 2 })
+  const core = store.get({ key: auto4.local.key, group })
+  await core.ready()
+  const done = replicate(auto4.local, core)
+  await core.download({ start: 0, end: auto4.local.length }).done()
+  await done()
+  await store.close()
+
+  const blocked = await create(t, auto1.key, { storage: dir })
+  await blocked.update()
+  t.ok(blocked.writers.has(b4a.toString(auto4.local.key, 'hex')), 'auto4 is opened on boot')
+  t.absent(await blocked.system.get(auto4.local.key), 'auto4 node is blocked on its dependency')
+  await blocked.close()
+
+  const reopened = await create(t, auto1.key, { storage: dir })
+  await replicateAndSync(auto2, reopened)
+  await reopened.update()
+
+  const info = await reopened.system.get(auto4.local.key)
+  t.ok(info && info.length === auto4.local.length, 'auto4 node applied after reopen')
+})
+
 test('wakeup - handle malicious wakeup', async function (t) {
   const auto1 = await create(t)
   await auto1.append(encode({ hello: 'world' }))

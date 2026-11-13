@@ -881,7 +881,7 @@ module.exports = class Autobee extends ReadyResource {
     const hints = this._wakeup.flush()
     if (!hints.size) return []
 
-    this.previousDrain = this._now()
+    this.previousDrain = Date.now()
     const results = await this._filterHints(hints)
 
     for (const { key, length } of results) {
@@ -1481,7 +1481,7 @@ module.exports = class Autobee extends ReadyResource {
 
   _hasUnappliedWriters() {
     for (const w of this.writers.active.values()) {
-      if (w === this.writers.localWriter || w.isFrozen || !w.isAdded || w.isRemoved) continue
+      if (w === this.writers.localWriter || w.isFrozen) continue
       if (w.systemLength < w.core.length) return true
     }
 
