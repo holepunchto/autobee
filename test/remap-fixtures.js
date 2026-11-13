@@ -1307,7 +1307,7 @@ test(
   }
 )
 
-test.solo(
+test(
   'remap fixtures - a host without recovery peers configured fails the remap at once',
   { skip },
   async function (t) {

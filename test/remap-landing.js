@@ -898,7 +898,7 @@ test('remap scenarios - a legacy boot pointer within the gap is still booted ont
   t.is(b.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
 })
 
-test.solo('remap scenarios - without recovery peers configured the remap fails and ff goes on', async function (t) {
+test('remap scenarios - without recovery peers configured the remap fails and ff goes on', async function (t) {
   const { dirs, key } = await seed(t)
 
   // the host has not told hypercore about any recovery peers at all
