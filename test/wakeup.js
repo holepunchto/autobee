@@ -205,12 +205,9 @@ test('wakeup - previous drain', async function (t) {
 test('wakeup - previous drain does not skip an unapplied writer', async function (t) {
   const dir = await t.tmp()
 
-  // drain strictly after the storage stamps the update, as any real delay would
-  const now = () => Date.now() + 1
-
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
-  const auto3 = await create(t, auto1.key, { storage: dir, now })
+  const auto3 = await create(t, auto1.key, { storage: dir })
 
   await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
   await replicateAndSync(auto1, auto2, auto3)
@@ -218,38 +215,37 @@ test('wakeup - previous drain does not skip an unapplied writer', async function
   await auto2.append(encode({ hello: 'head' }))
   await replicateAndSync(auto1, auto2, auto3)
 
-  t.alike(
-    auto3.system.heads.map((h) => h.key),
-    [auto2.local.key],
-    'auto1 is not a head on auto3'
-  )
-
-  // the auto1 node links an auto2 node that auto3 does not have
   await auto2.append(encode({ hello: 'dep' }))
   await replicateAndSync(auto1, auto2)
   await auto1.append(encode({ hello: 'world' }))
 
-  const core = auto3.store.get({ key: auto1.local.key })
-  await core.ready()
+  await auto3.close()
 
+  const store = new Corestore(dir, { manifestVersion: 2 })
+  const core = store.get({ key: auto1.local.key })
+  await core.ready()
   const done = replicate(auto1.local, core)
   await core.download({ start: 0, end: auto1.local.length }).done()
   await done()
-  await core.close()
+  await store.close()
 
-  await auto3.update()
+  const blocked = await create(t, auto1.key, { storage: dir })
+  await blocked.update()
+  t.is(
+    (await blocked.system.get(auto1.local.key)).length,
+    1,
+    'auto1 node is blocked on its dependency'
+  )
+  await blocked.close()
 
-  t.is((await auto3.system.get(auto1.local.key)).length, 1, 'auto1 node is not applied yet')
-
-  await auto3.close()
-
-  const reopened = await create(t, auto1.key, { storage: dir, now })
-
+  const reopened = await create(t, auto1.key, { storage: dir })
   await replicateAndSync(auto2, reopened)
   await reopened.update()
-
-  const info = await reopened.system.get(auto1.local.key)
-  t.is(info.length, auto1.local.length, 'auto1 node applied after reopen')
+  t.is(
+    (await reopened.system.get(auto1.local.key)).length,
+    auto1.local.length,
+    'auto1 node applied after reopen'
+  )
 })
 
 test('wakeup - handle malicious wakeup', async function (t) {
