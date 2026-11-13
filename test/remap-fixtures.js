@@ -1307,6 +1307,39 @@ test(
   }
 )
 
+test.solo(
+  'remap fixtures - a host without recovery peers configured fails the remap at once',
+  { skip },
+  async function (t) {
+    // the host has not told hypercore about any recovery peers at all
+    Hypercore.setRecoveryPeers(null)
+    t.teardown(() => recoveryPeers())
+
+    const dir = await copyFixture(t)
+    const warnings = []
+    const f = await openFixture(t, {
+      dir,
+      peer: false,
+      flush: false,
+      patch: (auto) => auto.on('warning', (err) => warnings.push(err.message))
+    })
+
+    t.ok(await drive(f.auto, () => f.auto._remapFailed), 'the remap was not attempted')
+    t.absent(f.auto._remapper, 'no remap was started')
+    t.alike(warnings, ['No recovery peers configured'], 'and said why')
+    t.absent(f.auto.remapped)
+    t.is(f.auto.system.version, 3)
+    await closeFixture(f)
+
+    // configured, the next boot remaps
+    recoveryPeers()
+    const again = await openFixture(t, { dir })
+    t.teardown(() => closeFixture(again))
+    t.ok(again.auto.remapped)
+    t.is(again.auto.system.version, 4)
+  }
+)
+
 // what the remapper needs of an autobee, for a store holding the fixture's bootstrap
 function remapperFor(store, views) {
   return {
