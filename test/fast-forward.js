@@ -851,8 +851,10 @@ test('own writes applied but not yet flushed when a fast-forward lands stay appl
   let hold = null
   let onHold = null
 
+  const storage = await t.tmp()
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key, {
+    storage,
     async apply(nodes, view, host) {
       if (hold !== null && nodes.some((node) => decode(node.value).hold)) {
         onHold()
@@ -891,15 +893,25 @@ test('own writes applied but not yet flushed when a fast-forward lands stay appl
   await Promise.all(writes)
   await sync(auto1, auto2)
 
-  const theirs = await appliedFrom(auto1, auto2)
-  const ours = await appliedFrom(auto2, auto2)
-  t.is(theirs.size, 4, "auto1 applied all four of auto2's writes")
-  t.alike(
-    [...theirs].filter((length) => !ours.has(length)),
-    [],
-    'auto2 applied all four of its own writes too'
-  )
+  t.is((await appliedFrom(auto1, auto2)).size, 4, "auto1 applied all four of auto2's writes")
+  t.alike(await ownMissing(auto1, auto2), [], 'auto2 applied all four of its own writes too')
+
+  // neither a restart nor a new write and sync brings them back
+  await auto2.close()
+  const reopened = await create(t, auto1.key, { storage })
+  t.teardown(replicate(auto1, reopened))
+  await reopened.append(encode({ value: 'b4' }))
+  await sync(auto1, reopened)
+
+  t.alike(await ownMissing(auto1, reopened), [], 'reopened, auto2 still has all its own writes')
+  t.ok(await same(auto1, reopened), 'and the same view as auto1')
 })
+
+// the writer's nodes the peer's view applied but the writer's own did not
+async function ownMissing(peer, writer) {
+  const own = await appliedFrom(writer, writer)
+  return [...(await appliedFrom(peer, writer))].filter((length) => !own.has(length))
+}
 
 // the lengths of the writer's nodes that auto's view has applied
 async function appliedFrom(auto, writer) {
