@@ -7,6 +7,7 @@ const encoding = require('../lib/encoding.js')
 
 const {
   create,
+  apply,
   replicate,
   replicateAndSync,
   same,
@@ -843,3 +844,72 @@ test('an explicit move cancels a fast-forward that is still running', async func
   t.is(await background, false, 'the one in flight was cancelled')
   t.alike(auto2.system.bee.head(), auto1.system.bee.head(), 'on the head it was pointed at')
 })
+
+test('own writes applied but not yet flushed when a fast-forward lands stay applied', async function (t) {
+  t.timeout(30000)
+
+  let hold = null
+  let onHold = null
+
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key, {
+    async apply(nodes, view, host) {
+      if (hold !== null && nodes.some((node) => decode(node.value).hold)) {
+        onHold()
+        await hold
+      }
+      await apply(nodes, view, host)
+    }
+  })
+
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2)
+  t.ok(auto2.writable, 'auto2 is a writer')
+
+  for (let i = 0; i < 8; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  // auto2 has applied b0 and is applying b1, neither flushed, when b2 and b3 queue behind them
+  let release = null
+  const held = new Promise((resolve) => (onHold = resolve))
+  hold = new Promise((resolve) => (release = resolve))
+
+  const writes = [
+    auto2.append(encode({ value: 'b0' })),
+    auto2.append(encode({ value: 'b1', hold: true }))
+  ]
+  await held
+  writes.push(auto2.append(encode({ value: 'b2' })), auto2.append(encode({ value: 'b3' })))
+
+  // a fast-forward to auto1's head lands in that same drain
+  t.teardown(replicate(auto1, auto2))
+  const moved = auto2.moveTo({ key: auto1.local.key, length: auto1.local.length })
+  while (auto2.fastForwardTo === null) await new Promise((resolve) => setTimeout(resolve, 10))
+  hold = null
+  release()
+
+  t.ok(await moved, 'auto2 fast-forwarded')
+  await Promise.all(writes)
+  await sync(auto1, auto2)
+
+  const theirs = await appliedFrom(auto1, auto2)
+  const ours = await appliedFrom(auto2, auto2)
+  t.is(theirs.size, 4, "auto1 applied all four of auto2's writes")
+  t.alike(
+    [...theirs].filter((length) => !ours.has(length)),
+    [],
+    'auto2 applied all four of its own writes too'
+  )
+})
+
+// the lengths of the writer's nodes that auto's view has applied
+async function appliedFrom(auto, writer) {
+  const prefix = b4a.toString(writer.local.key, 'hex') + '.'
+  const lengths = new Set()
+  for await (const { key, value } of auto.view.createReadStream()) {
+    const oplog = b4a.toString(value)
+    if (b4a.toString(key).startsWith('#') && oplog.startsWith(prefix)) {
+      lengths.add(Number(oplog.slice(prefix.length)))
+    }
+  }
+  return lengths
+}
