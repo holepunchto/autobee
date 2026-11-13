@@ -185,6 +185,7 @@ test('wakeup - previous drain', async function (t) {
 
   await auto2.append(encode({ foo: 'bar' }))
   await replicateAndSync(auto1, auto2, auto3)
+  await auto3.update()
 
   const previousDrain = auto3.previousDrain
   const localKey = auto3.local.key
