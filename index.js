@@ -1243,8 +1243,11 @@ module.exports = class Autobee extends ReadyResource {
         for (const node of batch) node.weight = weight
       }
 
-      for (const batch of topo.linearize(this._catchupMigratedNodes)) {
-        await this._processBatch(batch)
+      // linearize orders writers by their tail, the migrated batches stand in
+      const tails = this._catchupMigratedNodes.map((tail) => ({ tail }))
+
+      for (const { tail } of topo.linearize(tails)) {
+        await this._processBatch(tail)
         updated = true
       }
     } finally {
