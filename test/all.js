@@ -9,6 +9,7 @@ async function runTests() {
 
   await import('./acking.js')
   await import('./anchor-ordering.js')
+  await import('./append-own-node.js')
   await import('./basic.js')
   await import('./catchable-boot.js')
   await import('./batch.js')
