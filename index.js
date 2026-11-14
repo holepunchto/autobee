@@ -6,7 +6,7 @@ const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const rrp = require('resolve-reject-promise')
 const Signal = require('signal-promise')
-const AutobeeWakeup = require('autobee-wakeup')
+const Wakeup = require('./lib/wakeup.js')
 const Hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
@@ -175,7 +175,7 @@ module.exports = class Autobee extends ReadyResource {
     this._onGroupUpdateBound = this._onGroupUpdate.bind(this)
 
     this.wakeupCapability = null
-    this._wakeup = new AutobeeWakeup(this, handlers)
+    this._wakeup = new Wakeup(this, handlers)
     this.previousDrain = 0
 
     this._catchupMigratedNodes = null
@@ -299,17 +299,16 @@ module.exports = class Autobee extends ReadyResource {
 
   getExternalWriters() {
     const keys = []
-    for (const w of this.writers.active.values()) {
+    for (const w of this.writers) {
       if (w === this.writers.localWriter) continue
-      keys.push(w.core.key)
+      keys.push(w.key)
     }
     return keys
   }
 
   getWriterViews(key) {
-    const id = b4a.toString(key, 'hex')
-    const w = this.writers.active.get(id)
-    if (!w) return []
+    const w = this.writers.get(key)
+    if (w === null) return []
     return w.views()
   }
 
@@ -1353,7 +1352,7 @@ module.exports = class Autobee extends ReadyResource {
     if (!this._acking && !this._forceAck) return false
     if (!this.writers.writable) return false
 
-    if (this.writers.localWriter.pending !== null) return false
+    if (this.writers.localWriter.appending) return false
 
     if (!this._forceAck) {
       if ((await this._flushesBehind()) < this._ackThreshold) return false
@@ -1404,22 +1403,17 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    // apply the best next node to keep the prefix stable
-    const next = await this.writers.nextPendingNode({ local })
-    if (next === null) return false
+    // apply what is ready, heaviest first with its dependencies
+    const round = await this.writers.drain({ local })
+    if (round.length === 0) return false
 
-    const { writer: w, batch } = next
+    for (const w of round) {
+      // the system moved under it, an earlier batch may have reset or linked it
+      if (!(await w.update())) continue
 
-    const optimistic = this.optimistic && batch[0].optimistic
-
-    if (optimistic || w.isAdded || (w.isRemoved && w.hasReferrals())) {
-      await this._processBatch(batch)
-    } else {
-      w.removePending()
-      return true
+      await this._processBatch(w.take())
     }
 
-    w.notify(batch)
     this._needsUpdate = true
     return true
   }
@@ -1445,6 +1439,9 @@ module.exports = class Autobee extends ReadyResource {
       this.stats.undos++
       this.trusted.clear()
       t.view = await this.system.undo(t.undo)
+
+      // everything the writers held was read against the system we left
+      await this.writers.moved()
     }
 
     return t
@@ -1470,11 +1467,8 @@ module.exports = class Autobee extends ReadyResource {
 
       await this._applyBatch(batch, batch[0].optimistic)
 
-      // trigger any upstream writer waiting for this batch early
-      const id = b4a.toString(batch[0].key, 'hex')
-      const length = batch[batch.length - 1].length
-
-      this.writers.triggers.trigger(id, length)
+      // wake the writers waiting on this batch, and the writer for its next one
+      this.writers.resolved(batch[0].key, batch[batch.length - 1].length)
     }
   }
 
@@ -1525,10 +1519,7 @@ module.exports = class Autobee extends ReadyResource {
       this._localFlushes = this.system.flushes
     }
 
-    for (const { key, added } of changed) {
-      if (added) await this.writers.add(key)
-      else await this.writers.remove(key)
-    }
+    for (const { key } of changed) this.writers.changed(key)
   }
 
   async _storeBoot() {
@@ -1785,7 +1776,9 @@ module.exports = class Autobee extends ReadyResource {
 
     // process any wakeup while fast-forward itself was in flight
     this._queueFastForward(await this._applyWakeupHints())
-    await this.writers.refresh()
+
+    // everything the writers held was read against the system we left
+    await this.writers.moved()
 
     // we moved, so ask our peers to tell us their heads again
     this._requestWakeup()
