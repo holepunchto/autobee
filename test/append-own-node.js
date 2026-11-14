@@ -2,7 +2,7 @@
 // shared drain goes idle. With other writers producing continuously, waiting
 // on the drain makes append latency track everyone else's traffic.
 const test = require('brittle')
-const { create, replicateAndSync, encode, apply } = require('./helpers')
+const { create, replicate, sync, encode, apply } = require('./helpers')
 
 test('append resolves when its own node is applied, not when the drain goes idle (#356)', async function (t) {
   const n = 5
@@ -28,7 +28,11 @@ test('append resolves when its own node is applied, not when the drain goes idle
   for (const db of bees.slice(1)) {
     await bees[0].append(encode({ addWriter: db.local.id }))
   }
-  await replicateAndSync(...bees)
+
+  // Keep replication open for the whole load window — replicateAndSync()
+  // would tear streams down before the background writers start.
+  const done = replicate(...bees)
+  await sync(...bees)
 
   for (const db of bees) t.ok(db.writable, 'writable after bootstrap')
 
@@ -58,6 +62,7 @@ test('append resolves when its own node is applied, not when the drain goes idle
 
   running = false
   await Promise.all(others)
+  await done()
 
   const p50 = (a) => {
     const s = a.filter((x) => x >= 0).sort((x, y) => x - y)

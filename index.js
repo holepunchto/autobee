@@ -688,6 +688,8 @@ module.exports = class Autobee extends ReadyResource {
     this._lastError = err
 
     if (err === INTERRUPT) {
+      // append() no longer awaits the shared drain; settle its waiters here
+      this._rejectAppendWaiters(this.interrupted || INTERRUPT)
       this.emit('interrupt', this.interrupted)
       this.emit('update')
       return
@@ -906,20 +908,22 @@ module.exports = class Autobee extends ReadyResource {
             break // revaluate conditions...
           }
 
-          if (await this._bumpPendingWriters()) continue
+          if (await this._bumpPendingWriters()) {
+            // Flush local progress even while remote batches keep arriving so
+            // append() waiters are not stuck behind the shared drain (#356).
+            if (this._appendWaiters.length) await this._settleAppendWaiters()
+            continue
+          }
 
           if (!(await this._appendAck())) break
           this._needsUpdate = true
         }
 
+        // Always flush local at the end of an iteration (acks, etc.)
         const flushed = await this._flushLocal()
-
         if (!this._interrupting) await this.writers.refresh()
-
-        // Resolve after refresh so writable/indexer flags match post-apply
-        // state (e.g. removeWriter). Persist boot so append()+close() cannot
-        // race past the end-of-drain _storeBoot (#356).
         if (flushed) {
+          this.bee.update(this._workingBee.root)
           await this._storeBoot()
           this._resolveAppendWaiters(this.local.length)
         }
@@ -935,7 +939,10 @@ module.exports = class Autobee extends ReadyResource {
     const idleWaiters = this._appendWaiters.slice()
 
     this._draining = null
-    if (this._interrupting) return
+    if (this._interrupting) {
+      this._rejectAppendWaiters(this.interrupted || INTERRUPT)
+      return
+    }
 
     const updating = rrp()
     this._updating = updating.promise
@@ -951,11 +958,14 @@ module.exports = class Autobee extends ReadyResource {
     // Optimistic (or otherwise unflushed) appends used to resolve when the
     // shared drain went idle. Settle only waiters that were already queued
     // when the work loop exited (#356).
-    for (const w of idleWaiters) {
-      const i = this._appendWaiters.indexOf(w)
-      if (i < 0) continue
-      this._appendWaiters.splice(i, 1)
-      w.resolve()
+    if (idleWaiters.length) {
+      const idle = new Set(idleWaiters)
+      const kept = []
+      for (const w of this._appendWaiters) {
+        if (idle.has(w)) w.resolve()
+        else kept.push(w)
+      }
+      this._appendWaiters = kept
     }
   }
 
@@ -1541,29 +1551,42 @@ module.exports = class Autobee extends ReadyResource {
       const length = batch[batch.length - 1].length
 
       this.writers.triggers.trigger(id, length)
-      // Promote the working tip onto the public bee so view reads after an
-      // early-resolving append() see what apply just wrote (#356).
-      if (batch[0].core === this.local) this.bee.update(this._workingBee.root)
     }
   }
 
   _resolveAppendWaiters(length) {
-    let i = 0
-    while (i < this._appendWaiters.length) {
-      const w = this._appendWaiters[i]
-      if (w.length > length) {
-        i++
-        continue
-      }
-      this._appendWaiters.splice(i, 1)
-      w.resolve()
+    const kept = []
+    const done = []
+    for (const w of this._appendWaiters) {
+      if (w.length > length) kept.push(w)
+      else done.push(w)
     }
+    this._appendWaiters = kept
+    for (const w of done) w.resolve()
   }
 
   _rejectAppendWaiters(err) {
     const waiters = this._appendWaiters
     this._appendWaiters = []
     for (const w of waiters) w.reject(err)
+  }
+
+  // Flush applied local nodes and resolve append() waiters without waiting for
+  // the shared drain to go idle (#356). Called mid-loop while remotes still
+  // have work so local append latency does not track their traffic.
+  async _settleAppendWaiters() {
+    const flushed = await this._flushLocal()
+
+    if (!this._interrupting) await this.writers.refresh()
+
+    if (!flushed) return false
+
+    // Publish after the flush (not after each replayed local batch) so undo/
+    // replay cannot expose an incomplete tip to public readers.
+    this.bee.update(this._workingBee.root)
+    await this._storeBoot()
+    this._resolveAppendWaiters(this.local.length)
+    return true
   }
 
   async _applyBatch(batch, optimistic) {
@@ -1696,6 +1719,8 @@ module.exports = class Autobee extends ReadyResource {
 
     const approvals = optimistic ? null : await this._collectApprovals()
 
+    if (this.closing || this._interrupting) throw new Error('Autobee closed')
+
     for (let i = 0; i < values.length; i++) {
       const value = values[i]
       const buffer = typeof value === 'string' ? b4a.from(value) : value
@@ -1713,6 +1738,9 @@ module.exports = class Autobee extends ReadyResource {
       )
       batch.push(node)
     }
+
+    // Empty batch: keep prior bump-only behavior
+    if (batch.length === 0) return this._bump(false)
 
     // Wait for this append's own nodes to be applied/indexed, not for the
     // shared drain to go idle. With many writers the drain can keep looping
