@@ -240,11 +240,15 @@ Fast-forward only ever deals in oplog heads — `{ key, length }` of a writer's 
 
 Each flush stamps the head you vouch for into your own oplog, and peers read those stamps out of the writers they wake up on, so trust travels with the log.
 
+A stamped head is followed when the key it names is trusted, or the writer that stamped it is. A writer that stamps nothing vouches for its own head.
+
 #### `isTrusted(key, reference)`
 
 Return whether `key` is a writer you trust, judged against the `reference` view.
 
 Positive answers are cached until an undo rewinds the view, and the default is `true` unless you supply `mostRecentTrusted`, in which case it is `false`.
+
+A key you hand in yourself, through `fastForward.boot` or `moveTo`, is trusted from then on without asking the hook.
 
 #### `mostRecentTrusted(target, reference)`
 
@@ -268,16 +272,13 @@ Only reads through `view` are cancelled with the candidate. Anything else the ha
 
 ```js
 {
-  head: { key, length },  // oplog head to boot from
-  legacy: { key, length } // pre-2.0 pointer, see below
+  head: { key, length } // oplog head to boot from
 }
 ```
 
-Pass one of `head` or `legacy`, not both.
+`head` must be a v3 or newer oplog node. `length` is a floor, and can be left at `0` when only the key is known.
 
-`head` must be a v3 or newer oplog node. `length` is a floor: the key is searched for its latest oplog head at or past it, and the boot lands ungated on the views that head stamps. It is a single attempt: use `moveTo` if you need to retry.
-
-`legacy` is the pre-2.0 pointer: a _system_ head whose `0` length resolves from the core. It will be removed, so don't reach for it. A bare `{ key, length }` in place of the whole struct means the same.
+The key is marked trusted and its head is handed to the writers as a hint, so it is fast-forwarded onto like any other trusted head: only when it is far enough ahead to be worth it, and subject to `conservative`. A head that is close is caught up to by applying. Nothing waits on it, so a boot head nobody serves yet does not hold the db up. Use `moveTo` to land on a head regardless.
 
 #### `fastForward.conservative`
 
@@ -289,7 +290,9 @@ A node that landed via fast-forward holds its cores sparse, so it never satisfie
 
 #### `await db.moveTo(head)`
 
-Fast-forward onto an oplog head, ignoring the usual distance and conservative checks. Resolves `{ to, from }`, or `null` if the head could not be booted. The reads wait for a peer for as long as it takes, closing the db ends them.
+Fast-forward onto an oplog head, ignoring the usual distance and conservative checks, backwards included. Resolves `{ to, from }`, or `null` if the head could not be booted. The reads wait for a peer for as long as it takes, closing the db ends them.
+
+The head's key is trusted from then on.
 
 ### Acking
 

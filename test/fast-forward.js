@@ -2,7 +2,6 @@ const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 
-const FastForward = require('../lib/fast-forward.js')
 const encoding = require('../lib/encoding.js')
 
 const {
@@ -58,12 +57,9 @@ test('conservative ff skips a view nobody holds whole', async function (t) {
   t.teardown(await sparseViewMirror(t, auto1, auto2))
 
   const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = await FastForward.fromHead(auto2, head, null)
 
-  t.ok(ff, 'the oplog head is not gated')
-  t.ok(ff.conservative, 'the ff carries the conservative flag')
-
-  t.absent(await ff.run(), 'the fast-forward was skipped at the final check')
+  t.absent(await inflate(auto2, head), 'the fast-forward was skipped at the final check')
+  t.is(auto2.stats.fastForwards, 0, 'and nothing landed')
 })
 
 test('conservative: false lands on the sparse view', async function (t) {
@@ -81,12 +77,8 @@ test('conservative: false lands on the sparse view', async function (t) {
   t.teardown(await sparseViewMirror(t, auto1, auto2))
 
   const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = await FastForward.fromHead(auto2, head, null)
 
-  t.ok(ff, 'the ff was attempted')
-  t.absent(ff.conservative, 'the ff is not conservative')
-
-  const result = await ff.run()
+  const result = await inflate(auto2, head, { force: true })
   t.ok(result, 'the ff landed despite the hole in the view')
   t.alike(result.head, auto1.system.bee.head())
 })
@@ -413,45 +405,6 @@ test('candidate views are opened and closed through the handlers', async functio
   t.is(opens - closes, 2, 'no candidate view was left open')
 })
 
-test('boot from a legacy pointer', async function (t) {
-  const auto1 = await create(t)
-  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
-
-  // legacy pointers carry no length, which the boot resolves itself
-  const { key } = auto1.system.bee.head()
-
-  // isTrusted rules out the wakeup path, so only the boot can move us
-  const auto2 = await create(t, auto1.key, {
-    isTrusted: () => false,
-    fastForward: { boot: { legacy: { key, length: 0 } } }
-  })
-
-  t.teardown(replicate(auto1, auto2))
-
-  await new Promise((resolve) => auto2.once('move-to', resolve))
-  t.pass('booted from the legacy pointer')
-
-  await replicateAndSync(auto1, auto2)
-  t.ok(await same(auto1, auto2), 'converged')
-})
-
-test('a bare key boots as a legacy pointer', async function (t) {
-  const auto1 = await create(t)
-  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
-
-  const { key } = auto1.system.bee.head()
-
-  const auto2 = await create(t, auto1.key, {
-    isTrusted: () => false,
-    fastForward: { boot: { key, length: 0 } }
-  })
-
-  t.teardown(replicate(auto1, auto2))
-
-  await new Promise((resolve) => auto2.once('move-to', resolve))
-  t.pass('the oldest shape still boots')
-})
-
 test('boot from an unservable head gives up after the timeout', async function (t) {
   t.timeout(60000)
 
@@ -708,80 +661,31 @@ test('cancelling a fast-forward cancels the warmup reads', async function (t) {
   await oplog.close()
 
   const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = await FastForward.fromHead(auto2, head, null, { force: true, timeout: 5000 })
-  t.ok(ff, 'the fast-forward candidate was accepted')
+  const ff = auto2.writers._refFastForward(head.key)
+  t.teardown(() => auto2.writers._unrefFastForward(ff))
 
-  const running = ff.run()
+  ff.hint(head.length)
+  await ff.wait(head.length)
+
+  const running = ff.inflate({ force: true })
 
   await started
   await new Promise((resolve) => setTimeout(resolve, 500))
   t.is(state, 'pending', 'the warmup read is in flight and cannot be served')
 
   const started_at = Date.now()
-  await ff.close()
+  ff.cancel()
+  const result = await running
+
+  // the run does not wait for the hook, give its rejected read a tick to land
+  await new Promise((resolve) => setImmediate(resolve))
   const elapsed = Date.now() - started_at
 
-  t.comment('ff.close() took ' + elapsed + 'ms')
-  t.ok(elapsed < 3000, 'close did not wait out the blocked warmup')
+  t.comment('cancel took ' + elapsed + 'ms')
+  t.ok(elapsed < 3000, 'cancel did not wait out the blocked warmup')
   t.is(state, 'rejected:REQUEST_CANCELLED', 'closing the view cancelled the warmup read')
 
-  t.absent(await running, 'the cancelled fast-forward produced no result')
-})
-
-test('warmup reads time out with the fast-forward timeout', async function (t) {
-  t.timeout(60000)
-
-  const auto1 = await create(t)
-  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
-
-  let state = 'pending'
-  let readStarted = 0
-
-  const auto2 = await create(t, auto1.key, {
-    fastForward: false,
-    isTrusted: () => true,
-    async warmup(view) {
-      readStarted = Date.now()
-      try {
-        // written once in an early batch and never rewritten, so it lives in a block nobody serves
-        await view.get(b4a.from('#000001'))
-        state = 'resolved'
-      } catch (err) {
-        state = 'rejected:' + err.code
-        throw err
-      }
-    }
-  })
-
-  // fetch everything the fast-forward itself reads, then cut the transport before it starts
-  // so the warmup read is the only thing left that needs the network
-  const unreplicate = replicate(auto1, auto2)
-
-  const oplog = auto2.openCore(auto1.local.key)
-  await oplog.get(auto1.local.length - 1)
-  await oplog.close()
-
-  const system = auto2.store.get({ key: auto1.system.bee.core.key })
-  await system.download({ start: 0, end: auto1.system.bee.core.length }).done()
-  await system.close()
-
-  const view = auto2.store.get({ key: auto1.view.core.key })
-  await view.get(auto1.view.core.length - 1)
-  await view.close()
-
-  await unreplicate()
-
-  const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = await FastForward.fromHead(auto2, head, null, { force: true, timeout: 1000 })
-  t.ok(ff, 'the fast-forward candidate was accepted')
-
-  t.absent(await ff.run(), 'the fast-forward produced no result')
-  t.ok(ff.failed, 'the fast-forward failed')
-
-  const elapsed = Date.now() - readStarted
-  t.comment('warmup read took ' + elapsed + 'ms')
-  t.is(state, 'rejected:REQUEST_TIMEOUT', 'the warmup read timed out instead of hanging')
-  t.ok(elapsed >= 900, 'the read waited out the fast-forward timeout')
+  t.absent(result, 'the cancelled fast-forward produced no result')
 })
 
 // a corestore that holds the oplog and system whole, and the view minus its
@@ -861,3 +765,16 @@ test('an explicit move lands past a fast-forward stuck in flight, and cancels it
 
   auto2.writers._unrefFastForward(stuck)
 })
+
+// the head in hand, then the dance onto it, the way a writer vouching for it would
+async function inflate(auto, head, opts) {
+  const ff = auto.writers._refFastForward(head.key)
+
+  try {
+    ff.hint(head.length)
+    await ff.wait(head.length)
+    return await ff.inflate(opts)
+  } finally {
+    auto.writers._unrefFastForward(ff)
+  }
+}

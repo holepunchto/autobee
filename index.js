@@ -21,11 +21,11 @@ const {
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('./lib/encryption.js')
-const FastForward = require('./lib/fast-forward.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
+const WriterFastForward = require('./lib/fast-forward.js')
 const TrustedPeers = require('./lib/trusted.js')
 const { Remapper } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
@@ -818,16 +818,13 @@ module.exports = class Autobee extends ReadyResource {
     this.stats.drains++
 
     if (this.bootFrom) {
-      const { head = null, legacy = null } = this.bootFrom
+      const { head } = this.bootFrom
 
       this.bootFrom = null
 
-      if (legacy) {
-        await this._bootFromSystem(legacy)
-      } else if (head) {
-        this._wakeup.hint({ key: head.key, length: head.length || 0 })
-        await this._bootFromHead(head)
-      }
+      // a head we were handed is one we trust, the writers take it from there
+      this.trusted.pin(head.key)
+      this._wakeup.hint({ key: head.key, length: head.length || 1 })
     }
 
     if (this._remapper !== null && this._remapper.finished && !this._remapFailed) {
@@ -1581,6 +1578,9 @@ module.exports = class Autobee extends ReadyResource {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
 
+    // a head we were handed is one we trust
+    this.trusted.pin(head.key)
+
     // an explicit move goes wherever it is pointed, backwards included
     const inflated = await this.writers.fastForwardTo(head, { rewind: true })
     if (inflated === null) return null
@@ -1593,27 +1593,6 @@ module.exports = class Autobee extends ReadyResource {
     return this.ff.promise
   }
 
-  // legacy: ungated boot straight onto a system head
-  async _bootFromSystem(system) {
-    try {
-      const ff = new FastForward(this, system, { timeout: FastForward.DEFAULT_TIMEOUT })
-      return await this._runFastForward(ff, { force: true })
-    } catch (err) {
-      safetyCatch(err)
-      return false
-    }
-  }
-
-  async _bootFromHead(head) {
-    try {
-      const inflated = await this.writers.fastForwardTo({ key: head.key, length: head.length || 0 })
-      return inflated !== null && this._runFastForward(inflated, { force: true })
-    } catch (err) {
-      safetyCatch(err)
-      return false
-    }
-  }
-
   // schedule a landing on an inflated head, the drain applies it
   _runFastForward(inflated, { force = false, rewind = false } = {}) {
     if (this.fastForwardTo !== null) return false
@@ -1623,7 +1602,7 @@ module.exports = class Autobee extends ReadyResource {
     // a peer in lock step with the writer that remapped is never behind its claim
     const landing =
       this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
-    const slack = landing ? FastForward.MIN_GAP : 0
+    const slack = landing ? WriterFastForward.MIN_GAP : 0
 
     // never move backwards, a boot head can be older than what we already have
     if (!rewind && flushes < this.system.flushes - slack) return false
@@ -1710,10 +1689,7 @@ function isObject(o) {
 function getBootOption(boot) {
   if (!boot) return null
 
-  // oldest style, supported for now but will go away: a bare key is legacy
-  if (boot.key) return { legacy: boot, head: null }
-
-  asserts.assert(!(boot.head && boot.legacy), 'Boot from either a head or a legacy pointer')
+  asserts.assert(!!boot.head, 'Boot from an oplog head, the legacy system pointer is gone')
 
   return boot
 }

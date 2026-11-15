@@ -3,7 +3,7 @@ const Corestore = require('corestore')
 const fs = require('fs/promises')
 
 const Autobee = require('../index.js')
-const FastForward = require('../lib/fast-forward.js')
+const WriterFastForward = require('../lib/fast-forward.js')
 const { MAPPED_AUTOBEE_VERSION } = require('../lib/constants.js')
 const { apply, encode, recoveryPeers, same } = require('./helpers/index.js')
 
@@ -173,7 +173,7 @@ test('remap landing - a room a little ahead of the claim lands on it', async fun
   const { a, b, c } = peers
 
   const flushes = await ahead(t, peers, 4)
-  t.ok(flushes > 0 && flushes <= FastForward.MIN_GAP, 'ahead of the claim, within the slack')
+  t.ok(flushes > 0 && flushes <= WriterFastForward.MIN_GAP, 'ahead of the claim, within the slack')
 
   t.ok(await landed([a, b, c]), 'every peer is on the remapped generation')
 
@@ -191,7 +191,7 @@ test('remap landing - a room far ahead of the claim stays where it is', async fu
   const { a, b, c } = peers
 
   const flushes = await ahead(t, peers, 20)
-  t.ok(flushes > FastForward.MIN_GAP, 'ahead of the claim by more than the slack')
+  t.ok(flushes > WriterFastForward.MIN_GAP, 'ahead of the claim by more than the slack')
 
   t.absent(await landed([a, b, c], { ticks: 40 }), 'the claim is too old to land on')
 

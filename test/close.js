@@ -17,7 +17,7 @@ test('close settles while a drain waits on unavailable blocks', async function (
   // boot a member from auto1's head without any replication - the first drain
   // fast-forwards towards the head and fetches blocks that can never arrive
   const to = { key: auto1.local.key, length: auto1.local.length }
-  const auto2 = await create(t, auto1.key, { fastForward: { boot: to } })
+  const auto2 = await create(t, auto1.key, { fastForward: { boot: { head: to } } })
 
   auto2.update().catch(() => {})
   await new Promise((resolve) => setTimeout(resolve, 200))

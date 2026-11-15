@@ -6,7 +6,6 @@ const os = require('os')
 
 const Hypercore = require('hypercore')
 const Autobee = require('../index.js')
-const FastForward = require('../lib/fast-forward.js')
 const { migrateCore, Remapper } = require('../lib/remap.js')
 const {
   replicate,
@@ -650,9 +649,7 @@ test(
     t.absent(f.auto.remapped)
 
     const old = { key: local, length: before }
-    const ff = await FastForward.fromHead(f.auto, old, null, { skipGap: true, rewind: true })
-    t.ok(await ff.run(), 'an old head is accepted')
-    await ff.close()
+    t.ok(await f.auto.writers.fastForwardTo(old, { rewind: true }), 'an old head is accepted')
 
     Remapper.prototype.run = () => new Promise(() => {})
     t.ok(await f.auto.moveTo(old), 'landed')
