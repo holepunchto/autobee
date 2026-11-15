@@ -825,21 +825,39 @@ async function sparseViewMirror(t, auto1, auto2) {
   }
 }
 
-test('an explicit move cancels a fast-forward that is still running', async function (t) {
+test('an explicit move lands past a fast-forward stuck in flight, and cancels it', async function (t) {
   const auto1 = await create(t)
   for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const auto2 = await create(t, auto1.key)
   await auto2.ready()
 
-  const stuck = new FastForward(auto2, { key: b4a.alloc(32, 1), length: 10 }, { timeout: 0 })
-  const background = auto2._runFastForward(stuck)
-  t.is(auto2.fastForwarding, stuck, 'a fast-forward is in flight')
+  // a head whose system nobody serves: the run boots and waits forever
+  const bogus = b4a.alloc(32, 1)
+  const stuck = auto2.writers._refFastForward(bogus)
+  stuck.head = {
+    key: bogus,
+    length: 10,
+    op: {
+      views: {
+        flushes: 5,
+        system: { key: bogus, start: 0, length: 10 },
+        view: { key: bogus, start: 0, length: 10 }
+      }
+    }
+  }
+  const background = stuck.inflate({ force: true })
+  t.ok(stuck.inflating !== null, 'a fast-forward is in flight')
 
   t.teardown(replicate(auto1, auto2))
 
   const moved = await auto2.moveTo({ key: auto1.local.key, length: auto1.local.length })
   t.ok(moved, 'the explicit move landed')
-  t.is(await background, false, 'the one in flight was cancelled')
   t.alike(auto2.system.bee.head(), auto1.system.bee.head(), 'on the head it was pointed at')
+
+  // the landing passed the stuck head, so the move cancelled its run
+  t.is(await background, null, 'the one in flight was cancelled')
+  t.is(stuck.inflating, null, 'nothing left in flight')
+
+  auto2.writers._unrefFastForward(stuck)
 })

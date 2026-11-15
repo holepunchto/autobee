@@ -122,10 +122,7 @@ module.exports = class Autobee extends ReadyResource {
     this.trusted = new TrustedPeers(this, handlers)
 
     this.ff = null
-    this.fastForwarding = null
     this.fastForwardTo = null
-    this._ffCandidates = new Map()
-    this._ffSearching = null
     this._bumpSignal = new Signal()
 
     this._workingBee = bee
@@ -448,7 +445,6 @@ module.exports = class Autobee extends ReadyResource {
     // rugpull the rest
     await this.store.close()
 
-    if (this._ffSearching) await this._ffSearching
     if (this._draining) await this._draining
 
     // let in-flight writer adds finish
@@ -855,6 +851,8 @@ module.exports = class Autobee extends ReadyResource {
             await this._flushWakeup()
             if (this._interrupting) break
 
+            if (this.fastForwardTo === null) this._scheduleLanding()
+
             if (this.fastForwardTo !== null) {
               await this._applyFastForward()
               if (changes) changes.track()
@@ -964,88 +962,18 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushWakeup() {
-    const hints = await this._applyWakeupHints()
-    if (!hints.length) return
-
-    this._queueFastForward(hints)
+    await this._applyWakeupHints()
   }
 
-  _queueFastForward(hints) {
-    if (!this._ffEnabled) return
+  // the writers inflate the heads they vouch for, the best landed one is ours
+  _scheduleLanding() {
+    if (!this._ffEnabled || this.bootFrom) return
 
-    for (const { key, length } of hints) {
-      if (length === 0) continue
+    // the migrated legacy nodes have to land on the legacy system before we move off it
+    if (this._catchupMigratedNodes !== null) return
 
-      const hex = b4a.toString(key, 'hex')
-      const previous = this._ffCandidates.get(hex)
-      if (previous === undefined || previous < length) this._ffCandidates.set(hex, length)
-    }
-
-    if (!this._ffCandidates.size || this._ffSearching !== null) return
-
-    // a scheduled fast-forward is applied by the drain before we look again
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) return
-    if (this._interrupting || this.closing || this.bootFrom) return
-
-    // the migrated legacy nodes have to land on the legacy system before we
-    // move off it - requeue the hints so the ff is retried once they applied
-    if (this._catchupMigratedNodes !== null) {
-      this._wakeup.hint(hints)
-      return
-    }
-
-    this._ffSearching = this._searchFastForward().finally(() => {
-      this._ffSearching = null
-    })
-  }
-
-  async _searchFastForward() {
-    try {
-      while (this._ffCandidates.size) {
-        if (this.fastForwardTo !== null || this.fastForwarding !== null) return
-        if (this._interrupting || this.closing || this.bootFrom) return
-
-        const hints = flushCandidates(this._ffCandidates)
-
-        const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
-
-        const ff = await FastForward.fromHeads(this, heads, {
-          skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
-          timeout: FastForward.DEFAULT_TIMEOUT
-        })
-
-        if (ff === null) continue
-
-        if (this._interrupting || this.closing) {
-          await ff.close()
-          return
-        }
-
-        if (await this._runFastForward(ff)) return
-      }
-    } catch (err) {
-      safetyCatch(err)
-    }
-  }
-
-  async _readCandidateHeads(hints, timeout) {
-    const promises = []
-
-    for (const { key, length } of hints) {
-      if (length === 0) continue
-      promises.push(this._resolveOplogHint(key, length, { timeout }))
-    }
-
-    const ops = await Promise.all(promises)
-    const heads = []
-
-    for (const res of ops) {
-      if (res === null) continue
-
-      heads.push({ key: res.key, length: res.length })
-    }
-
-    return heads
+    const ff = this.writers.landing()
+    if (ff !== null) this._runFastForward(ff.inflated)
   }
 
   async _resolveOplogHint(key, length, opts) {
@@ -1649,23 +1577,18 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  async moveTo(head, { timeout = 0 } = {}) {
+  async moveTo(head) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.closing) throw new Error('Autobee closed')
 
     // an explicit move goes wherever it is pointed, backwards included
-    const ff = await FastForward.fromHead(this, head, null, { force: true, rewind: true, timeout })
-    if (ff === null) return null
+    const inflated = await this.writers.fastForwardTo(head, { rewind: true })
+    if (inflated === null) return null
 
     while (this.fastForwardTo !== null && !this.closing) await this.ff.promise
+    if (this.closing) return null
 
-    const previous = this.fastForwarding
-    this.fastForwarding = null
-
-    const running = this._runFastForward(ff, { force: true, rewind: true })
-    if (previous !== null) await previous.close()
-
-    if (!(await running)) return null
+    if (!this._runFastForward(inflated, { force: true, rewind: true })) return null
 
     return this.ff.promise
   }
@@ -1682,38 +1605,20 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _bootFromHead(head) {
-    const timeout = FastForward.DEFAULT_TIMEOUT
-
     try {
-      const oplog = await this._resolveOplogHint(head.key, head.length || 0, { timeout })
-      if (oplog === null) return false
-
-      const ff = await FastForward.fromHead(this, oplog, null, { force: true, timeout })
-
-      return ff !== null && (await this._runFastForward(ff, { force: true }))
+      const inflated = await this.writers.fastForwardTo({ key: head.key, length: head.length || 0 })
+      return inflated !== null && this._runFastForward(inflated, { force: true })
     } catch (err) {
       safetyCatch(err)
       return false
     }
   }
 
-  async _runFastForward(ff, { force = false, rewind = false } = {}) {
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) {
-      await ff.close()
-      return false
-    }
+  // schedule a landing on an inflated head, the drain applies it
+  _runFastForward(inflated, { force = false, rewind = false } = {}) {
+    if (this.fastForwardTo !== null) return false
 
-    this.fastForwarding = ff
-
-    const result = await ff.run()
-    const flushes = ff.system.flushes
-    const version = ff.system.version
-    await ff.close()
-
-    if (this.fastForwarding !== ff) return false
-    this.fastForwarding = null
-
-    if (!result) return false
+    const { flushes, version } = inflated
 
     // a peer in lock step with the writer that remapped is never behind its claim
     const landing =
@@ -1723,10 +1628,10 @@ module.exports = class Autobee extends ReadyResource {
     // never move backwards, a boot head can be older than what we already have
     if (!rewind && flushes < this.system.flushes - slack) return false
 
-    // apply ran while we searched, only drop it if it no longer moves us forward
+    // apply moved us meanwhile, only drop it if it no longer moves us forward
     if (!force && !landing && flushes <= this.system.flushes) return false
 
-    this.fastForwardTo = result
+    this.fastForwardTo = inflated
     this.ff = rrp()
 
     // a remapped head replaces whatever we were about to remap ourselves
@@ -1775,7 +1680,7 @@ module.exports = class Autobee extends ReadyResource {
     this.fastForwardTo = null
 
     // process any wakeup while fast-forward itself was in flight
-    this._queueFastForward(await this._applyWakeupHints())
+    await this._applyWakeupHints()
 
     // everything the writers held was read against the system we left
     await this.writers.moved()
@@ -1811,18 +1716,6 @@ function getBootOption(boot) {
   asserts.assert(!(boot.head && boot.legacy), 'Boot from either a head or a legacy pointer')
 
   return boot
-}
-
-function flushCandidates(candidates) {
-  const hints = []
-
-  for (const [hex, length] of candidates) {
-    hints.push({ key: b4a.from(hex, 'hex'), length })
-  }
-
-  candidates.clear()
-
-  return hints
 }
 
 function noop() {}
