@@ -15,7 +15,9 @@ async function length(auto, key) {
   return info ? info.length : 0
 }
 
-test('untrusted-writers - an untrusted peer drops new writers past the limit', async function (t) {
+// parked: the untrusted writer cap was dropped with the writers rewrite and is
+// to be rethought, these describe what it has to do when it comes back
+test.skip('untrusted-writers - an untrusted peer drops new writers past the limit', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key, { isTrusted: () => false, maxUntrustedWriters: 3 })
   const auto3 = await create(t, auto1.key)
@@ -39,7 +41,7 @@ test('untrusted-writers - an untrusted peer drops new writers past the limit', a
   t.is(await length(auto2, auto3.local.key), 1, 'the mirror follows the dropped writer')
 })
 
-test('untrusted-writers - a trusted peer opens past the limit', async function (t) {
+test.skip('untrusted-writers - a trusted peer opens past the limit', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key, { maxUntrustedWriters: 2 })
 
@@ -55,7 +57,7 @@ test('untrusted-writers - a trusted peer opens past the limit', async function (
   t.is(auto2.stats.writersClosed, auto2.stats.writersOpened, 'every opened writer is closed')
 })
 
-test('untrusted-writers - a stalled mirror fast-forwards once the admin moves on', async function (t) {
+test.skip('untrusted-writers - a stalled mirror fast-forwards once the admin moves on', async function (t) {
   const admin = await create(t, {
     mostRecentTrusted: () => ({ key: admin.local.key, length: admin.local.length })
   })
