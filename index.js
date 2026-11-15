@@ -848,7 +848,7 @@ module.exports = class Autobee extends ReadyResource {
             await this._flushWakeup()
             if (this._interrupting) break
 
-            if (this.fastForwardTo === null) this._scheduleLanding()
+            if (this.fastForwardTo === null) this._scheduleFastForward()
 
             if (this.fastForwardTo !== null) {
               await this._applyFastForward()
@@ -963,13 +963,13 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // the writers inflate the heads they vouch for, the best landed one is ours
-  _scheduleLanding() {
+  _scheduleFastForward() {
     if (!this._ffEnabled || this.bootFrom) return
 
     // the migrated legacy nodes have to land on the legacy system before we move off it
     if (this._catchupMigratedNodes !== null) return
 
-    const ff = this.writers.landing()
+    const ff = this.writers.nextFastForward()
     if (ff !== null) this._runFastForward(ff.inflated)
   }
 
