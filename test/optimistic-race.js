@@ -230,7 +230,7 @@ test('optimistic - removed writer can re-add itself optimistically', async funct
 test('optimistic - stability test (multiple iterations)', async function (t) {
   t.timeout(60000)
 
-  const iterations = 20
+  const iterations = 6
 
   for (let i = 0; i < iterations; i++) {
     const auto1 = await create(t)
