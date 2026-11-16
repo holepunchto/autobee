@@ -76,6 +76,11 @@ async function openFixture(
     legacyViews: ['not-a-view'],
     encrypted: true,
     encryptionKey: SECRET_KEY,
+    // RECOVERY_SETTLE defaults to 8000ms in hypercore and is paid once per
+    // session needing recovery (usually 2, concurrently) - same override
+    // already used throughout migration.js/remap-landing.js, just missing
+    // here on all but one call site.
+    remapSettle: 200,
     ...opts
   })
 
