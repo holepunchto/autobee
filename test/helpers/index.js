@@ -23,6 +23,7 @@ exports.encode = encode
 exports.decode = decode
 exports.dump = dump
 exports.encryptionKey = encryptionKey
+exports.waitFor = waitFor
 
 function encode(val) {
   return b4a.from(JSON.stringify(val))
@@ -282,5 +283,17 @@ async function caughtUp(a, b) {
     const info = await a.system.get(b.local.key)
     if (info && info.length === b.local.length) return
     await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}
+
+// Like sync(), but for scenarios sync() can't express - e.g. waiting on a
+// removed writer's oplog, which never reaches full convergence. Polls a
+// caller-supplied condition instead of checking every peer agrees.
+async function waitFor(check, { timeout = 5000, interval = 10 } = {}) {
+  const start = Date.now()
+  while (true) {
+    if (await check()) return
+    if (Date.now() - start > timeout) throw new Error('waitFor: condition never became true')
+    await new Promise((resolve) => setTimeout(resolve, interval))
   }
 }
