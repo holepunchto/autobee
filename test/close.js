@@ -20,7 +20,10 @@ test('close settles while a drain waits on unavailable blocks', async function (
   const auto2 = await create(t, auto1.key, { fastForward: { boot: to } })
 
   auto2.update().catch(() => {})
-  await new Promise((resolve) => setTimeout(resolve, 200))
+  // let the drain actually reach its "awaiting an unavailable block" state
+  // before racing close() against it - that's reached once the fetch promise
+  // is issued (next tick), not after a fixed wall-clock delay
+  for (let i = 0; i < 10; i++) await new Promise(setImmediate)
 
   let timer = null
   const started = Date.now()
