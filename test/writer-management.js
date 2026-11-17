@@ -312,16 +312,20 @@ test('writer-management - concurrent remove and write from removed writer', asyn
 
   // Now replicate auto2's data to auto1 and let auto1 process what it can.
   // We can't use sync() because auto1 will never fully index a removed writer's
-  // entries - poll until auto1 has actually received auto2's oplog over the
-  // wire instead of guessing how long that takes.
+  // entries - poll until auto1 has actually downloaded auto2's oplog over the
+  // wire instead of guessing how long that takes. core.length can reach the
+  // final length from the signed proof alone, before the blocks themselves
+  // arrive (wakeup fetches the last block first) - contiguousLength is the
+  // gapless downloaded length, so it only passes once the data is actually
+  // here. Then give the drain a chance to run on it before disconnecting.
   const done = replicate(auto1, auto2)
   const auto2Hex = auto2.local.key.toString('hex')
-  await waitFor(async () => {
-    await auto1.flush()
-    await auto2.flush()
+  await waitFor(() => {
     const w = auto1.writers.active.get(auto2Hex)
-    return !!w && w.core.length >= auto2.local.length
+    return !!w && w.core.contiguousLength >= auto2.local.length
   })
+  await auto1.update()
+  await auto1.flush()
 
   await done()
 

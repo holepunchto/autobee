@@ -355,15 +355,20 @@ test('batch - writer removed mid-batch-sequence', async function (t) {
   await auto2.append([encode({ msg: 'b5-removed' }), encode({ msg: 'b6-removed' })])
 
   // Use replicate + a manual wait since sync() can't converge for removed writers -
-  // poll until auto1 has actually received auto2's oplog over the wire instead of
-  // guessing how long that takes.
+  // poll until auto1 has actually downloaded auto2's oplog over the wire instead
+  // of guessing how long that takes. core.length can reach the final length from
+  // the signed proof alone, before the blocks themselves arrive (wakeup fetches
+  // the last block first) - contiguousLength is the gapless downloaded length, so
+  // it only passes once the data is actually here. Then give the drain a chance
+  // to run on it before tearing the connection down.
   const done = replicate(auto1, auto2)
   const auto2Hex = auto2.local.key.toString('hex')
-  await waitFor(async () => {
-    await auto1.flush()
+  await waitFor(() => {
     const w = auto1.writers.active.get(auto2Hex)
-    return !!w && w.core.length >= auto2.local.length
+    return !!w && w.core.contiguousLength >= auto2.local.length
   })
+  await auto1.update()
+  await auto1.flush()
   await done()
 
   const info = await auto1.system.get(auto2.local.key)
