@@ -26,12 +26,24 @@ async function create(t, key, opts) {
   return auto
 }
 
-// per-chunk latency on the joiner's streams opens a real window between
-// "announced the head" and "has the data" - locally both arrive at once
-function delay(ms) {
+// throttle by BYTES, not chunks: one stream chunk can carry an entire
+// core's blocks, so a per-chunk delay leaves throughput unbounded and the
+// transfer can complete in a handful of chunks on a fast machine. Slicing
+// into MTU-sized pieces, one per tick, bounds the rate by this timer -
+// opening a real window between "announced the head" (handshake, a few
+// slices) and "has the data" (many slices) on any hardware
+function delay(ms, mtu = 512) {
   return new Transform({
     transform(data, cb) {
-      setTimeout(() => cb(null, data), ms)
+      let i = 0
+      const tick = () => {
+        if (this.destroyed) return
+        this.push(data.subarray(i, i + mtu))
+        i += mtu
+        if (i < data.byteLength) setTimeout(tick, ms)
+        else cb(null)
+      }
+      setTimeout(tick, ms)
     }
   })
 }
@@ -160,10 +172,31 @@ test('head barrier - a hint beyond the announced length never gates the drain', 
   t.is((await joiner.replay()).length, reference.length, 'fully caught up')
 })
 
+// passes bytes through until the budget is spent, then swallows forever
+// while keeping the stream OPEN - a peer that announced data and then
+// withholds it, byte-deterministically (no clocks, no cut races)
+function budgetValve(limit) {
+  let used = 0
+  return new Transform({
+    transform(data, cb) {
+      if (used >= limit) return cb(null)
+      used += data.byteLength
+      cb(null, data)
+    }
+  })
+}
+
 test('head barrier - stall fallback applies without the missing data', async function (t) {
   t.timeout(120000)
 
   const room = await buildRoom(t)
+
+  // one member extends its core while disconnected: a tail only it can
+  // supply, far bigger than the byte budget below can carry
+  const holdout = room[1]
+  const tail = []
+  for (let i = 0; i < 200; i++) tail.push(encode({ msg: `tail${i}` }))
+  await holdout.append(tail)
 
   const joiner = await create(t, room[0].key, {
     headBarrier: true,
@@ -176,51 +209,54 @@ test('head barrier - stall fallback applies without the missing data', async fun
   }
   await joiner.update()
 
-  // cut the connection mid-transfer - genesis's first 4 blocks (its own
-  // message plus 3 grants, no cross-writer deps) have landed: lengths are
-  // announced on handshake, so the barrier is now holding for blocks that
-  // never arrive
-  const genesisCore = joiner.store.get({ key: room[0].local.key })
-  await genesisCore.ready()
-  t.teardown(() => genesisCore.close())
+  // the settled room arrives whole through genesis (it holds every core);
+  // the holdout connection passes its handshake and length announcement
+  // but can never fit the 200-block tail - the barrier is now holding for
+  // blocks that will not arrive, with everything else locally present
+  const done0 = replicate(joiner, room[0])
 
-  const done = replicateThrottled(joiner, room, 20)
-  while (genesisCore.contiguousLength < 4) {
-    await new Promise((resolve) => setTimeout(resolve, 5))
-  }
-  await done()
+  const s1 = joiner.replicate(true)
+  const s2 = holdout.replicate(false)
+  const valve = budgetValve(6 * 1024)
+  s1.pipe(s2)
+  s2.pipe(valve).pipe(s1)
+  for (const s of [s1, s2, valve]) s.on('error', () => {})
+  t.teardown(() => {
+    s1.destroy()
+    s2.destroy()
+  })
 
-  // the transfer must have been cut genuinely short SOMEWHERE - the
-  // barrier gates on any missing writer - or the rest of the test is
-  // vacuous
-  let partial = false
-  for (const member of room) {
-    const core = joiner.store.get({ key: member.local.key })
-    await core.ready()
-    if (core.contiguousLength < member.local.length) partial = true
-    await core.close()
+  // the announcement must make it through the budget, or nothing gates
+  const holdoutCore = joiner.store.get({ key: holdout.local.key })
+  await holdoutCore.ready()
+  t.teardown(() => holdoutCore.close())
+  while (holdoutCore.length < holdout.local.length) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
   }
-  t.ok(partial, 'cut mid-transfer')
 
   // the stall (300ms) must release the drain and the release must LATCH:
-  // everything locally available applies eagerly, not one batch per stall
-  // interval - 4 dep-free genesis batches within ~2.5x the stall window
+  // everything locally available - the entire settled room - applies
+  // eagerly, not one batch per stall interval
   await new Promise((resolve) => setTimeout(resolve, 800))
   await joiner.update()
 
   const info = await joiner.system.get(room[0].local.key)
   t.ok(
-    info !== null && info.length >= 4,
-    `applied all available data despite unmet hints (got ${info ? info.length : 0})`
+    info !== null && info.length === room[0].local.length,
+    `applied the whole settled room despite the unmet tail hint (got ${info ? info.length : 0}/${room[0].local.length})`
   )
 
+  // byte-deterministic non-vacuity: the announced tail cannot have fit
+  t.ok(holdoutCore.contiguousLength < holdout.local.length, 'the tail was genuinely withheld')
+
+  await done0()
+
   // and recovers to full convergence once the data source returns
-  const done1 = replicate(joiner, ...room)
-  await sync(joiner, ...room)
+  const done1 = replicate(joiner, holdout)
+  await sync(joiner, holdout)
   await done1()
 
-  const reference = await room[0].replay()
-  t.is((await joiner.replay()).length, reference.length, 'fully caught up after reconnect')
+  t.ok(await same(joiner, holdout), 'fully caught up after the holdout returns')
 })
 
 test('head barrier - coexists with fast-forward on a sparse core', async function (t) {
