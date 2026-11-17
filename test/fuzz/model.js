@@ -24,6 +24,7 @@ function createState(config, rng, harness, nextStorage, log, transport) {
     const genesis = await create(harness, {
       storage: nextStorage(),
       bootstrapWeight: config.maxWeight,
+      ...barrierOpts(),
       ...writerClock(config, rng)
     })
     await transport.attach(genesis)
@@ -108,6 +109,7 @@ async function spawnCandidate(state) {
   const auto = await create(state.harness, state.genesisKey, {
     storage: state.nextStorage(),
     bootstrapWeight: state.config.maxWeight,
+    ...barrierOpts(),
     ...clock
   })
   await state.transport.attach(auto)
@@ -591,6 +593,13 @@ function randWeightAtLeast(state, floor) {
 // can ever back a claim this size - flooring is permanent and deterministic
 function unbackableWeight(state) {
   return Math.max(state.config.maxWeight, 2) + 1 + state.rng.int(0, 2)
+}
+
+// FUZZ_HEAD_BARRIER=1 runs every peer with the head barrier on - the
+// "always on" validation (live members, partial delivery, FF, byzantine)
+function barrierOpts() {
+  if (!process.env.FUZZ_HEAD_BARRIER) return {}
+  return { headBarrier: true }
 }
 
 // ~half the writers keep a true clock, the rest drift by up to +/-maxDriftMs.
