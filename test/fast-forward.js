@@ -12,7 +12,8 @@ const {
   sync,
   encode,
   decode,
-  dump
+  dump,
+  moveTo
 } = require('./helpers')
 
 // predates the moveTo removal
@@ -26,7 +27,7 @@ test.skip('fast-forward - simple', async function (t) {
 
   const to = auto1.system.bee.head()
 
-  const ff = auto2.moveTo(to)
+  const ff = moveTo(auto2, to)
 
   t.teardown(replicate(auto1, auto2))
 
@@ -278,13 +279,13 @@ test('boot from a head behind the local system never moves backwards', async fun
 
   t.is(auto3.system.flushes, flushes, 'flushes did not go down')
   t.alike(auto3.system.bee.head(), head, 'still on the system head we had')
-  t.absent(auto3.fastForwardTo, 'no fast-forward scheduled')
+  t.is(auto3.stats.fastForwards, 0, 'no fast-forward happened')
 
   auto3.removeAllListeners('move-to')
   t.teardown(replicate(early, auto3))
 
   // an explicit move is the caller's call, it may go backwards
-  t.ok(await auto3.moveTo(behind), 'an explicit move behind us still lands')
+  t.ok(await moveTo(auto3, behind), 'an explicit move behind us still lands')
   t.ok(auto3.system.flushes < flushes, 'moveTo went backwards on purpose')
 })
 
@@ -755,7 +756,7 @@ test('an explicit move lands past a fast-forward stuck in flight, and cancels it
 
   t.teardown(replicate(auto1, auto2))
 
-  const moved = await auto2.moveTo({ key: auto1.local.key, length: auto1.local.length })
+  const moved = await moveTo(auto2, { key: auto1.local.key, length: auto1.local.length })
   t.ok(moved, 'the explicit move landed')
   t.alike(auto2.system.bee.head(), auto1.system.bee.head(), 'on the head it was pointed at')
 

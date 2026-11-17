@@ -288,9 +288,9 @@ The check runs at the end of the fast-forward, after the system has booted and t
 
 A node that landed via fast-forward holds its cores sparse, so it never satisfies the check for others. Leave it off unless every peer is warmed up to hold the view whole.
 
-#### `await db.moveTo(head)`
+#### `db.moveTo(head)`
 
-Fast-forward onto an oplog head, ignoring the usual distance and conservative checks, backwards included. Resolves `{ to, from }`, or `null` if the head could not be booted. The reads wait for a peer for as long as it takes, closing the db ends them.
+Fast-forward onto an oplog head, ignoring the usual distance and conservative checks, backwards included. Returns straight away: the db lands once the head is in hand and emits `'move-to'` with `(to, from)` when it has. The reads wait for a peer for as long as it takes, closing the db ends them, and a later `moveTo` replaces one that has not landed.
 
 The head's key is trusted from then on.
 

@@ -12,7 +12,8 @@ const {
   replicateAsRecovery,
   sync,
   recoveryPeers,
-  remapped: settled
+  remapped: settled,
+  moveTo
 } = require('./helpers/index.js')
 
 const skip = !['linux', 'darwin'].includes(os.platform())
@@ -387,7 +388,7 @@ test(
     t.teardown(() => done())
 
     // a landing of its own may already be on the way, so only the outcome is checked
-    await b.auto.moveTo({ key: a.auto.local.key, length: a.auto.local.length })
+    await moveTo(b.auto, { key: a.auto.local.key, length: a.auto.local.length })
     await sync(a.auto, b.auto)
     t.is(b.events.remap, 0, 'and had nothing left to remap')
     t.alike(b.auto.system.bee.head(), a.auto.system.bee.head(), 'the peer is on the writer')
@@ -594,7 +595,7 @@ test(
     Remapper.prototype.run = () => new Promise(() => {})
 
     try {
-      t.ok(await first.auto.moveTo({ key: local, length: before }), 'landed on the old head')
+      t.ok(await moveTo(first.auto, { key: local, length: before }), 'landed on the old head')
       t.is(first.auto.system.version, 3)
       t.absent(first.auto.remapped, 'and does not count as remapped')
       t.ok(first.auto._remapper !== null, 'a remap was started right away')
@@ -649,10 +650,8 @@ test(
     t.absent(f.auto.remapped)
 
     const old = { key: local, length: before }
-    t.ok(await f.auto.writers.fastForwardTo(old, { rewind: true }), 'an old head is accepted')
-
     Remapper.prototype.run = () => new Promise(() => {})
-    t.ok(await f.auto.moveTo(old), 'landed')
+    t.ok(await moveTo(f.auto, old), 'landed')
     t.absent(f.auto._remapFailed, 'the landing clears the failure')
     t.ok(f.auto._remapper !== null, 'and starts a new remap')
   }

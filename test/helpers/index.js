@@ -18,6 +18,7 @@ exports.replicateAsRecovery = replicateAsRecovery
 exports.recoveryPeers = recoveryPeers
 exports.remapped = remapped
 exports.replicateAndSync = replicateAndSync
+exports.moveTo = moveTo
 exports.apply = apply
 exports.encode = encode
 exports.decode = decode
@@ -146,6 +147,14 @@ async function create(t, key, opts) {
   }
 
   return auto
+}
+
+// moveTo only schedules, the landing is the event
+function moveTo(auto, head) {
+  return new Promise((resolve) => {
+    auto.once('move-to', (to, from) => resolve({ to, from }))
+    auto.moveTo(head)
+  })
 }
 
 function replicate(...autos) {

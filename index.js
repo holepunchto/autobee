@@ -4,7 +4,6 @@ const b4a = require('b4a')
 const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
-const rrp = require('resolve-reject-promise')
 const Signal = require('signal-promise')
 const Wakeup = require('./lib/wakeup.js')
 const Hypercore = require('hypercore')
@@ -25,7 +24,6 @@ const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
-const WriterFastForward = require('./lib/fast-forward.js')
 const TrustedPeers = require('./lib/trusted.js')
 const { Remapper } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
@@ -121,8 +119,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.trusted = new TrustedPeers(this, handlers)
 
-    this.ff = null
-    this.fastForwardTo = null
+    this._moveTo = null
     this._bumpSignal = new Signal()
 
     this._workingBee = bee
@@ -827,10 +824,18 @@ module.exports = class Autobee extends ReadyResource {
       this._wakeup.hint({ key: head.key, length: head.length || 1 })
     }
 
+    if (this._moveTo !== null) {
+      const head = this._moveTo
+      this._moveTo = null
+      this.writers.moveTo(head)
+    }
+
     if (this._remapper !== null && this._remapper.finished && !this._remapFailed) {
       await this._finishRemap()
     }
-    if (!this.remapped && this._remapper === null && this.fastForwardTo === null) this._startRemap()
+    if (!this.remapped && this._remapper === null && this._nextFastForward() === null) {
+      this._startRemap()
+    }
 
     while (!this._interrupting) {
       const changes = this._hasUpdate ? new UpdateChanges(this) : null
@@ -848,10 +853,10 @@ module.exports = class Autobee extends ReadyResource {
             await this._flushWakeup()
             if (this._interrupting) break
 
-            if (this.fastForwardTo === null) this._scheduleFastForward()
+            const ff = this._nextFastForward()
 
-            if (this.fastForwardTo !== null) {
-              await this._applyFastForward()
+            if (ff !== null) {
+              await this._applyFastForward(ff)
               if (changes) changes.track()
               this._needsUpdate = false
               break // revaluate conditions...
@@ -963,14 +968,10 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   // the writers inflate the heads they vouch for, the best landed one is ours
-  _scheduleFastForward() {
-    if (!this._ffEnabled || this.bootFrom) return
-
+  _nextFastForward() {
     // the migrated legacy nodes have to land on the legacy system before we move off it
-    if (this._catchupMigratedNodes !== null) return
-
-    const ff = this.writers.nextFastForward()
-    if (ff !== null) this._runFastForward(ff.inflated)
+    if (this._catchupMigratedNodes !== null) return null
+    return this.writers.nextFastForward()
   }
 
   async _resolveOplogHint(key, length, opts) {
@@ -1574,54 +1575,16 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  async moveTo(head) {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+  // an explicit move goes wherever it is pointed, backwards included. it lands
+  // from the drain once the head is in hand, 'move-to' says when
+  moveTo(head) {
     if (this.closing) throw new Error('Autobee closed')
 
     // a head we were handed is one we trust
     this.trusted.pin(head.key)
 
-    // an explicit move goes wherever it is pointed, backwards included
-    const inflated = await this.writers.fastForwardTo(head, { rewind: true })
-    if (inflated === null) return null
-
-    while (this.fastForwardTo !== null && !this.closing) await this.ff.promise
-    if (this.closing) return null
-
-    if (!this._runFastForward(inflated, { force: true, rewind: true })) return null
-
-    return this.ff.promise
-  }
-
-  // schedule a landing on an inflated head, the drain applies it
-  _runFastForward(inflated, { force = false, rewind = false } = {}) {
-    if (this.fastForwardTo !== null) return false
-
-    const { flushes, version } = inflated
-
-    // a peer in lock step with the writer that remapped is never behind its claim
-    const landing =
-      this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
-    const slack = landing ? WriterFastForward.MIN_GAP : 0
-
-    // never move backwards, a boot head can be older than what we already have
-    if (!rewind && flushes < this.system.flushes - slack) return false
-
-    // apply moved us meanwhile, only drop it if it no longer moves us forward
-    if (!force && !landing && flushes <= this.system.flushes) return false
-
-    this.fastForwardTo = inflated
-    this.ff = rrp()
-
-    // a remapped head replaces whatever we were about to remap ourselves
-    if (this._remapper !== null) {
-      this._remapper.destroy()
-      this._remapper = null
-    }
-
+    this._moveTo = head
     this.bumpSoon()
-
-    return true
   }
 
   async _runMigration() {
@@ -1635,11 +1598,17 @@ module.exports = class Autobee extends ReadyResource {
     await this._handlers.migrate(migration.views, migration.head)
   }
 
-  async _applyFastForward() {
+  async _applyFastForward(ff) {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
-    const { head } = this.fastForwardTo
+    const { head } = ff.inflated
+
+    // a remapped head replaces whatever we were about to remap ourselves
+    if (this._remapper !== null) {
+      this._remapper.destroy()
+      this._remapper = null
+    }
 
     const from = this.system.bee.head()
     const to = head
@@ -1656,13 +1625,12 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.remapped && this._remapper === null) this._startRemap()
 
     this._approvalCheck = true
-    this.fastForwardTo = null
 
     // process any wakeup while fast-forward itself was in flight
     await this._applyWakeupHints()
 
     // everything the writers held was read against the system we left
-    await this.writers.moved()
+    await this.writers.fastForwarded(ff)
 
     // we moved, so ask our peers to tell us their heads again
     this._requestWakeup()
@@ -1674,7 +1642,6 @@ module.exports = class Autobee extends ReadyResource {
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
-    this.ff.resolve({ to, from })
   }
 
   replay() {

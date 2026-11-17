@@ -13,7 +13,7 @@ const {
 const encoding = require('../lib/encoding.js')
 const { AutobeeEncryption } = require('../lib/encryption.js')
 const { decodeBlock } = require('hyperbee2/lib/encoding.js')
-const { replicate, sync, recoveryPeers, remapped, caughtUp } = require('./helpers')
+const { replicate, sync, recoveryPeers, remapped, caughtUp, moveTo } = require('./helpers')
 
 const skip = !['linux', 'darwin'].includes(os.platform())
 
@@ -459,7 +459,7 @@ test(
 
     const done = replicate(b, c)
 
-    const ff = await c.moveTo(safeHeadOfB(b))
+    const ff = await moveTo(c, safeHeadOfB(b))
     t.ok(ff, 'c fast-forwarded onto b')
 
     await caughtUp(c, b)
@@ -528,7 +528,7 @@ test(
     const done = replicate(b, joiner)
     t.teardown(() => done())
 
-    t.ok(await joiner.moveTo(safeHeadOfB(b)), 'landed on the legacy head')
+    t.ok(await moveTo(joiner, safeHeadOfB(b)), 'landed on the legacy head')
     t.ok(joiner.remapping, 'the landed system is walked before it is claimed')
     t.ok(joiner.system.version < MAPPED_AUTOBEE_VERSION, 'and not claimed meanwhile')
   }
@@ -763,7 +763,7 @@ test(
     t.is(cState.length, C_CONFIRMED)
 
     const doneA = replicate(a, c)
-    const ffA = await c.moveTo(localHead(a))
+    const ffA = await moveTo(c, localHead(a))
     t.ok(ffA, 'c fast-forwarded onto a')
 
     await caughtUp(c, a)
@@ -1106,7 +1106,7 @@ test(
 
     const done = replicate(a, e)
 
-    t.ok(await e.moveTo(localHead(a)), 'e fast-forwarded onto the migrated head')
+    t.ok(await moveTo(e, localHead(a)), 'e fast-forwarded onto the migrated head')
     await sync(a, e)
 
     for (let i = 0; i < meta.viewLength; i++) {
