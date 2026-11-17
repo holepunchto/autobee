@@ -1852,6 +1852,10 @@ module.exports = class Autobee extends ReadyResource {
     this._approvalCheck = true
     this.fastForwardTo = null
 
+    // the applied state just jumped wholesale - every gate range, deadline
+    // and trip decision predates it, so start the gate from scratch
+    this.batchGate.reset()
+
     // process any wakeup while fast-forward itself was in flight
     this._queueFastForward(await this._applyWakeupHints())
     await this.writers.refresh()
