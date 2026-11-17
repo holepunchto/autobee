@@ -165,9 +165,11 @@ module.exports = class Autobee extends ReadyResource {
     // is locally present, so bulk catch-up applies once over complete
     // knowledge - see _checkHeadBarrier. Default false: apply eagerly.
     this._headBarrier = handlers.headBarrier === true
-    this._headBarrierStallMs = handlers.headBarrierStallMs || 10_000
+    this._headBarrierStallMs = handlers.headBarrierStallMs ?? 10_000
+    this._headBarrierMaxHoldMs = handlers.headBarrierMaxHoldMs ?? this._headBarrierStallMs * 6
     this._barrierFetches = new Map() // writer -> { start, end, range }
     this._barrierProgress = null
+    this._barrierReleased = false
     this._barrierTimer = null
     this._needsUpdate = false
     this._approvalCheck = true
@@ -1492,12 +1494,23 @@ module.exports = class Autobee extends ReadyResource {
   // stall the drain; starting at the applied length keeps the gate
   // fast-forward-correct (blocks below an FF point never arrive). The
   // barrier must drive the fetch itself: next()'s read-ahead only runs
-  // while applying, which is exactly what is being held. If the gated set
-  // makes no progress for headBarrierStallMs the barrier releases and the
-  // drain applies eagerly, re-engaging once blocks land again.
+  // while applying, which is exactly what is being held.
+  //
+  // Two bounded release paths, so the barrier can delay applying but never
+  // withhold it: a stall (no landed block anywhere in the gated ranges for
+  // headBarrierStallMs - sparse arrivals count, via core.count) and a hard
+  // episode cap (headBarrierMaxHoldMs since gating began, which progress
+  // does NOT reset - progress a peer can manufacture forever must not hold
+  // the apply pipeline forever). Either release LATCHES until the gated
+  // set fully clears: applying a batch changes the gated state, and
+  // re-arming against the same stalled episode would drip one batch per
+  // stall interval instead of applying eagerly.
   async _checkHeadBarrier() {
-    let gated = 0
-    let progress = ''
+    if (this._interrupting) return true
+
+    let gated = null
+    let present = 0
+    let stamp = ''
 
     for (const w of this.writers) {
       if (w === this.writers.localWriter || w.isFrozen) continue
@@ -1510,40 +1523,74 @@ module.exports = class Autobee extends ReadyResource {
 
       const info = await this.system.get(w.core.key)
       const applied = info ? info.length : 0
-      if (target <= applied || (await w.core.has(applied, target))) continue
+      if (target <= applied) continue
 
-      gated++
-      progress += w.id + ':' + applied + ':' + target + ':' + w.core.contiguousLength + '\n'
+      const have = await w.core.count(applied, target)
+      if (have >= target - applied) continue
 
-      const have = this._barrierFetches.get(w)
-      if (!have || have.end < target || have.start < applied) {
-        if (have) have.range.destroy()
+      if (gated === null) gated = new Set()
+      gated.add(w)
+      present += have
+      stamp += w.id + ':' + applied + ':' + target + '\n'
+
+      if (this._barrierReleased) continue // released: no new fetches, next() takes over
+
+      const fetch = this._barrierFetches.get(w)
+      if (!fetch || fetch.end < target || fetch.start < applied) {
+        if (fetch) fetch.range.destroy()
         const range = w.core.download({ start: applied, end: target })
+        // a completed range must re-check the barrier even when the
+        // writer's own 'download' bump is suppressed (waiting is set)
+        range
+          .done()
+          .then(() => this.bumpSoon())
+          .catch(noop)
         this._barrierFetches.set(w, { start: applied, end: target, range })
       }
     }
 
-    if (gated === 0) {
+    if (gated === null) {
       if (this._barrierFetches.size > 0) {
         for (const { range } of this._barrierFetches.values()) range.destroy()
         this._barrierFetches.clear()
       }
       this._barrierProgress = null
+      this._barrierReleased = false
       return true
     }
 
-    // the progress string changes whenever anything moves; identical for
-    // headBarrierStallMs -> release
+    if (this._barrierReleased) return true
+
+    // drop fetches for writers no longer gated (closed, satisfied, FF'd past)
+    for (const [w, fetch] of this._barrierFetches) {
+      if (gated.has(w)) continue
+      fetch.range.destroy()
+      this._barrierFetches.delete(w)
+    }
+
+    // present counts blocks landed anywhere in the gated ranges, so sparse
+    // (post-fast-forward, out-of-order) arrivals register as progress
+    const measure = stamp + '#' + present
     const now = Date.now()
-    if (this._barrierProgress === null || this._barrierProgress.stamp !== progress) {
-      this._barrierProgress = { stamp: progress, since: now }
-    } else if (now - this._barrierProgress.since >= this._headBarrierStallMs) {
+
+    if (this._barrierProgress === null) {
+      this._barrierProgress = { stamp: measure, since: now, episode: now }
+    } else if (this._barrierProgress.stamp !== measure) {
+      this._barrierProgress.stamp = measure
+      this._barrierProgress.since = now // progress resets the stall, never the episode
+    }
+
+    const stalled = now - this._barrierProgress.since
+    const held = now - this._barrierProgress.episode
+
+    if (stalled >= this._headBarrierStallMs || held >= this._headBarrierMaxHoldMs) {
+      this._barrierReleased = true
       return true
     }
 
     // a dead-quiet network never bumps the drain - re-check at the deadline
     if (this._barrierTimer === null) {
-      const delay = this._headBarrierStallMs - (now - this._barrierProgress.since)
+      const delay = Math.min(this._headBarrierStallMs - stalled, this._headBarrierMaxHoldMs - held)
       this._barrierTimer = setTimeout(
         () => {
           this._barrierTimer = null

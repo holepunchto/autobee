@@ -7,7 +7,7 @@ const Corestore = require('corestore')
 const { Transform } = require('streamx')
 
 const Autobee = require('../index.js')
-const { apply, replicate, sync, encode } = require('./helpers')
+const { apply, replicate, sync, encode, same, encryptionKey } = require('./helpers')
 
 async function create(t, key, opts) {
   const storage = await t.tmp()
@@ -16,6 +16,9 @@ async function create(t, key, opts) {
     apply,
     bootstrapWeight: 3,
     ackThreshold: Infinity,
+    // keep --encrypt-all coverage: the suite-wide key the helpers use
+    encryptionKey,
+    encrypted: !!encryptionKey,
     ...opts
   })
   t.teardown(() => auto.close())
@@ -123,6 +126,9 @@ test('head barrier - bulk catch-up converges to the same state, without undos', 
   const actual = (await barriered.replay()).map((n) => ({ value: n.value, weight: n.weight }))
 
   t.alike(actual, expected, 'same order and pinned weights as the eager path')
+  // the scenario must actually produce reorder pressure, or the comparison
+  // is vacuous
+  t.ok(baseline.stats.undos > 0, 'the eager path undid at least once')
   t.is(barriered.stats.undos, 0, 'applied the whole backlog without a single undo')
   t.ok(barriered.stats.applies <= baseline.stats.applies, 'never more apply() calls than eager')
 })
@@ -170,26 +176,43 @@ test('head barrier - stall fallback applies without the missing data', async fun
   }
   await joiner.update()
 
-  // cut the connection mid-transfer - as soon as the first block has
-  // landed: lengths are announced on handshake, so the barrier is now
-  // holding for blocks that never arrive
+  // cut the connection mid-transfer - genesis's first 4 blocks (its own
+  // message plus 3 grants, no cross-writer deps) have landed: lengths are
+  // announced on handshake, so the barrier is now holding for blocks that
+  // never arrive
   const genesisCore = joiner.store.get({ key: room[0].local.key })
   await genesisCore.ready()
   t.teardown(() => genesisCore.close())
 
-  const done = replicateThrottled(joiner, room, 5)
-  while (genesisCore.contiguousLength === 0) {
-    await new Promise((resolve) => setTimeout(resolve, 10))
+  const done = replicateThrottled(joiner, room, 20)
+  while (genesisCore.contiguousLength < 4) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
   }
   await done()
 
-  // the stall fallback must release the drain and apply what did arrive -
-  // a deadlocked barrier never advances past 0
-  await new Promise((resolve) => setTimeout(resolve, 1000))
+  // the transfer must have been cut genuinely short SOMEWHERE - the
+  // barrier gates on any missing writer - or the rest of the test is
+  // vacuous
+  let partial = false
+  for (const member of room) {
+    const core = joiner.store.get({ key: member.local.key })
+    await core.ready()
+    if (core.contiguousLength < member.local.length) partial = true
+    await core.close()
+  }
+  t.ok(partial, 'cut mid-transfer')
+
+  // the stall (300ms) must release the drain and the release must LATCH:
+  // everything locally available applies eagerly, not one batch per stall
+  // interval - 4 dep-free genesis batches within ~2.5x the stall window
+  await new Promise((resolve) => setTimeout(resolve, 800))
   await joiner.update()
 
   const info = await joiner.system.get(room[0].local.key)
-  t.ok(info !== null && info.length > 0, 'applied available data despite unmet hints')
+  t.ok(
+    info !== null && info.length >= 4,
+    `applied all available data despite unmet hints (got ${info ? info.length : 0})`
+  )
 
   // and recovers to full convergence once the data source returns
   const done1 = replicate(joiner, ...room)
@@ -198,4 +221,30 @@ test('head barrier - stall fallback applies without the missing data', async fun
 
   const reference = await room[0].replay()
   t.is((await joiner.replay()).length, reference.length, 'fully caught up after reconnect')
+})
+
+test('head barrier - coexists with fast-forward on a sparse core', async function (t) {
+  t.timeout(120000)
+
+  const source = await create(t, null, {
+    mostRecentTrusted: () => ({ key: source.local.key, length: source.local.length })
+  })
+  for (let i = 0; i < 200; i++) await source.append(encode({ msg: `a${i}` }))
+
+  // the FF leaves the joiner's copy of the source core sparse below the FF
+  // point - those blocks never download, and a barrier gating on the whole
+  // prefix (rather than the applied range) would deadlock here forever
+  const joiner = await create(t, source.key, { isTrusted: () => true, headBarrier: true })
+  t.teardown(replicate(source, joiner))
+
+  await new Promise((resolve) => joiner.once('move-to', resolve))
+  await sync(source, joiner)
+
+  t.ok(joiner.stats.fastForwards >= 1, 'fast-forwarded over the backlog')
+
+  // post-FF tail catch-up runs through the barrier over the sparse core
+  for (let i = 0; i < 20; i++) await source.append(encode({ msg: `b${i}` }))
+  await sync(source, joiner)
+
+  t.ok(await same(source, joiner), 'converged through the barrier after the fast-forward')
 })
