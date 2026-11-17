@@ -4,7 +4,7 @@
 // of churning undos on partial knowledge.
 const test = require('brittle')
 const Corestore = require('corestore')
-const { Transform } = require('stream')
+const { Transform } = require('streamx')
 
 const Autobee = require('../index.js')
 const { apply, replicate, sync, encode } = require('./helpers')
@@ -27,8 +27,8 @@ async function create(t, key, opts) {
 // "announced the head" and "has the data" - locally both arrive at once
 function delay(ms) {
   return new Transform({
-    transform(chunk, enc, cb) {
-      setTimeout(() => cb(null, chunk), ms)
+    transform(data, cb) {
+      setTimeout(() => cb(null, data), ms)
     }
   })
 }
@@ -39,12 +39,14 @@ function replicateThrottled(joiner, room, delayMs) {
   for (const member of room) {
     const s1 = joiner.replicate(true)
     const s2 = member.replicate(false)
+    const d1 = delay(delayMs)
+    const d2 = delay(delayMs)
 
-    s1.pipe(delay(delayMs)).pipe(s2)
-    s2.pipe(delay(delayMs)).pipe(s1)
+    s1.pipe(d1).pipe(s2)
+    s2.pipe(d2).pipe(s1)
 
-    s1.on('error', () => {})
-    s2.on('error', () => {})
+    // teardown destroys the pipelines mid-flight by design
+    for (const s of [s1, s2, d1, d2]) s.on('error', () => {})
 
     teardowns.push(async () => {
       s1.destroy()
