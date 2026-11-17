@@ -26,6 +26,7 @@ const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
+const BatchGate = require('./lib/batch-gate.js')
 const TrustedPeers = require('./lib/trusted.js')
 const { Remapper, recoveryPeersConfigured } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
@@ -161,16 +162,15 @@ module.exports = class Autobee extends ReadyResource {
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
-    // experimental: hold the drain until every known writer's hinted data
-    // is locally present, so bulk catch-up applies once over complete
-    // knowledge - see _checkHeadBarrier. Default false: apply eagerly.
-    this._headBarrier = handlers.headBarrier === true
-    this._headBarrierStallMs = handlers.headBarrierStallMs ?? 10_000
-    this._headBarrierMaxHoldMs = handlers.headBarrierMaxHoldMs ?? this._headBarrierStallMs * 6
-    this._barrierFetches = new Map() // writer -> { start, end, range }
-    this._barrierProgress = null
-    this._barrierReleased = false
-    this._barrierTimer = null
+    // experimental (headBarrier: true): hold the drain until every known
+    // writer's hinted data is locally present, so bulk catch-up applies
+    // once over complete knowledge - see lib/batch-gate.js. Default false:
+    // apply eagerly.
+    this.batchGate = new BatchGate(this, {
+      enabled: handlers.headBarrier === true,
+      stallMs: handlers.headBarrierStallMs,
+      maxHoldMs: handlers.headBarrierMaxHoldMs
+    })
     this._needsUpdate = false
     this._approvalCheck = true
     this._approvedPending = new Map()
@@ -419,12 +419,7 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
-    if (this._barrierTimer !== null) {
-      clearTimeout(this._barrierTimer)
-      this._barrierTimer = null
-    }
-    for (const { range } of this._barrierFetches.values()) range.destroy()
-    this._barrierFetches.clear()
+    this.batchGate.destroy()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -1460,12 +1455,9 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    if (!local && this._headBarrier && !(await this._checkHeadBarrier())) {
-      return false
-    }
-
-    // apply the best next node to keep the prefix stable
-    const next = await this.writers.nextPendingNode({ local })
+    // apply the best next node to keep the prefix stable - the gate holds
+    // it back (returning null) while hinted data is still arriving
+    const next = await this.batchGate.next({ local })
     if (next === null) return false
 
     const { writer: w, batch } = next
@@ -1482,126 +1474,6 @@ module.exports = class Autobee extends ReadyResource {
     w.notify(batch)
     this._needsUpdate = true
     return true
-  }
-
-  // EXPERIMENTAL (headBarrier: true): hold the drain while any known
-  // writer's data needed for applying - (applied, min(hintedLength,
-  // core.length)] - is missing locally, driving the fetch meanwhile, so
-  // bulk catch-up applies once over complete knowledge instead of
-  // churning undos on partial knowledge.
-  //
-  // core.length (signed) bounds the wait, so an unverifiable hint cannot
-  // stall the drain; starting at the applied length keeps the gate
-  // fast-forward-correct (blocks below an FF point never arrive). The
-  // barrier must drive the fetch itself: next()'s read-ahead only runs
-  // while applying, which is exactly what is being held.
-  //
-  // Two bounded release paths, so the barrier can delay applying but never
-  // withhold it: a stall (no landed block anywhere in the gated ranges for
-  // headBarrierStallMs - sparse arrivals count, via core.count) and a hard
-  // episode cap (headBarrierMaxHoldMs since gating began, which progress
-  // does NOT reset - progress a peer can manufacture forever must not hold
-  // the apply pipeline forever). Either release LATCHES until the gated
-  // set fully clears: applying a batch changes the gated state, and
-  // re-arming against the same stalled episode would drip one batch per
-  // stall interval instead of applying eagerly.
-  async _checkHeadBarrier() {
-    if (this._interrupting) return true
-
-    let gated = null
-    let present = 0
-    let stamp = ''
-
-    for (const w of this.writers) {
-      if (w === this.writers.localWriter || w.isFrozen) continue
-
-      const target = Math.min(w.hintedLength, w.core.length)
-      if (target === 0) continue
-
-      // full-prefix fast path - exact for a cold catch-up
-      if (w.core.contiguousLength >= target) continue
-
-      const info = await this.system.get(w.core.key)
-      const applied = info ? info.length : 0
-      if (target <= applied) continue
-
-      const have = await w.core.count(applied, target)
-      if (have >= target - applied) continue
-
-      if (gated === null) gated = new Set()
-      gated.add(w)
-      present += have
-      stamp += w.id + ':' + applied + ':' + target + '\n'
-
-      if (this._barrierReleased) continue // released: no new fetches, next() takes over
-
-      const fetch = this._barrierFetches.get(w)
-      if (!fetch || fetch.end < target || fetch.start < applied) {
-        if (fetch) fetch.range.destroy()
-        const range = w.core.download({ start: applied, end: target })
-        // a completed range must re-check the barrier even when the
-        // writer's own 'download' bump is suppressed (waiting is set)
-        range
-          .done()
-          .then(() => this.bumpSoon())
-          .catch(noop)
-        this._barrierFetches.set(w, { start: applied, end: target, range })
-      }
-    }
-
-    if (gated === null) {
-      if (this._barrierFetches.size > 0) {
-        for (const { range } of this._barrierFetches.values()) range.destroy()
-        this._barrierFetches.clear()
-      }
-      this._barrierProgress = null
-      this._barrierReleased = false
-      return true
-    }
-
-    if (this._barrierReleased) return true
-
-    // drop fetches for writers no longer gated (closed, satisfied, FF'd past)
-    for (const [w, fetch] of this._barrierFetches) {
-      if (gated.has(w)) continue
-      fetch.range.destroy()
-      this._barrierFetches.delete(w)
-    }
-
-    // present counts blocks landed anywhere in the gated ranges, so sparse
-    // (post-fast-forward, out-of-order) arrivals register as progress
-    const measure = stamp + '#' + present
-    const now = Date.now()
-
-    if (this._barrierProgress === null) {
-      this._barrierProgress = { stamp: measure, since: now, episode: now }
-    } else if (this._barrierProgress.stamp !== measure) {
-      this._barrierProgress.stamp = measure
-      this._barrierProgress.since = now // progress resets the stall, never the episode
-    }
-
-    const stalled = now - this._barrierProgress.since
-    const held = now - this._barrierProgress.episode
-
-    if (stalled >= this._headBarrierStallMs || held >= this._headBarrierMaxHoldMs) {
-      this._barrierReleased = true
-      return true
-    }
-
-    // a dead-quiet network never bumps the drain - re-check at the deadline
-    if (this._barrierTimer === null) {
-      const delay = Math.min(this._headBarrierStallMs - stalled, this._headBarrierMaxHoldMs - held)
-      this._barrierTimer = setTimeout(
-        () => {
-          this._barrierTimer = null
-          this.bumpSoon()
-        },
-        Math.max(delay, 100)
-      )
-      if (this._barrierTimer.unref) this._barrierTimer.unref()
-    }
-
-    return false
   }
 
   async prepareBatch(batch) {
