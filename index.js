@@ -161,6 +161,14 @@ module.exports = class Autobee extends ReadyResource {
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
+    // experimental: hold the drain until every known writer's hinted data
+    // is locally present, so bulk catch-up applies once over complete
+    // knowledge - see _checkHeadBarrier. Default false: apply eagerly.
+    this._headBarrier = handlers.headBarrier === true
+    this._headBarrierStallMs = handlers.headBarrierStallMs || 10_000
+    this._barrierFetches = new Map() // writer -> { start, end, range }
+    this._barrierProgress = null
+    this._barrierTimer = null
     this._needsUpdate = false
     this._approvalCheck = true
     this._approvedPending = new Map()
@@ -409,6 +417,12 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
+    if (this._barrierTimer !== null) {
+      clearTimeout(this._barrierTimer)
+      this._barrierTimer = null
+    }
+    for (const { range } of this._barrierFetches.values()) range.destroy()
+    this._barrierFetches.clear()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -1444,6 +1458,10 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
+    if (!local && this._headBarrier && !(await this._checkHeadBarrier())) {
+      return false
+    }
+
     // apply the best next node to keep the prefix stable
     const next = await this.writers.nextPendingNode({ local })
     if (next === null) return false
@@ -1462,6 +1480,81 @@ module.exports = class Autobee extends ReadyResource {
     w.notify(batch)
     this._needsUpdate = true
     return true
+  }
+
+  // EXPERIMENTAL (headBarrier: true): hold the drain while any known
+  // writer's data needed for applying - (applied, min(hintedLength,
+  // core.length)] - is missing locally, driving the fetch meanwhile, so
+  // bulk catch-up applies once over complete knowledge instead of
+  // churning undos on partial knowledge.
+  //
+  // core.length (signed) bounds the wait, so an unverifiable hint cannot
+  // stall the drain; starting at the applied length keeps the gate
+  // fast-forward-correct (blocks below an FF point never arrive). The
+  // barrier must drive the fetch itself: next()'s read-ahead only runs
+  // while applying, which is exactly what is being held. If the gated set
+  // makes no progress for headBarrierStallMs the barrier releases and the
+  // drain applies eagerly, re-engaging once blocks land again.
+  async _checkHeadBarrier() {
+    let gated = 0
+    let progress = ''
+
+    for (const w of this.writers) {
+      if (w === this.writers.localWriter || w.isFrozen) continue
+
+      const target = Math.min(w.hintedLength, w.core.length)
+      if (target === 0) continue
+
+      // full-prefix fast path - exact for a cold catch-up
+      if (w.core.contiguousLength >= target) continue
+
+      const info = await this.system.get(w.core.key)
+      const applied = info ? info.length : 0
+      if (target <= applied || (await w.core.has(applied, target))) continue
+
+      gated++
+      progress += w.id + ':' + applied + ':' + target + ':' + w.core.contiguousLength + '\n'
+
+      const have = this._barrierFetches.get(w)
+      if (!have || have.end < target || have.start < applied) {
+        if (have) have.range.destroy()
+        const range = w.core.download({ start: applied, end: target })
+        this._barrierFetches.set(w, { start: applied, end: target, range })
+      }
+    }
+
+    if (gated === 0) {
+      if (this._barrierFetches.size > 0) {
+        for (const { range } of this._barrierFetches.values()) range.destroy()
+        this._barrierFetches.clear()
+      }
+      this._barrierProgress = null
+      return true
+    }
+
+    // the progress string changes whenever anything moves; identical for
+    // headBarrierStallMs -> release
+    const now = Date.now()
+    if (this._barrierProgress === null || this._barrierProgress.stamp !== progress) {
+      this._barrierProgress = { stamp: progress, since: now }
+    } else if (now - this._barrierProgress.since >= this._headBarrierStallMs) {
+      return true
+    }
+
+    // a dead-quiet network never bumps the drain - re-check at the deadline
+    if (this._barrierTimer === null) {
+      const delay = this._headBarrierStallMs - (now - this._barrierProgress.since)
+      this._barrierTimer = setTimeout(
+        () => {
+          this._barrierTimer = null
+          this.bumpSoon()
+        },
+        Math.max(delay, 100)
+      )
+      if (this._barrierTimer.unref) this._barrierTimer.unref()
+    }
+
+    return false
   }
 
   async prepareBatch(batch) {
