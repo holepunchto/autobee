@@ -162,15 +162,13 @@ module.exports = class Autobee extends ReadyResource {
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
-    // experimental (headBarrier: true): hold the drain until every known
-    // writer's hinted data is locally present, so bulk catch-up applies
-    // once over complete knowledge - see lib/batch-gate.js. Default false:
-    // apply eagerly.
-    this.batchGate = new BatchGate(this, {
+    // options kept so a fast-forward can replace the gate wholesale
+    this._gateOptions = {
       enabled: handlers.headBarrier === true,
       stallMs: handlers.headBarrierStallMs,
       maxHoldMs: handlers.headBarrierMaxHoldMs
-    })
+    }
+    this.batchGate = new BatchGate(this, this._gateOptions)
     this._needsUpdate = false
     this._approvalCheck = true
     this._approvedPending = new Map()
@@ -1455,8 +1453,7 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    // apply the best next node to keep the prefix stable - the gate holds
-    // it back (returning null) while hinted data is still arriving
+    // apply the best next node to keep the prefix stable
     const next = await this.batchGate.next({ local })
     if (next === null) return false
 
@@ -1852,9 +1849,9 @@ module.exports = class Autobee extends ReadyResource {
     this._approvalCheck = true
     this.fastForwardTo = null
 
-    // the applied state just jumped wholesale - every gate range, deadline
-    // and trip decision predates it, so start the gate from scratch
-    this.batchGate.reset()
+    // every gate range and deadline predates the jump in applied state
+    this.batchGate.destroy()
+    this.batchGate = new BatchGate(this, this._gateOptions)
 
     // process any wakeup while fast-forward itself was in flight
     this._queueFastForward(await this._applyWakeupHints())
