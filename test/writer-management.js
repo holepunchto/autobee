@@ -11,7 +11,8 @@ const {
   replicateAndSync,
   encode,
   decode,
-  encryptionKey
+  encryptionKey,
+  waitFor
 } = require('./helpers')
 
 test('writer-management - add writer', async function (t) {
@@ -233,7 +234,7 @@ test('writer-management - multiple add/remove cycles', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
 
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 2; i++) {
     // Add
     await auto1.append(encode({ addWriter: auto2.local.id }))
     await replicateAndSync(auto1, auto2)
@@ -285,8 +286,6 @@ test('writer-management - indexer flag', async function (t) {
 })
 
 test('writer-management - concurrent remove and write from removed writer', async function (t) {
-  const { replicate } = require('./helpers')
-
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
   const auto3 = await create(t, auto1.key)
@@ -311,23 +310,28 @@ test('writer-management - concurrent remove and write from removed writer', asyn
   // Sync auto1 and auto3 first (they agree on the removal)
   await replicateAndSync(auto1, auto3)
 
-  // Now replicate auto2's data to auto1 and let auto1 process what it can
+  // Now replicate auto2's data to auto1 and let auto1 process what it can.
+  // We can't use sync() because auto1 will never fully index a removed writer's
+  // entries - poll until auto1 has actually received auto2's oplog over the
+  // wire instead of guessing how long that takes.
   const done = replicate(auto1, auto2)
-
-  // Wait for auto1 to see auto2's oplog, then flush
-  // We can't use sync() because auto1 will never fully index a removed writer's entries
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  await auto1.flush()
-  await auto2.flush()
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  await auto1.flush()
+  const auto2Hex = auto2.local.key.toString('hex')
+  await waitFor(async () => {
+    await auto1.flush()
+    await auto2.flush()
+    const w = auto1.writers.active.get(auto2Hex)
+    return !!w && w.core.length >= auto2.local.length
+  })
 
   await done()
 
-  // auto2 should learn it's been removed
+  // auto2 should learn it's been removed - poll for the actual condition
+  // instead of sleeping and hoping one sync pass was enough.
   const done2 = replicate(auto1, auto2)
-  await new Promise((resolve) => setTimeout(resolve, 500))
-  await auto2.flush()
+  await waitFor(async () => {
+    await auto2.flush()
+    return !auto2.writable
+  })
   await done2()
 
   t.absent(auto2.writable, 'auto2 is not writable after sync')

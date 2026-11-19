@@ -1,6 +1,6 @@
 const test = require('brittle')
 const Corestore = require('corestore')
-const { create, replicate, replicateAndSync, encode, same, decode } = require('./helpers')
+const { create, replicate, replicateAndSync, encode, same, decode, waitFor } = require('./helpers')
 const b4a = require('b4a')
 const ProtomuxWakeup = require('protomux-wakeup')
 
@@ -344,11 +344,3 @@ test('wakeup - handle malicious wakeup', async function (t) {
     'autobase keeps processing writes after a bad writer'
   )
 })
-
-async function waitFor(cond, timeout = 5000) {
-  const start = Date.now()
-  while (!cond()) {
-    if (Date.now() - start > timeout) throw new Error('timed out waiting for condition')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-}

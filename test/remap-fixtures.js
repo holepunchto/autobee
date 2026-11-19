@@ -70,12 +70,26 @@ async function openFixture(
   }
 
   const store = new Corestore(dir, { allowBackup: true, manifestVersion: 2 })
+
+  // connect the peer BEFORE constructing the Autobee - its constructor fires
+  // `this.ready().catch(noop)` on its last line, so the internal boot (and
+  // whatever recovery check it triggers) starts racing immediately on
+  // construction, regardless of anything openFixture awaits afterward.
+  // Serving the peer first means that race is already won by the time the
+  // constructor runs.
+  if (peer) await servePeer(t, store, fixture)
+
   const auto = new Autobee(store, b4a.from(fixture.meta.baseKey, 'hex'), {
     apply,
     migrate: () => Promise.resolve(),
     legacyViews: ['not-a-view'],
     encrypted: true,
     encryptionKey: SECRET_KEY,
+    // RECOVERY_SETTLE defaults to 8000ms in hypercore and is paid once per
+    // session needing recovery (usually 2, concurrently) - same override
+    // already used throughout migration.js/remap-landing.js, just missing
+    // here on all but one call site.
+    remapSettle: 200,
     ...opts
   })
 
@@ -86,7 +100,6 @@ async function openFixture(
   })
 
   if (patch) patch(auto)
-  if (peer) await servePeer(t, store, fixture)
 
   await auto.ready()
   if (flush) {
@@ -179,13 +192,19 @@ function stall(remapper, stage) {
   }
 }
 
-// a blind peer holding the fixture, the remap waits to have what it has
+// a blind peer holding the fixture, the remap waits to have what it has.
+// Must resolve before the Autobee is constructed and connected before it
+// finishes settling, or recovery's first look for a peer pays hypercore's
+// flat, non-configurable 5s RECOVERY_RETRY - confirmed empirically still
+// needed even once the handshake itself has opened.
 async function servePeer(t, store, fixture) {
   const peer = openStore(t, await copyFixture(t, fixture))
   const s1 = store.replicate(true)
   const s2 = peer.replicate(false)
   s1.pipe(s2).pipe(s1)
   recoveryPeers(s2)
+  await Promise.all([s1.noiseStream.opened, s2.noiseStream.opened])
+  await new Promise((resolve) => setTimeout(resolve, 200))
   t.teardown(() => {
     s1.destroy()
     s2.destroy()
