@@ -26,6 +26,7 @@ const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
+const BatchGate = require('./lib/batch-gate.js')
 const TrustedPeers = require('./lib/trusted.js')
 const { Remapper, recoveryPeersConfigured } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
@@ -161,6 +162,13 @@ module.exports = class Autobee extends ReadyResource {
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
+    // options kept so a fast-forward can replace the gate wholesale
+    this._gateOptions = {
+      enabled: handlers.headBarrier === true,
+      stallMs: handlers.headBarrierStallMs,
+      maxHoldMs: handlers.headBarrierMaxHoldMs
+    }
+    this.batchGate = new BatchGate(this, this._gateOptions)
     this._needsUpdate = false
     this._approvalCheck = true
     this._approvedPending = new Map()
@@ -411,6 +419,7 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
+    this.batchGate.destroy()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -1447,7 +1456,7 @@ module.exports = class Autobee extends ReadyResource {
     }
 
     // apply the best next node to keep the prefix stable
-    const next = await this.writers.nextPendingNode({ local })
+    const next = await this.batchGate.next({ local })
     if (next === null) return false
 
     const { writer: w, batch } = next
@@ -1854,6 +1863,10 @@ module.exports = class Autobee extends ReadyResource {
 
     this._approvalCheck = true
     this.fastForwardTo = null
+
+    // every gate range and deadline predates the jump in applied state
+    this.batchGate.destroy()
+    this.batchGate = new BatchGate(this, this._gateOptions)
 
     // process any wakeup while fast-forward itself was in flight
     this._queueFastForward(await this._applyWakeupHints())
