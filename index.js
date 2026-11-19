@@ -6,7 +6,7 @@ const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
 const rrp = require('resolve-reject-promise')
 const Signal = require('signal-promise')
-const AutobeeWakeup = require('autobee-wakeup')
+const AutobeeWakeup = require('./lib/wakeup.js')
 const Hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
@@ -44,6 +44,12 @@ module.exports = class Autobee extends ReadyResource {
       handlers = key
       key = null
     }
+
+    // validate before any store session or core is created. the writers read this
+    // normalized value instead of the mutable handler options later.
+    this._maxReclaimedWriters = ActiveWriters.validateMaxReclaimedWriters(
+      handlers.maxReclaimedWriters
+    )
 
     const {
       name = null,
@@ -901,7 +907,9 @@ module.exports = class Autobee extends ReadyResource {
 
         await this._flushLocal()
 
-        if (!this._interrupting) await this.writers.refresh()
+        // only the normal drain may reclaim: it has a fresh applied view and
+        // the trigger snapshot is complete. the fast-forward refresh below must not
+        if (!this._interrupting) await this.writers.refresh({ reclaim: true })
       } finally {
         if (this.bumping === 1) this.bumping = 0
         else this.bumping = 1
@@ -956,6 +964,9 @@ module.exports = class Autobee extends ReadyResource {
   async _applyWakeupHints() {
     const hints = this._wakeup.flush()
     if (!hints.size) return []
+
+    // capture the raw flushed lengths before filtering can drop or await them
+    this.writers.captureReclaimedHints(hints)
 
     this.previousDrain = Date.now()
     const results = await this._filterHints(hints)

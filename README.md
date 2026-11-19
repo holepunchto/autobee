@@ -83,9 +83,20 @@ Options:
   mostRecentTrusted (target, reference) {}, // the head we vouch for, see Fast-forward
   warmup (view) {},              // prepare a candidate view, see Fast-forward
   ackThreshold: 32,              // flushes we may fall behind before acking, see Acking
+  maxUntrustedWriters: 128,      // untrusted writer sessions tracked at once
+  maxReclaimedWriters: 1024,     // pressure-reclaimed writer records, see Pressure reclamation
   fastForward: {}                // see Fast-forward
 }
 ```
+
+`maxReclaimedWriters` is an independent in-memory budget, not derived from
+`maxUntrustedWriters`. Its unit is simultaneous pressure-reclaimed writer
+identities (key plus greatest known length), not sessions, bytes or cumulative
+evictions. Only omission or `undefined` selects 1024. It accepts non-negative safe
+integers; `0` disables pressure reclamation without disabling ordinary admission,
+wakeups or garbage collection. Other types throw `TypeError`; negative,
+fractional, unsafe, `NaN` and infinite numbers throw `RangeError`. The value is
+validated before any store sessions or cores are created.
 
 #### `db.key`
 
@@ -181,6 +192,33 @@ Returns the current system and view core positions. Used for replication coordin
 #### `Autobee.isAutobee(val)`
 
 Returns `true` if `val` is an Autobee instance.
+
+### Pressure reclamation
+
+When an untrusted reader is at its session cap and a blocked dependency needs a
+slot, it may close an idle, caught-up external writer session and admit the
+dependency. Only actual evictions are recorded. A record keeps the writer key and
+its greatest known announced length; it retains no Writer, core or session.
+
+At a normal refresh the reader reconciles those records, reclaims for live
+dependencies first, then retries remembered unapplied tails into genuinely free
+sessions. Retries use the ordinary cap and trust rules and never evict another
+writer. Cleanup revalidates the current system root and applied state, so undo and
+fast-forward are safe, and the fast-forward path's default refresh keeps records
+for the next normal refresh. A
+record is dropped after its identity is admitted and handed the latest length, or
+once the key is no longer a logical head and the applied length covers the
+remembered work. Local ownership, queued or buffered work and logical history are
+preserved.
+
+Records are in-memory only, so a restart loses them and recovery relies on
+persisted state and fresh discovery. If `maxReclaimedWriters` is saturated,
+reclamation pauses until a record is legitimately handed off or cleaned up;
+ordinary admission and garbage collection continue. This is a bounded liveness
+limit, not a guarantee for arbitrary all-busy dependency graphs. Queued
+unknown-length (`-1`) announcements conservatively protect a victim and block
+cleanup, but a consumed or refused unknown-only announcement is not guaranteed to
+be retried.
 
 ### Apply
 
