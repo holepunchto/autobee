@@ -9,6 +9,7 @@ const {
   create,
   replicate,
   replicateAndSync,
+  sync,
   encode,
   decode,
   encryptionKey
@@ -808,4 +809,30 @@ test('writer-management - unadded local writer with oplog at genesis does not li
 
   t.is(result, 'updated', 'update settles')
   t.ok(b.system.isGenesis(), 'nothing was applied')
+})
+
+test('writer-management - remote writers get the latest block with the upgrade', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  t.teardown(replicate(auto1, auto2))
+
+  await auto1.append(encode({ v: 1 }))
+  await sync(auto1, auto2)
+
+  const writer = auto2.writers.active.get(b4a.toString(auto1.local.key, 'hex'))
+  const { replicator } = writer.core
+
+  t.ok(replicator._alwaysLatestBlockEnabled, 'remote writer core is flagged')
+  t.absent(auto2.local.replicator._alwaysLatestBlockEnabled, 'local writer core is not')
+  t.absent(auto2.system.bee.core.replicator._alwaysLatestBlockEnabled, 'system core is not')
+  t.absent(auto2.view.core.replicator._alwaysLatestBlockEnabled, 'view core is not')
+
+  const requests = replicator.stats.wireRequest.tx
+
+  await auto1.append(encode({ v: 2 }))
+  await sync(auto1, auto2)
+
+  // without the flag the block needs a second request after the upgrade
+  t.is(replicator.stats.wireRequest.tx - requests, 1, 'one request for upgrade and block')
 })
