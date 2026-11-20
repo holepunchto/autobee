@@ -45,12 +45,12 @@ test('promotions - a grant refreshes the cached anchored level', async function 
   t.alike(p.digest, await fromScratch(bee))
 
   // later flushes use the refreshed level, not the stale one from before the grant
-  t.is(await flush(p, bee, [request(w2, 0)]), 1)
+  t.is(await flush(p, bee, [request(w2, 0)]), 0)
   t.alike(p.digest, [false, true])
   t.alike(p.digest, await fromScratch(bee))
 })
 
-test('promotions - the cold fill reads all hints at once', async function (t) {
+test('promotions - the cold fill reads hints one at a time', async function (t) {
   const bee = new CountingBee()
   const writers = keys(6)
 
@@ -58,7 +58,7 @@ test('promotions - the cold fill reads all hints at once', async function (t) {
 
   const p = new Promotions(bee)
   t.is(await flush(p, bee, [request(writers[5], 1)]), 6)
-  t.is(bee.maxInflight, 6, 'every pending entry and the new writer in one round')
+  t.is(bee.maxInflight, 1, 'sequential gets reuse the cached nodes, never overlapping')
   t.alike(p.digest, await fromScratch(bee))
 })
 
@@ -73,7 +73,7 @@ test('promotions - reset drops the cached levels', async function (t) {
   await flush(p, bee, [request(w3, 0)])
 
   p.reset(null)
-  t.is(await flush(p, bee, [request(w3, 0)]), 3, 'cold again')
+  t.is(await flush(p, bee, [request(w3, 0)]), 2, 'cold again for both entries')
 })
 
 // what system.flush does: hint writes and pending writes land in the same batch. Returns the
