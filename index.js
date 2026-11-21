@@ -603,13 +603,9 @@ module.exports = class Autobee extends ReadyResource {
     try {
       if (!this._bootGuard.opened) await this._bootGuard.ready()
 
-      for (const head of this.system.heads) {
-        await this.writers.add(head.key)
-      }
-
-      if (!this.system.heads.length) {
-        await this.writers.add(this.bootstrap.key)
-      }
+      // known heads count as announced
+      for (const head of this.system.heads) this.writers.wakeup(head.key, 0)
+      if (!this.system.heads.length) this.writers.wakeup(this.bootstrap.key, 0)
 
       await this._bump(true)
     } catch (err) {
@@ -819,7 +815,6 @@ module.exports = class Autobee extends ReadyResource {
 
       this.bootFrom = null
 
-      // a head we were handed is one we trust, the writers take it from there
       this.trusted.pin(head.key)
       this._wakeup.hint({ key: head.key, length: head.length || 1 })
     }
@@ -1329,15 +1324,22 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    // apply what is ready, heaviest first with its dependencies
-    const round = await this.writers.drain({ local })
-    if (round.length === 0) return false
+    const batches = await this.writers.drain({ local })
+    if (batches.length === 0) return false
 
-    for (const w of round) {
-      // the system moved under it, an earlier batch may have reset or linked it
-      if (!(await w.update())) continue
+    let applied = 0
 
-      await this._processBatch(w.take())
+    try {
+      for (const batch of batches) {
+        // a ready fast-forward takes over, the drain lands on it next round
+        if (!local && this._nextFastForward() !== null) break
+
+        await this._processBatch(batch)
+        applied++
+      }
+    } finally {
+      // the unapplied rest is loaded again
+      if (applied < batches.length) this.writers.reset()
     }
 
     this._needsUpdate = true
@@ -1366,7 +1368,6 @@ module.exports = class Autobee extends ReadyResource {
       this.trusted.clear()
       t.view = await this.system.undo(t.undo)
 
-      // everything the writers held was read against the system we left
       await this.writers.moved()
     }
 
@@ -1393,7 +1394,6 @@ module.exports = class Autobee extends ReadyResource {
 
       await this._applyBatch(batch, batch[0].optimistic)
 
-      // wake the writers waiting on this batch, and the writer for its next one
       this.writers.resolved(batch[0].key, batch[batch.length - 1].length)
     }
   }
@@ -1575,8 +1575,7 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  // an explicit move goes wherever it is pointed, backwards included. it lands
-  // from the drain once the head is in hand, 'move-to' says when
+  // lands from the drain once the head is in hand, 'move-to' says when
   moveTo(head) {
     if (this.closing) throw new Error('Autobee closed')
 
@@ -1629,7 +1628,6 @@ module.exports = class Autobee extends ReadyResource {
     // process any wakeup while fast-forward itself was in flight
     await this._applyWakeupHints()
 
-    // everything the writers held was read against the system we left
     await this.writers.fastForwarded(ff)
 
     // we moved, so ask our peers to tell us their heads again
