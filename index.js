@@ -1331,8 +1331,8 @@ module.exports = class Autobee extends ReadyResource {
 
     try {
       for (const batch of batches) {
-        // a ready fast-forward takes over, the drain lands on it next round
-        if (!local && this._nextFastForward() !== null) break
+        // a ready fast-forward takes over
+        if (this._nextFastForward() !== null) break
 
         await this._processBatch(batch)
         applied++
@@ -1342,8 +1342,13 @@ module.exports = class Autobee extends ReadyResource {
       if (applied < batches.length) this.writers.reset()
     }
 
-    this._needsUpdate = true
-    return true
+    if (applied > 0) this._needsUpdate = true
+    if (applied === batches.length) return true
+
+    // the main round lands it on its way round, a local flush cannot, so it
+    // ends there and asks for one
+    if (local) this.bumpSoon()
+    return !local
   }
 
   async prepareBatch(batch) {
@@ -1543,7 +1548,20 @@ module.exports = class Autobee extends ReadyResource {
       batch.push(node)
     }
 
-    return this._bump(false)
+    const last = batch[batch.length - 1]
+    let fastForwards = this.stats.fastForwards
+
+    await this._bump(false)
+
+    // a fast-forward can take a drain over before our nodes went in
+    while (
+      this.stats.fastForwards !== fastForwards &&
+      this.writers.localWriter.queue.includes(last) &&
+      !this.closing
+    ) {
+      fastForwards = this.stats.fastForwards
+      await this._bump(false)
+    }
   }
 
   async _flushLocal() {
