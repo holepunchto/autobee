@@ -662,8 +662,8 @@ test('cancelling a fast-forward cancels the warmup reads', async function (t) {
   await oplog.close()
 
   const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = auto2.writers._refFastForward(head.key)
-  t.teardown(() => auto2.writers._unrefFastForward(ff))
+  const ff = auto2.writers.refFastForward(head.key)
+  t.teardown(() => auto2.writers.unrefFastForward(ff))
 
   ff.hint(head.length)
   await ff.wait(head.length)
@@ -739,7 +739,7 @@ test('an explicit move lands past a fast-forward stuck in flight, and cancels it
 
   // a head whose system nobody serves: the run boots and waits forever
   const bogus = b4a.alloc(32, 1)
-  const stuck = auto2.writers._refFastForward(bogus)
+  const stuck = auto2.writers.refFastForward(bogus)
   stuck.head = {
     key: bogus,
     length: 10,
@@ -764,18 +764,18 @@ test('an explicit move lands past a fast-forward stuck in flight, and cancels it
   t.is(await background, null, 'the one in flight was cancelled')
   t.is(stuck.inflating, null, 'nothing left in flight')
 
-  auto2.writers._unrefFastForward(stuck)
+  auto2.writers.unrefFastForward(stuck)
 })
 
 // the head in hand, then the dance onto it, the way a writer vouching for it would
 async function inflate(auto, head, opts) {
-  const ff = auto.writers._refFastForward(head.key)
+  const ff = auto.writers.refFastForward(head.key)
 
   try {
     ff.hint(head.length)
     await ff.wait(head.length)
     return await ff.inflate(opts)
   } finally {
-    auto.writers._unrefFastForward(ff)
+    auto.writers.unrefFastForward(ff)
   }
 }

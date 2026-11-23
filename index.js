@@ -1495,6 +1495,7 @@ module.exports = class Autobee extends ReadyResource {
     await this._bump(false)
   }
 
+  // TODO: a mode that force appends now, a sparse offline peer waits on reads
   async append(values, { optimistic = false } = {}) {
     if (this.closing) throw new Error('Autobee closed')
 
