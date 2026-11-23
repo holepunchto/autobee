@@ -689,9 +689,12 @@ test('remap scenarios - a landing accepted during a landing keeps the remap canc
 
   // a second landing is accepted while the first one is still being applied
   const applyFastForward = a._applyFastForward.bind(a)
+  const runFastForward = a._runFastForward.bind(a)
   const storeBoot = a._storeBoot.bind(a)
   let applying = false
   let second = null
+  let accept = null
+  const accepted = new Promise((resolve) => (accept = resolve))
   a._applyFastForward = async () => {
     applying = true
     try {
@@ -700,11 +703,25 @@ test('remap scenarios - a landing accepted during a landing keeps the remap canc
       applying = false
     }
   }
+  // acceptance, not completion: moveTo only resolves once its move applied
+  a._runFastForward = async (ff, opts = {}) => {
+    const moved = await runFastForward(ff, opts)
+    if (moved && opts.force && opts.rewind) accept()
+    return moved
+  }
   a._storeBoot = async () => {
     if (applying && second === null) {
       second = a.moveTo(older)
-      for (let i = 0; i < 1000 && a.fastForwardTo === null; i++) {
-        await new Promise((resolve) => setImmediate(resolve))
+      const outcome = await Promise.race([
+        accepted.then(() => null),
+        second.then(
+          () => new Error('it settled without being accepted'),
+          (err) => err
+        )
+      ])
+      if (outcome !== null) {
+        t.fail('the second landing was not accepted: ' + outcome.message)
+        return storeBoot()
       }
     }
     return storeBoot()
