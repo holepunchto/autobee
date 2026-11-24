@@ -169,11 +169,17 @@ test('fuzz - random writer weights, optimistic self-adds, eventual consistency',
 function connectSparse(state, entries) {
   const done = []
 
+  let sparse = false
   for (const entry of entries) {
-    if (entry.auto.stats.fastForwards === 0) continue
+    if (entry.auto.stats.fastForwards > 0) sparse = true
+  }
 
-    for (const other of state.pool) {
-      if (other !== entry) done.push(replicate(entry.auto, other.auto))
+  // whoever syncs with a sparse peer cannot get the history from it either
+  if (sparse) {
+    for (const entry of entries) {
+      for (const other of state.pool) {
+        if (other !== entry) done.push(replicate(entry.auto, other.auto))
+      }
     }
   }
 
@@ -182,8 +188,26 @@ function connectSparse(state, entries) {
   }
 }
 
+// connects the sparse peers among entries for as long as the returned function
+// is not called, including ones that fast-forward meanwhile: a landing that
+// was already inflating makes a peer sparse from then on
+function keepConnected(state, entries) {
+  const done = [connectSparse(state, entries)]
+
+  const onmove = function () {
+    done.push(connectSparse(state, entries))
+  }
+
+  for (const entry of entries) entry.auto.on('move-to', onmove)
+
+  return async function () {
+    for (const entry of entries) entry.auto.off('move-to', onmove)
+    for (const fn of done) await fn()
+  }
+}
+
 async function append(state, entry, value, opts) {
-  const done = connectSparse(state, [entry])
+  const done = keepConnected(state, [entry])
 
   try {
     await entry.auto.append(value, opts)
@@ -360,7 +384,7 @@ async function pairSync(state) {
   const b = state.rng.pick(rest)
 
   const done = replicate(a.auto, b.auto)
-  const doneSparse = connectSparse(state, [a, b])
+  const doneSparse = keepConnected(state, [a, b])
 
   // same optimistic nudge as the full round, scoped to the pair
   for (const hex of state.pendingOptimistic) {
