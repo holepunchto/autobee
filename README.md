@@ -266,7 +266,7 @@ Called as soon as the candidate's view head is known, and runs alongside the blo
 
 `view` is opened and closed through the `open` and `close` handlers, so don't build or close a db of your own. Reads through it wait for a peer for as long as the candidate stands, and fail once it is abandoned for a newer head or the db closes.
 
-Only reads through `view` are cancelled with the candidate. Anything else the handler awaits, such as other cores or your own network calls, is up to you to time out: an abandoned candidate does not wait for the handler to return.
+Only reads through `view` are cancelled with the candidate. Anything else the handler awaits, such as other cores or your own network calls, is up to you to time out: the fast-forward waits on the handler, and a candidate abandoned for a newer head cannot start on that head until it returns.
 
 #### `fastForward.boot`
 
