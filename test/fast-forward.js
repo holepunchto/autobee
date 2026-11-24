@@ -868,3 +868,44 @@ async function eventually(fn, ms = 2000) {
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
 }
+
+test('a second move for the same key replaces the first, it does not land on it', async function (t) {
+  const admin = await create(t)
+  for (let i = 0; i < 40; i++) await admin.append(encode({ value: 'old ' + i }))
+
+  // holds the first run in flight
+  let release = null
+  let warmups = 0
+
+  const mirror = await create(t, admin.key, {
+    isTrusted: () => false,
+    fastForward: false,
+    warmup() {
+      if (warmups++ > 0) return
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }
+  })
+
+  const landings = []
+  mirror.on('move-to', () => landings.push(mirror.system.flushes))
+
+  const done = replicate(admin, mirror)
+
+  mirror.moveTo({ key: admin.local.key, length: admin.local.length })
+  await eventually(() => release !== null)
+  t.ok(release !== null, 'the first move is in flight')
+
+  for (let i = 0; i < 60; i++) await admin.append(encode({ value: 'new ' + i }))
+
+  mirror.moveTo({ key: admin.local.key, length: admin.local.length })
+  await eventually(() => mirror.writers.moving !== null && mirror.writers.moving.length === 100)
+
+  release()
+  await eventually(() => landings.length > 0)
+
+  t.is(landings[0], admin.system.flushes, 'landed on the second head')
+
+  await done()
+})
