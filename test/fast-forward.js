@@ -814,3 +814,57 @@ test('a move requested while a drain is running still lands', async function (t)
 
   await done()
 })
+
+test('a newer head closes the view the trusted head hook was reading', async function (t) {
+  const admin = await create(t)
+  const writer = await create(t, admin.key)
+
+  await admin.append(encode({ addWriter: writer.local.id }))
+  await replicateAndSync(admin, writer)
+
+  await writer.append(encode({ value: 'first' }))
+  await replicateAndSync(admin, writer)
+
+  let reading = 0
+
+  // the writer's views are only on the writer, which the mirror never meets
+  const mirror = await create(t, admin.key, {
+    isTrusted: () => false,
+    async mostRecentTrusted(target, reference) {
+      if (reference === null) return null
+
+      reading++
+
+      try {
+        await target.get(b4a.from('anything'))
+      } finally {
+        reading--
+      }
+
+      return null
+    }
+  })
+
+  const done = replicate(admin, mirror)
+  await sync(admin, mirror)
+  await eventually(() => reading === 1)
+
+  t.is(reading, 1, 'the hook waits on the view nobody serves')
+
+  await writer.append(encode({ value: 'second' }))
+  await replicateAndSync(admin, writer)
+  await sync(admin, mirror)
+  await eventually(() => false, 500)
+
+  t.is(reading, 1, 'the read on the replaced head was let go')
+
+  await done()
+})
+
+async function eventually(fn, ms = 2000) {
+  const end = Date.now() + ms
+
+  while (!fn() && Date.now() < end) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
