@@ -20,9 +20,11 @@ test('boot failure is catchable via ready()', async function (t) {
 
   await t.exception(auto.ready(), 'ready() rejects on boot failure')
 
-  // give any stray internal rejections a tick to fire - if the fix is missing
-  // an uncaught rejection here aborts the whole test run
-  await new Promise((resolve) => setTimeout(resolve, 250))
+  // give any stray internal rejections a chance to fire - if the fix is missing
+  // an uncaught rejection here aborts the whole test run. These are already-
+  // pending promise chains (not waiting on further I/O), so a few macrotask
+  // ticks drain them without needing a fixed wall-clock sleep.
+  for (let i = 0; i < 10; i++) await new Promise(setImmediate)
 
   await auto.close()
   t.pass('no uncaught rejection escaped the failed boot')
