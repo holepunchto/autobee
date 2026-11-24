@@ -381,3 +381,21 @@ test('cores - what a mirror should pin', async function (t) {
   t.alike(anchorless.writers, [auto3.local.key, auto1.key], 'no trusted head pins the bootstrap')
   t.is(anchorless.views.length, 0, 'but no views')
 })
+
+test('cores - our views are there straight after a reopen', async function (t) {
+  const storage = await t.tmp()
+
+  const auto1 = await create(t, null, { storage })
+  for (let i = 0; i < 5; i++) await auto1.append(encode({ value: i }))
+
+  const before = await auto1.cores()
+  t.is(before.views.length, 2, 'system and view')
+
+  const key = auto1.key
+  await auto1.close()
+
+  const auto2 = await create(t, key, { storage })
+  const after = await auto2.cores()
+
+  t.alike(after.views, before.views, 'same views without waiting for anything')
+})

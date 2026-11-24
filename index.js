@@ -319,8 +319,10 @@ module.exports = class Autobee extends ReadyResource {
       result.writers.push(this.local.key)
 
       if (await this.trusted.isTrusted(this.local.key, this._workingView.view)) {
-        const localViews = await this.writers.localWriter.views()
-        for (const { key } of localViews) {
+        // views() answers from the loaded head, after a reopen it is not loaded yet
+        await this.writers.getLatestLocalOplog()
+
+        for (const { key } of this.writers.localWriter.views()) {
           views.set(b4a.toString(key, 'hex'), key)
         }
       }
