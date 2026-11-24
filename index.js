@@ -819,12 +819,6 @@ module.exports = class Autobee extends ReadyResource {
       this._wakeup.hint({ key: head.key, length: head.length || 1 })
     }
 
-    if (this._moveTo !== null) {
-      const head = this._moveTo
-      this._moveTo = null
-      this.writers.moveTo(head)
-    }
-
     if (this._remapper !== null && this._remapper.finished && !this._remapFailed) {
       await this._finishRemap()
     }
@@ -841,6 +835,12 @@ module.exports = class Autobee extends ReadyResource {
         // Ensure we catch updates during the drain (i.e. setLocal will bump)
         if (this._updateLocalCore !== null) {
           await this._rotateLocalWriter(this._updateLocalCore)
+        }
+
+        if (this._moveTo !== null) {
+          const head = this._moveTo
+          this._moveTo = null
+          this.writers.moveTo(head)
         }
 
         try {

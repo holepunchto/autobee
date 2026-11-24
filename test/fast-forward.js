@@ -779,3 +779,38 @@ async function inflate(auto, head, opts) {
     auto.writers.unrefFastForward(ff)
   }
 }
+
+test('a move requested while a drain is running still lands', async function (t) {
+  const admin = await create(t)
+  for (let i = 0; i < 30; i++) await admin.append(encode({ value: 'old ' + i }))
+
+  let armed = false
+
+  const mirror = await create(t, admin.key, {
+    isTrusted: () => false,
+    update() {
+      if (!armed) return
+      armed = false
+      mirror.moveTo({ key: admin.local.key, length: admin.local.length })
+    }
+  })
+
+  const done = replicate(admin, mirror)
+  await sync(admin, mirror)
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('the move stayed parked')), 5000)
+    mirror.once('move-to', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  // the update handler runs inside the drain that applies this
+  armed = true
+  await admin.append(encode({ value: 'last' }))
+
+  await t.execution(moved, 'the move landed')
+
+  await done()
+})
