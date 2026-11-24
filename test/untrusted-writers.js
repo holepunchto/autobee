@@ -15,11 +15,10 @@ async function length(auto, key) {
   return info ? info.length : 0
 }
 
-// parked: the untrusted writer cap was dropped with the writers rewrite and is
-// to be rethought, these describe what it has to do when it comes back
-test.skip('untrusted-writers - an untrusted peer drops new writers past the limit', async function (t) {
+test('untrusted-writers - an untrusted peer drops new writers past the limit', async function (t) {
   const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key, { isTrusted: () => false, maxUntrustedWriters: 3 })
+  const auto2 = await create(t, auto1.key, { isTrusted: () => false })
+  auto2.writers.maxUntrustedWriters = 3
   const auto3 = await create(t, auto1.key)
 
   const keys = randomWriters(3)
@@ -41,9 +40,10 @@ test.skip('untrusted-writers - an untrusted peer drops new writers past the limi
   t.is(await length(auto2, auto3.local.key), 1, 'the mirror follows the dropped writer')
 })
 
-test.skip('untrusted-writers - a trusted peer opens past the limit', async function (t) {
+test('untrusted-writers - a trusted peer opens past the limit', async function (t) {
   const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key, { maxUntrustedWriters: 2 })
+  const auto2 = await create(t, auto1.key)
+  auto2.writers.maxUntrustedWriters = 2
 
   const keys = randomWriters(3)
   for (const key of keys) await auto1.append(encode({ addWriter: ID.encode(key) }))
@@ -57,7 +57,7 @@ test.skip('untrusted-writers - a trusted peer opens past the limit', async funct
   t.is(auto2.stats.writersClosed, auto2.stats.writersOpened, 'every opened writer is closed')
 })
 
-test.skip('untrusted-writers - a stalled mirror fast-forwards once the admin moves on', async function (t) {
+test('untrusted-writers - a stalled mirror fast-forwards once the admin moves on', async function (t) {
   const admin = await create(t, {
     mostRecentTrusted: () => ({ key: admin.local.key, length: admin.local.length })
   })
@@ -76,9 +76,9 @@ test.skip('untrusted-writers - a stalled mirror fast-forwards once the admin mov
   // trust nothing at first so the mirror applies rather than fast-forwards
   let trustAdmin = false
   const mirror = await create(t, admin.key, {
-    isTrusted: (key) => trustAdmin && b4a.equals(key, admin.local.key),
-    maxUntrustedWriters: 3
+    isTrusted: (key) => trustAdmin && b4a.equals(key, admin.local.key)
   })
+  mirror.writers.maxUntrustedWriters = 3
 
   const done = replicate(admin, mirror)
 
