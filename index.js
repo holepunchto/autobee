@@ -257,6 +257,7 @@ module.exports = class Autobee extends ReadyResource {
 
   async holdAcks() {
     this._ackHolds++
+    if (!this._bootGuard.opened) await this._bootGuard.ready()
     if (this.writers.localWriter.pending !== null) await this.update()
   }
 
