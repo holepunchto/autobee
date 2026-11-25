@@ -90,8 +90,9 @@ test('acking - holds delay acks until the last is released', async function (t) 
 
   t.is(auto2.local.length, length, 'no acks while one hold is left')
 
+  const acked = new Promise((resolve) => auto2.local.once('append', resolve))
   auto2.releaseAcks()
-  await auto2.update()
+  await acked
 
   t.is(auto2.local.length, length + 1, 'acked once released')
 
