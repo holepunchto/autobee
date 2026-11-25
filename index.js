@@ -159,6 +159,7 @@ module.exports = class Autobee extends ReadyResource {
     this._remapFailed = false
     this._remapSettle = handlers.remapSettle // override in tests
     this._forceAck = false
+    this._ackHolds = 0
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
@@ -252,6 +253,17 @@ module.exports = class Autobee extends ReadyResource {
     this._ackThreshold = threshold
 
     if (this._acking) this.bumpSoon()
+  }
+
+  async holdAcks() {
+    this._ackHolds++
+    if (this.writers.localWriter.pending !== null) await this.update()
+  }
+
+  releaseAcks() {
+    if (this._ackHolds === 0) return
+    this._ackHolds--
+    if (this._ackHolds === 0 && (this._acking || this._forceAck)) this.bumpSoon()
   }
 
   isLocalTrusted() {
@@ -1410,6 +1422,8 @@ module.exports = class Autobee extends ReadyResource {
       if ((await this._flushesBehind()) < this._ackThreshold) return false
       if (await this._allHeadsTrusted()) return false
     }
+
+    if (this._ackHolds > 0) return false
 
     const links = this.system.getLinks(this.local.key)
     const now = this._now()

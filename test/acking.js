@@ -61,6 +61,105 @@ test('acking - appends a null node once we fall behind', async function (t) {
   t.ok(await same(auto1, auto2), 'peers converge')
 })
 
+test('acking - holds delay acks until the last is released', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key, {
+    ackThreshold: 1,
+    isTrusted: (key) => !b4a.equals(key, auto1.local.key)
+  })
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ msg: 'hello' }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.holdAcks()
+  await auto2.holdAcks()
+  const length = auto2.local.length
+
+  for (let i = 0; i < 3; i++) {
+    await auto1.append(encode({ msg: 'msg' + i }))
+    await replicateAndSync(auto1, auto2)
+  }
+
+  t.is(auto2.local.length, length, 'no acks while held')
+
+  auto2.releaseAcks()
+  await auto2.update()
+
+  t.is(auto2.local.length, length, 'no acks while one hold is left')
+
+  auto2.releaseAcks()
+  await auto2.update()
+
+  t.is(auto2.local.length, length + 1, 'acked once released')
+
+  const oplog = await auto2.writers.getLatestLocalOplog()
+  t.is(oplog.value, null, 'ack node is a null node')
+})
+
+test('acking - appends land where counted while held', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key, {
+    ackThreshold: 1,
+    isTrusted: (key) => !b4a.equals(key, auto1.local.key)
+  })
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ msg: 'hello' }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.holdAcks()
+  const length = auto2.local.length
+
+  for (let i = 0; i < 3; i++) {
+    await auto1.append(encode({ msg: 'msg' + i }))
+    await replicateAndSync(auto1, auto2)
+  }
+
+  await auto2.append(encode({ msg: 'mine' }))
+  t.is(auto2.local.length, length + 1, 'append lands at the counted length')
+
+  const oplog = await auto2.writers.getLatestLocalOplog()
+  t.alike(oplog.value, encode({ msg: 'mine' }), 'local node is the append')
+
+  auto2.releaseAcks()
+})
+
+test('acking - a hold waits for a queued ack to land', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key, {
+    ackThreshold: 1,
+    isTrusted: (key) => !b4a.equals(key, auto1.local.key)
+  })
+
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  await auto2.append(encode({ msg: 'hello' }))
+  await replicateAndSync(auto1, auto2)
+
+  const length = auto2.local.length
+  const held = new Promise((resolve) => {
+    auto2.once('appending', () => resolve(auto2.holdAcks()))
+  })
+
+  await auto1.append(encode({ msg: 'behind' }))
+  const synced = replicateAndSync(auto1, auto2)
+  await held
+
+  t.is(auto2.local.length, length + 1, 'queued ack landed')
+
+  await synced
+  await auto2.append(encode({ msg: 'mine' }))
+  t.is(auto2.local.length, length + 2, 'append lands at the counted length')
+
+  auto2.releaseAcks()
+})
+
 test('acking - stops acking when toggled off', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key, {
