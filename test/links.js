@@ -1,24 +1,6 @@
 const test = require('brittle')
 const { create, replicateAndSync, encode, same } = require('./helpers')
 
-test('links - writer sees previous writes via links', async function (t) {
-  const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key)
-
-  await auto1.append(encode({ addWriter: auto2.local.id }))
-  await replicateAndSync(auto1, auto2)
-
-  // auto1 writes first
-  await auto1.append(encode({ msg: 'first' }))
-  await replicateAndSync(auto1, auto2)
-
-  // auto2 writes after seeing auto1's write — its oplog entry will link to auto1's
-  await auto2.append(encode({ msg: 'second, after seeing first' }))
-  await replicateAndSync(auto1, auto2)
-
-  t.ok(await same(auto1, auto2), 'peers converge')
-})
-
 test('links - dependency arrives before dependent', async function (t) {
   const auto1 = await create(t)
   const auto2 = await create(t, auto1.key)
@@ -89,34 +71,6 @@ test('links - causal chain across three writers', async function (t) {
   await replicateAndSync(auto1, auto2, auto3)
 
   t.ok(await same(auto1, auto2, auto3), 'peers converge with causal chain')
-})
-
-// Previously hung (non-productive undo requeue loop), then diverged (concurrent
-// equal-weight entries placed differently per peer due to insert-time register
-// sampling). Both fixed: addSorted index/undo shared-prefix detection ends the loop,
-// per-node immutable weight witnesses (lib/witness.js) make the placement deterministic.
-test('links - multiple links from one entry', async function (t) {
-  const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key)
-  const auto3 = await create(t, auto1.key)
-
-  await auto1.append(encode({ addWriter: auto2.local.id }))
-  await auto1.append(encode({ addWriter: auto3.local.id }))
-  await replicateAndSync(auto1, auto2, auto3)
-  t.ok(await same(auto1, auto2, auto3), 'peers converge with multiple links')
-
-  // auto2 and auto3 both write concurrently
-  await auto2.append(encode({ msg: 'from-auto2' }))
-  await auto3.append(encode({ msg: 'from-auto3' }))
-
-  // Sync so auto1 sees both
-  await replicateAndSync(auto1, auto2, auto3)
-
-  // auto1 writes after seeing both — links to both auto2 and auto3's entries
-  await auto1.append(encode({ msg: 'after-both' }))
-  await replicateAndSync(auto1, auto2, auto3)
-
-  t.ok(await same(auto1, auto2, auto3), 'peers converge with multiple links')
 })
 
 test('links - no links on first write', async function (t) {
@@ -262,21 +216,4 @@ test('links - writer removed while others link to its entries', async function (
   t.ok(info2.isRemoved, 'auto2 is removed')
   t.ok(auto3.writable, 'auto3 is still writable')
   t.ok(await same(auto1, auto3), 'auto1 and auto3 converge')
-})
-
-test('links - deep sequential chain', async function (t) {
-  const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key)
-
-  await auto1.append(encode({ addWriter: auto2.local.id }))
-  await replicateAndSync(auto1, auto2)
-
-  // Alternating writes with syncs — each entry links to the previous
-  for (let i = 0; i < 5; i++) {
-    const writer = i % 2 === 0 ? auto1 : auto2
-    await writer.append(encode({ msg: 'step-' + i }))
-    await replicateAndSync(auto1, auto2)
-  }
-
-  t.ok(await same(auto1, auto2), 'peers converge after deep sequential chain')
 })

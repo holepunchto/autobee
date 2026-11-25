@@ -19,8 +19,31 @@ test('close settles while a drain waits on unavailable blocks', async function (
   const to = { key: auto1.local.key, length: auto1.local.length }
   const auto2 = await create(t, auto1.key, { fastForward: { boot: { head: to } } })
 
+  // wait for the drain to actually reach its "awaiting an unavailable block"
+  // state before racing close() against it. A fixed number of event-loop
+  // turns doesn't guarantee this: boot has to open another bee first, and
+  // hypercore's read path waits on storage before it even issues the
+  // network request, so a slow disk can mean close() runs before anything
+  // is actually stuck. Hook onwait on every core any store opens from here
+  // on instead, and wait for the first one to actually fire - patched on the
+  // prototype since the view/system bees open through their own namespaced
+  // session, not auto2.store directly.
+  const Corestore = auto2.store.constructor
+  const get = Corestore.prototype.get
+  const waiting = new Promise((resolve) => {
+    Corestore.prototype.get = function (...args) {
+      const core = get.apply(this, args)
+      if (!core.onwait) core.onwait = resolve
+      return core
+    }
+  })
+  t.teardown(() => {
+    if (Corestore.prototype.get !== get) Corestore.prototype.get = get
+  })
+
   auto2.update().catch(() => {})
-  await new Promise((resolve) => setTimeout(resolve, 200))
+  await waiting
+  Corestore.prototype.get = get
 
   let timer = null
   const started = Date.now()

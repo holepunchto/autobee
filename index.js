@@ -25,7 +25,7 @@ const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
 const TrustedPeers = require('./lib/trusted.js')
-const { Remapper } = require('./lib/remap.js')
+const { Remapper, recoveryPeersConfigured } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
 const UpdateChanges = require('./lib/updates.js')
 const migrations = require('./lib/migrations.js')
@@ -171,6 +171,7 @@ module.exports = class Autobee extends ReadyResource {
     this.wakeupCapability = null
     this._wakeup = new Wakeup(this, handlers)
     this.previousDrain = 0
+    this._storedPreviousDrain = 0
 
     this._catchupMigratedNodes = null
     this._migrating = false
@@ -192,6 +193,11 @@ module.exports = class Autobee extends ReadyResource {
   // until the store is on the remapped generation, by its own remap or a landing
   get remapping() {
     return !this.remapped
+  }
+
+  // the commit of a remap is the only thing a landing waits for
+  get committing() {
+    return this._remapper !== null && this._remapper.committing
   }
 
   get writable() {
@@ -255,6 +261,7 @@ module.exports = class Autobee extends ReadyResource {
       this.id = result.bootstrap.core.id
       this.encryptionKey = result.encryptionKey
       this.previousDrain = result.previousDrain
+      this._storedPreviousDrain = result.previousDrain
       this.local = result.local
 
       if (this.encrypted && this.encryptionKey === null) {
@@ -309,7 +316,7 @@ module.exports = class Autobee extends ReadyResource {
   // the cores a mirror should pin: our writer core, our views when we are
   // trusted, and (with wait) the most recent trusted head so a mirror that
   // forgets to add one still pins a valid entrypoint
-  async cores({ wait = true, local = true, all = false } = {}) {
+  async cores({ wait = true, local = true, all = false, recursive = false, timeout } = {}) {
     if (!this._bootGuard.opened) await this._bootGuard.ready()
 
     const result = { key: this.key, views: null, writers: [] }
@@ -332,7 +339,7 @@ module.exports = class Autobee extends ReadyResource {
       const head = await this.trusted.mostRecentTrusted(this.view, null)
 
       if (head && (!local || !b4a.equals(head.key, this.local.key))) {
-        const oplog = await this._resolveOplogHint(head.key, head.length)
+        const oplog = await this._resolveOplogHint(head.key, head.length, { timeout })
         if (oplog && oplog.op.views) {
           const skey = oplog.op.views.system.key
           const vkey = oplog.op.views.view.key
@@ -352,8 +359,8 @@ module.exports = class Autobee extends ReadyResource {
 
       if (all) {
         const [viewCores, systemCores] = await Promise.all([
-          this.bee.cores({ local: false }),
-          this.system.bee.cores({ local: false })
+          this.bee.cores({ local: false, recursive, timeout }),
+          this.system.bee.cores({ local: false, recursive, timeout })
         ])
 
         for (const key of viewCores) {
@@ -692,12 +699,24 @@ module.exports = class Autobee extends ReadyResource {
       return
     }
 
+    // without recovery peers nothing the remap reads can be trusted: not
+    // attempted, and said once until a landing asks again
+    if (!recoveryPeersConfigured()) {
+      if (!this._remapFailed) {
+        this._remapFailed = true
+        this._warn(new Error('No recovery peers configured'))
+      }
+      return
+    }
+
     const remapper = new Remapper(this)
     this._remapper = remapper
+    this._remapFailed = false
 
     // a destroyed remap fails its reads after the fact, which says nothing
+    // a remap that was replaced meanwhile fails on its own, not the store's
     const failed = (err) => {
-      if (remapper.destroyed || this.closing) return
+      if (remapper.destroyed || this.closing || this._remapper !== remapper) return
       this._remapFailed = true
       this._warn(err)
     }
@@ -709,24 +728,38 @@ module.exports = class Autobee extends ReadyResource {
   // a landing destroys the remap, so what the walk found is all there is
   async _finishRemap() {
     const remapper = this._remapper
-    this._remapper = null
 
-    if (remapper.destroyed || this.remapped) return
-
-    const mappings = remapper.mappings
-
-    if (mappings.views.length === 0 && mappings.systems.length === 0) {
-      this._onremapped(null, true)
+    if (this.remapped) {
+      this._remapper = null
       return
     }
 
-    if (mappings.views.length > 0) {
-      await this._workingBee.write({ mappings: mappings.views }).flush()
-      this.bee.move(this._workingBee.head())
-    }
+    const mappings = remapper.mappings
 
-    this.system.mappings = mappings.systems
-    this._onremapped(mappings, true)
+    // the remap stays in place until the claim, so an old head is still refused
+    try {
+      if (mappings.views.length === 0 && mappings.systems.length === 0) {
+        this._onremapped(null, true)
+        return
+      }
+
+      if (mappings.views.length > 0) {
+        await this._workingBee.write({ mappings: mappings.views }).flush()
+        if (remapper.destroyed) return
+
+        // the table may have been known before the write (a run interrupted
+        // before its claim), in which case the root is still the original:
+        // moving onto the head resolves it through the table
+        const head = this._workingBee.head()
+        this._workingBee.move(head)
+        this.bee.move(head)
+      }
+
+      this.system.mappings = mappings.systems
+      this._onremapped(mappings, true)
+    } finally {
+      if (this._remapper === remapper) this._remapper = null
+    }
   }
 
   _onremapped(mappings, ack) {
@@ -821,7 +854,7 @@ module.exports = class Autobee extends ReadyResource {
       this._wakeup.hint({ key: head.key, length: head.length || 1 })
     }
 
-    if (this._remapper !== null && this._remapper.finished && !this._remapFailed) {
+    if (this._remapper !== null && this._remapper.mappings !== null && !this._remapFailed) {
       await this._finishRemap()
     }
     if (!this.remapped && this._remapper === null && this._nextFastForward() === null) {
@@ -1455,13 +1488,26 @@ module.exports = class Autobee extends ReadyResource {
     for (const { key } of changed) this.writers.changed(key)
   }
 
+  _hasUnappliedWriters() {
+    for (const w of this.writers.active.values()) {
+      if (w === this.writers.localWriter || w.isFrozen || w.core === null) continue
+      if (w.length < w.core.length) return true
+    }
+
+    return false
+  }
+
   async _storeBoot() {
     const proms = []
+
+    if (!this._hasUnappliedWriters()) {
+      this._storedPreviousDrain = this.previousDrain
+    }
 
     proms.push(
       this.local.setUserData(
         'autobee/previous-drain',
-        encoding.encodePreviousDrain(this.previousDrain)
+        encoding.encodePreviousDrain(this._storedPreviousDrain)
       )
     )
 
@@ -1622,12 +1668,20 @@ module.exports = class Autobee extends ReadyResource {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
-    const { head } = ff.inflated
+    const { head, version } = ff.inflated
 
-    // a remapped head replaces whatever we were about to remap ourselves
+    const isRemap =
+      this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
+
+    // a remapped head replaces whatever we were about to remap ourselves, as
+    // does a forced move during the commit: its walk no longer covers the head
     if (this._remapper !== null) {
-      this._remapper.destroy()
-      this._remapper = null
+      if (isRemap || this._remapper.committing) {
+        this._remapper.destroy()
+        this._remapper = null
+      } else {
+        this._remapper.cancel()
+      }
     }
 
     const from = this.system.bee.head()
@@ -1642,6 +1696,9 @@ module.exports = class Autobee extends ReadyResource {
 
     if (this.system.version < MAPPED_AUTOBEE_VERSION) this.remapped = false
     this._remapFailed = false
+
+    // a remap that already ended is replaced, a cancelled one picks up from here
+    if (this._remapper !== null && this._remapper.finished) this._remapper = null
     if (!this.remapped && this._remapper === null) this._startRemap()
 
     this._approvalCheck = true
@@ -1658,6 +1715,12 @@ module.exports = class Autobee extends ReadyResource {
     await this._storeBoot()
 
     await this._updateAcking()
+
+    // the landing cancelled the remap, it picks up from here unless another
+    // landing is ready. the guards _startRemap has are not needed: a remap only
+    // exists once the boot migration is over, and a migration the landing
+    // brought along was run above, before the remap is touched
+    if (this._remapper !== null && this._nextFastForward() === null) this._remapper.restart()
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)

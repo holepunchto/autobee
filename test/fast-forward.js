@@ -13,7 +13,8 @@ const {
   encode,
   decode,
   dump,
-  moveTo
+  moveTo,
+  apply
 } = require('./helpers')
 
 // predates the moveTo removal
@@ -909,3 +910,82 @@ test('a second move for the same key replaces the first, it does not land on it'
 
   await done()
 })
+
+test('own writes applied but not flushed when a fast-forward lands are reapplied', async function (t) {
+  const storage = await t.tmp()
+
+  let hold = null
+  let onHold = null
+
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key, {
+    storage,
+    async apply(nodes, view, host) {
+      if (hold !== null && nodes.some((node) => decode(node.value).hold)) {
+        onHold()
+        await hold
+      }
+      await apply(nodes, view, host)
+    }
+  })
+
+  await auto1.append(encode({ addWriter: auto2.local.id, weight: 1 }))
+  await replicateAndSync(auto1, auto2)
+  t.ok(auto2.writable, 'auto2 is a writer')
+
+  for (let i = 0; i < 8; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  let release = null
+  const held = new Promise((resolve) => (onHold = resolve))
+  hold = new Promise((resolve) => (release = resolve))
+
+  const writes = [
+    auto2.append(encode({ value: 'b0' })),
+    auto2.append(encode({ value: 'b1', hold: true }))
+  ]
+  await held
+  writes.push(auto2.append(encode({ value: 'b2' })), auto2.append(encode({ value: 'b3' })))
+
+  t.teardown(replicate(auto1, auto2))
+  // requested while apply is held, the drain picks it up with writes still unflushed
+  const moved = moveTo(auto2, { key: auto1.local.key, length: auto1.local.length })
+  hold = null
+  release()
+
+  t.ok(await moved, 'auto2 fast-forwarded')
+  await Promise.all(writes)
+  await sync(auto1, auto2)
+
+  t.alike([...(await appliedFrom(auto1, auto2))].sort(), [1, 2, 3, 4], 'auto1 applied all of auto2')
+  t.alike(
+    [...(await appliedFrom(auto2, auto2))].sort(),
+    [1, 2, 3, 4],
+    'auto2 applied all of its own writes'
+  )
+  t.ok(await same(auto1, auto2), 'same view')
+
+  await auto2.close()
+  const reopened = await create(t, auto1.key, { storage })
+  t.teardown(replicate(auto1, reopened))
+  await reopened.append(encode({ value: 'b4' }))
+  await sync(auto1, reopened)
+
+  t.alike(
+    [...(await appliedFrom(reopened, reopened))].sort(),
+    [1, 2, 3, 4, 5],
+    'reopened, still has all its own writes'
+  )
+  t.ok(await same(auto1, reopened), 'same view after reopen')
+})
+
+async function appliedFrom(auto, writer) {
+  const prefix = b4a.toString(writer.local.key, 'hex') + '.'
+  const lengths = new Set()
+  for await (const { key, value } of auto.view.createReadStream()) {
+    const oplog = b4a.toString(value)
+    if (b4a.toString(key).startsWith('#') && oplog.startsWith(prefix)) {
+      lengths.add(Number(oplog.slice(prefix.length)))
+    }
+  }
+  return lengths
+}
