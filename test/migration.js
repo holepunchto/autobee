@@ -5,12 +5,8 @@ const uncaughts = require('uncaughts')
 const os = require('os')
 
 const Autobee = require('../index.js')
-const {
-  AUTOBEE_VERSION,
-  LEGACY_AUTOBASE_VERSION,
-  MAPPED_AUTOBEE_VERSION
-} = require('../lib/constants.js')
 const encoding = require('../lib/encoding.js')
+const topo = require('../lib/topo.js')
 const { AutobeeEncryption } = require('../lib/encryption.js')
 const { decodeBlock } = require('hyperbee2/lib/encoding.js')
 const { replicate, sync, recoveryPeers, remapped, caughtUp, moveTo } = require('./helpers')
@@ -478,278 +474,6 @@ test(
   }
 )
 
-// parked: boots from the legacy system pointer, which is gone
-test.skip(
-  'migration - 2) a fresh peer boots from the legacy system pointer, triggering ff migration',
-  { skip: skipFF },
-  async function (t) {
-    const bState = {}
-    const b = await openFixture(t, 'b', bState, { serve: false })
-
-    const legacy = {
-      key: b4a.from('6fd1e0b67c3946a8665cbd1f1bca90aad868def590d83f6e6dc8ca64bcd92de6', 'hex'),
-      length: 0
-    }
-
-    const joinerStore = new Corestore(await t.tmp())
-    const joinerState = {}
-    const joiner = makeAutobee(joinerStore, joinerState, { fastForward: { boot: { legacy } } })
-    t.teardown(() => joiner.close())
-
-    const done = replicate(b, joiner)
-
-    await joiner.ready()
-
-    await sync(b, joiner)
-
-    t.is(joinerState.calls, 1, 'ff-triggered migration called the migrate handler once')
-    t.is(joinerState.length, B_CONFIRMED)
-
-    t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
-    await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
-
-    await done()
-  }
-)
-
-test(
-  'migration - a remapped store landing on a legacy head remaps again',
-  { skip: skipFF },
-  async function (t) {
-    const b = await openFixture(t, 'b', {}, { serve: false })
-
-    const joiner = makeAutobee(new Corestore(await t.tmp()), {})
-    t.teardown(() => joiner.close())
-
-    await joiner.ready()
-    await joiner.update()
-    t.ok(joiner.remapped, 'a fresh store reads current cores only')
-
-    const done = replicate(b, joiner)
-    t.teardown(() => done())
-
-    t.ok(await moveTo(joiner, safeHeadOfB(b)), 'landed on the legacy head')
-    t.ok(joiner.remapping, 'the landed system is walked before it is claimed')
-    t.ok(joiner.system.version < MAPPED_AUTOBEE_VERSION, 'and not claimed meanwhile')
-  }
-)
-
-// parked: boots from the legacy system pointer, which is gone
-test.skip(
-  'migration - 4) a fresh peer boots straight from a bare legacy system key',
-  { skip: skipFF },
-  async function (t) {
-    const bState = {}
-    const b = await openFixture(t, 'b', bState, { serve: false })
-
-    // what an old (pre-migration) invite carries: the legacy system key, no length
-    const systemKey = b4a.from(
-      '6fd1e0b67c3946a8665cbd1f1bca90aad868def590d83f6e6dc8ca64bcd92de6',
-      'hex'
-    )
-
-    const joinerStore = new Corestore(await t.tmp())
-    const joinerState = {}
-    const joiner = makeAutobee(joinerStore, joinerState, {
-      fastForward: { boot: { key: systemKey } }
-    })
-    t.teardown(() => joiner.close())
-
-    const done = replicate(b, joiner)
-
-    await joiner.ready()
-    await sync(b, joiner)
-
-    t.is(joinerState.calls, 1, 'boot from the bare legacy key called the migrate handler once')
-    t.is(joinerState.length, B_CONFIRMED)
-
-    t.is(await messageAt(joiner, B_CONFIRMED - 1), 'm198')
-    await sameContent(t, joiner, b, B_CONFIRMED, 'joiner vs b')
-
-    await done()
-  }
-)
-
-// parked: boots from the legacy system pointer, which is gone
-test.skip(
-  'migration - a peer left on a legacy boot record migrates again on restart',
-  { skip: skipFF },
-  async function (t) {
-    const bState = {}
-    const b = await openFixture(t, 'b', bState, { serve: false })
-
-    const systemKey = b4a.from(
-      '6fd1e0b67c3946a8665cbd1f1bca90aad868def590d83f6e6dc8ca64bcd92de6',
-      'hex'
-    )
-
-    const dir = await t.tmp()
-    const joinerStore = new Corestore(dir)
-    const joinerState = {}
-    const joiner = makeAutobee(joinerStore, joinerState, {
-      fastForward: { boot: { key: systemKey } }
-    })
-
-    const done = replicate(b, joiner)
-
-    await joiner.ready()
-    await joiner.flush()
-
-    // it booted onto the legacy head and stops there: b has migrated, but the
-    // joiner has not caught up to b's autobee system
-    t.is(joinerState.calls, 1, 'migrate ran once for the head the joiner booted')
-    t.ok(joiner.system.version <= LEGACY_AUTOBASE_VERSION, 'still on a legacy system')
-
-    await done()
-    await joiner.close()
-    await joinerStore.close()
-
-    // no local autobase storage to re-detect, so the stored legacy boot record
-    // is the only thing that can drive this - and it does, offline
-    const restartStore = new Corestore(dir)
-    const restartState = {}
-    const restarted = makeAutobee(restartStore, restartState)
-    t.teardown(() => restarted.close())
-
-    await restarted.ready()
-
-    t.is(restartState.calls, 1, 'migrate ran again on the restart')
-    t.alike(
-      restarted.system.view,
-      restartState.views.get(LEGACY_VIEW_NAME),
-      'the legacy view is adopted again'
-    )
-    t.is(await messageAt(restarted, B_CONFIRMED - 1), 'm198')
-  }
-)
-
-// parked: boots from the legacy system pointer, which is gone
-test.skip(
-  'migration - 5) a fresh peer boots from the newest legacy system key',
-  { skip: skipFF },
-  async function (t) {
-    const fixture = path.join(__dirname, 'fixtures/migration/autobase-rotation-v7.28.1-linux')
-    const meta = JSON.parse(await fs.readFile(path.join(fixture, 'meta.json')))
-
-    const serverDir = await t.tmp()
-    await fs.cp(path.join(fixture, 'a'), serverDir, { recursive: true })
-
-    const serverStore = new Corestore(serverDir, { allowBackup: true })
-    t.teardown(() => serverStore.close())
-
-    const bootstrap = b4a.from(meta.bootstrap, 'hex')
-
-    const joinerStore = new Corestore(await t.tmp())
-    const joinerState = {}
-    let joiner
-    joiner = new Autobee(joinerStore, bootstrap, {
-      remapSettle: 200,
-      apply,
-      migrate: migrateHandler(joinerStore, joinerState, bootstrap),
-      legacyViews: [LEGACY_VIEW_NAME],
-      encrypted: true,
-      encryptionKey: SECRET_KEY,
-      // the newest legacy generation - chasing rotations from an older
-      // (e.g. gen0) key is no longer supported
-      fastForward: { boot: { key: b4a.from(meta.finalSystemKey, 'hex') } }
-    })
-    t.teardown(() => joiner.close())
-
-    const s1 = serverStore.replicate(true)
-    const s2 = joinerStore.replicate(false)
-    s1.pipe(s2).pipe(s1)
-    recoveryPeers(s1, s2)
-    t.teardown(() => {
-      s1.destroy()
-      s2.destroy()
-    })
-
-    await joiner.ready()
-    await joiner.flush()
-
-    await joiner.update()
-
-    for (let i = 0; i < meta.totalMessages; i++) {
-      t.is(await messageAt(joiner, i), meta.messages[i], `message ${i} matches`)
-    }
-  }
-)
-
-// parked: boots from the legacy system pointer, which is gone
-test.skip(
-  'migration - 6) after a writer moves to autobee an old key fast-forwards onto its autobee head',
-  { skip: skipFF },
-  async function (t) {
-    const fixture = path.join(__dirname, 'fixtures/migration/autobase-rotation-v7.28.1-linux')
-    const meta = JSON.parse(await fs.readFile(path.join(fixture, 'meta.json')))
-    const bootstrap = b4a.from(meta.bootstrap, 'hex')
-
-    // writer a migrates its legacy storage to autobee and keeps writing,
-    // burying its legacy oplog stamps under autobee-format nodes
-    const aDir = await t.tmp()
-    await fs.cp(path.join(fixture, 'a'), aDir, { recursive: true })
-
-    const aStore = new Corestore(aDir, { allowBackup: true })
-    await servePeers(t, aStore, fixture, bootstrap)
-    const aState = {}
-    let a
-    a = new Autobee(aStore, bootstrap, {
-      remapSettle: 200,
-      apply,
-      migrate: migrateHandler(aStore, aState, bootstrap),
-      legacyViews: [LEGACY_VIEW_NAME],
-      encrypted: true,
-      encryptionKey: SECRET_KEY
-    })
-    t.teardown(() => a.close())
-
-    await a.ready()
-    await a.flush() // the migration boots in the background after ready()
-    await remapped(a)
-    t.is(aState.calls, 1, 'a migrated locally')
-
-    await a.append(JSON.stringify({ noop: 1 }))
-    await a.append(JSON.stringify({ noop: 2 }))
-
-    const joinerStore = new Corestore(await t.tmp())
-    const joinerState = {}
-    let preapplies = 0
-    let joiner
-    joiner = new Autobee(joinerStore, bootstrap, {
-      remapSettle: 200,
-      apply,
-      migrate: migrateHandler(joinerStore, joinerState, bootstrap),
-      preapply: () => {
-        preapplies++
-      },
-      legacyViews: [LEGACY_VIEW_NAME],
-      encrypted: true,
-      encryptionKey: SECRET_KEY,
-      // the original (generation 0) system key, two rotations and one
-      // autobee migration old
-      fastForward: { boot: { key: b4a.from(meta.gen0SystemKey, 'hex') } }
-    })
-    t.teardown(() => joiner.close())
-
-    const done = replicate(a, joiner)
-
-    await joiner.ready()
-    await sync(a, joiner)
-
-    // the joiner crawls the legacy generations, finds an indexer that already
-    // moved to autobee and boots its head, so it never migrates itself
-    t.absent(joinerState.calls, 'the joiner booted autobee instead of migrating')
-    t.is(joiner.system.version, AUTOBEE_VERSION, 'settled on an autobee system')
-    t.is(preapplies, 1, 'preapply runs exactly once')
-
-    for (let i = 0; i < meta.totalMessages; i++) {
-      t.is(await messageAt(joiner, i), meta.messages[i], `message ${i} matches`)
-    }
-
-    await done()
-  }
-)
-
 test(
   'migration - 3) a online, c migrates and ffs onto a, then b online and c ffs onto b too',
   { skip: skipFF },
@@ -915,8 +639,6 @@ test('migration - legacy weights survive a v4 flush', { skip }, async function (
 })
 
 test('migration - catchup is applied in linearizer order, not legacy INFO order', function (t) {
-  const topo = require('../lib/topo.js')
-
   const low = b4a.alloc(32).fill(1)
   const mid = b4a.alloc(32).fill(2)
   const high = b4a.alloc(32).fill(3)
@@ -938,14 +660,12 @@ test('migration - catchup is applied in linearizer order, not legacy INFO order'
     [node(low, 2, [{ key: mid, length: 1 }])]
   ]
 
-  const order = topo.linearize(batches).map((b) => b[0].key[0] + ':' + b[0].length)
+  const order = linearize(batches).map((b) => b[0].key[0] + ':' + b[0].length)
 
   t.alike(order, ['3:1', '1:1', '2:1', '1:2'], 'causal past is pulled ahead of outranked heads')
 })
 
 test('migration - linearized catchup never rebases on itself', function (t) {
-  const topo = require('../lib/topo.js')
-
   // eight writers with random link lag
   let seed = 7
   const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff
@@ -973,13 +693,13 @@ test('migration - linearized catchup never rebases on itself', function (t) {
     }
   }
 
-  const order = topo.linearize(batches)
+  const order = linearize(batches)
   t.is(order.length, batches.length, 'every batch is handed out once')
 
   // every prefix must be stable
   let undos = 0
   for (let i = 1; i < order.length; i++) {
-    const again = topo.linearize(order.slice(0, i + 1))
+    const again = linearize(order.slice(0, i + 1))
     for (let j = 0; j <= i; j++) {
       if (again[j] !== order[j]) {
         undos++
@@ -993,7 +713,6 @@ test('migration - linearized catchup never rebases on itself', function (t) {
 
 // legacy batch nodes link their predecessor, a link is not a batch start
 test('migration - a legacy batch inflates whole when its nodes link their predecessor', async function (t) {
-  const topo = require('../lib/topo.js')
   const encoding = require('../lib/encoding.js')
 
   const store = new Corestore(await t.tmp())
@@ -1090,95 +809,18 @@ test(
     t.absent(eState.calls, 'there was no legacy head to migrate')
     t.is(e.system.flushes, 0, 'booted on an empty system rather than asserting')
     t.absent(e.system.view.key, 'and adopted no legacy view')
-
-    // and it is a working base - a migrates its own legacy storage and e
-    // catches up from it
-    const aDir = await t.tmp()
-    await fs.cp(path.join(fixture, 'a'), aDir, { recursive: true })
-
-    const aState = {}
-    const a = openPeer(aDir, aState)
-
-    await a.ready()
-    await a.flush()
-
-    t.is(aState.calls, 1, 'a migrated its legacy storage')
-
-    const done = replicate(a, e)
-
-    t.ok(await moveTo(e, localHead(a)), 'e fast-forwarded onto the migrated head')
-    await sync(a, e)
-
-    for (let i = 0; i < meta.viewLength; i++) {
-      t.is(await messageAt(e, i), meta.messages[i], `message ${i} matches`)
-    }
-
-    await done()
   }
 )
 
-test(
-  'migration - an empty legacy system keeps its boot head and fast-forwards from it',
-  { skip },
-  async function (t) {
-    const fixture = path.join(
-      __dirname,
-      'fixtures/migration/autobase-no-system-blocks-v7.28.1-linux'
-    )
-    const meta = JSON.parse(await fs.readFile(path.join(fixture, 'meta.json')))
-    const bootstrap = b4a.from(meta.bootstrap, 'hex')
+// linearize orders writers by their tail, the batches stand in
+function linearize(batches) {
+  return topo.linearize(batches.map(toTail)).map(tailOf)
+}
 
-    function openPeer(dir, state, opts = {}) {
-      const store = new Corestore(dir, { allowBackup: true })
+function toTail(tail) {
+  return { tail }
+}
 
-      const auto = new Autobee(store, bootstrap, {
-        remapSettle: 200,
-        apply,
-        migrate: migrateHandler(store, state, bootstrap),
-        legacyViews: [LEGACY_VIEW_NAME],
-        encrypted: true,
-        encryptionKey: SECRET_KEY,
-        ...opts
-      })
-      t.teardown(() => auto.close())
-
-      return auto
-    }
-
-    const aDir = await t.tmp()
-    await fs.cp(path.join(fixture, 'a'), aDir, { recursive: true })
-
-    const aState = {}
-    const a = openPeer(aDir, aState)
-
-    await a.ready()
-    await a.flush()
-
-    t.is(aState.calls, 1, 'a migrated its legacy storage')
-
-    const eDir = await t.tmp()
-    await fs.cp(path.join(fixture, 'e'), eDir, { recursive: true })
-
-    const eState = {}
-    const e = openPeer(eDir, eState, {
-      fastForward: { boot: { head: localHead(a) } }
-    })
-
-    const done = replicate(a, e)
-
-    await e.ready()
-    await e.flush()
-
-    t.is(eState.calls, 1, 'migrate handler ran once, on the head we fast-forwarded to')
-    t.ok(e.system.flushes > 0, 'booted from the head instead of parking on an empty system')
-    t.is(e.stats.fastForwards, 1, 'the boot fast-forward ran')
-
-    await sync(a, e)
-
-    for (let i = 0; i < meta.viewLength; i++) {
-      t.is(await messageAt(e, i), meta.messages[i], `message ${i} matches`)
-    }
-
-    await done()
-  }
-)
+function tailOf(entry) {
+  return entry.tail
+}

@@ -1649,6 +1649,12 @@ module.exports = class Autobee extends ReadyResource {
     // a head we were handed is one we trust
     this.trusted.pin(head.key)
 
+    // a commit does not cover the head we move to
+    if (this._remapper !== null && this._remapper.committing) {
+      this._remapper.destroy()
+      this._remapper = null
+    }
+
     this._moveTo = head
     this.bumpSoon()
   }

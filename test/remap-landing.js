@@ -7,7 +7,7 @@ const WriterFastForward = require('../lib/fast-forward.js')
 const { MAPPED_AUTOBEE_VERSION } = require('../lib/constants.js')
 const { Remapper } = require('../lib/remap.js')
 const Hypercore = require('hypercore')
-const { apply, encode, recoveryPeers, same } = require('./helpers/index.js')
+const { apply, encode, recoveryPeers, same, moveTo } = require('./helpers/index.js')
 
 // a room from the release before the remap: in sync, on v2 cores
 
@@ -435,7 +435,7 @@ test('remap landing - a forced move during phase two replaces the remap', async 
 
   // an explicit move onto the old head goes through regardless
   const old = { key: b.local.key, length: b.local.length }
-  t.ok(await a.moveTo(old), 'moved')
+  t.ok(await moveTo(a, old), 'moved')
 
   t.ok(remapper.destroyed, 'the committing remap was destroyed')
   t.not(a._remapper, remapper, 'and replaced')
@@ -496,11 +496,11 @@ test('remap scenarios - no recovery peer: the room runs on the old generation', 
   connect(t, a.store, c.store)
   connect(t, b.store, c.store)
 
-  // a user joins by fast-forwarding onto the old head
-  const d = open(t, await t.tmp(), key, { fastForward: { boot: { head: headOf(a.auto) } } })
+  // a user joins by moving onto the old head
+  const d = open(t, await t.tmp(), key)
   connect(t, d.store, a.store)
   await d.auto.ready()
-  t.ok(await until([...admins, d.auto], () => d.auto.stats.fastForwards > 0), 'the user landed')
+  t.ok(await moveTo(d.auto, headOf(a.auto)), 'the user landed')
   t.is(d.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
 
   // the admins write and the user keeps up
@@ -513,11 +513,11 @@ test('remap scenarios - no recovery peer: the room runs on the old generation', 
     t.absent(x._remapFailed)
   }
 
-  // a user joining later still fast-forwards onto the old head
-  const e = open(t, await t.tmp(), key, { fastForward: { boot: { head: headOf(a.auto) } } })
+  // a user joining later still moves onto the old head
+  const e = open(t, await t.tmp(), key)
   connect(t, e.store, a.store)
   await e.auto.ready()
-  t.ok(await until([...admins, e.auto], () => e.auto.stats.fastForwards > 0), 'a late user landed')
+  t.ok(await moveTo(e.auto, headOf(a.auto)), 'a late user landed')
   t.is(e.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
   await rounds(admins, 1, [e.auto])
   t.ok(await same(...admins, e.auto), 'and keeps up')
@@ -673,7 +673,7 @@ test('remap scenarios - a user that remapped itself lands on a later admin remap
   t.ok(await same(a.auto, b.auto, c.auto), 'the views agree')
 })
 
-test('remap scenarios - a landing accepted during a landing keeps the remap cancelled', async function (t) {
+test('remap scenarios - a move requested during a landing keeps the remap', async function (t) {
   const { a, b, c, join } = await room(t)
 
   await a.update()
@@ -687,55 +687,31 @@ test('remap scenarios - a landing accepted during a landing keeps the remap canc
   const older = { key: b.local.key, length: b.local.length - 2 }
   join()
 
-  // a second landing is accepted while the first one is still being applied
+  // a second move is requested while the first landing is still being applied
   const applyFastForward = a._applyFastForward.bind(a)
-  const runFastForward = a._runFastForward.bind(a)
   const storeBoot = a._storeBoot.bind(a)
   let applying = false
-  let second = null
-  let accept = null
-  const accepted = new Promise((resolve) => (accept = resolve))
-  a._applyFastForward = async () => {
+  let second = false
+  a._applyFastForward = async (ff) => {
     applying = true
     try {
-      return await applyFastForward()
+      return await applyFastForward(ff)
     } finally {
       applying = false
     }
   }
-  // acceptance, not completion: moveTo only resolves once its move applied
-  a._runFastForward = async (ff, opts = {}) => {
-    const moved = await runFastForward(ff, opts)
-    if (moved && opts.force && opts.rewind) accept()
-    return moved
-  }
   a._storeBoot = async () => {
-    if (applying && second === null) {
-      second = a.moveTo(older)
-      const outcome = await Promise.race([
-        accepted.then(() => null),
-        second.then(
-          () => new Error('it settled without being accepted'),
-          (err) => err
-        )
-      ])
-      if (outcome !== null) {
-        t.fail('the second landing was not accepted: ' + outcome.message)
-        return storeBoot()
-      }
+    if (applying && !second) {
+      second = true
+      a.moveTo(older)
     }
     return storeBoot()
   }
 
-  const seen = []
-  a.on('move-to', () =>
-    seen.push([a.stats.fastForwards, remapper.cancelled, a.fastForwardTo !== null])
-  )
-
   t.ok(await until([a, b, c], () => a.stats.fastForwards > 1), 'both landed')
-  t.ok(second !== null && a.fastForwardTo === null)
-  t.alike(seen[0], [1, true, true], 'the first landing left the remap cancelled for the second')
-  t.alike(seen[1], [2, false, false], 'which restarted it')
+  t.ok(second, 'the second was requested during the first')
+  t.is(a._remapper, remapper, 'the remap was cancelled, not replaced')
+  t.absent(remapper.cancelled, 'and restarted after the last landing')
 
   release()
   t.ok(await landed([a, b, c]), 'every peer is on the remapped generation')
@@ -887,34 +863,6 @@ test('remap scenarios - old heads within the gap are refused before the warmup',
   t.is(warmups, 0, 'nor warmed up a head it did not land on')
 })
 
-test('remap scenarios - a legacy boot pointer within the gap is still booted onto', async function (t) {
-  const { dirs, key } = await seed(t)
-
-  // a moves a few flushes ahead on the old generation
-  const a = open(t, dirs.a, null, { previous: true })
-  await a.auto.ready()
-  for (let i = 0; i < 3; i++) await a.auto.append(encode({ i }))
-  await a.auto.update()
-  const system = a.auto.system.bee.head()
-  const flushes = a.auto.system.flushes
-  await a.auto.close()
-  await a.store.close()
-
-  const blind = await mirror(t, dirs.a)
-
-  // b opens pointed straight at that system head, the legacy boot form
-  const b = open(t, dirs.b, key, {
-    fastForward: { boot: { key: system.key, length: system.length } }
-  })
-  connect(t, b.store, blind)
-  await b.auto.ready()
-  t.ok(flushes - b.auto.system.flushes < WriterFastForward.MIN_GAP, 'within the gap')
-
-  t.ok(await until([b.auto], () => b.auto.stats.fastForwards > 0), 'booted onto it anyway')
-  t.is(b.auto.system.flushes, flushes)
-  t.is(b.auto.system.version, MAPPED_AUTOBEE_VERSION - 1)
-})
-
 test('remap scenarios - without recovery peers configured the remap fails and ff goes on', async function (t) {
   const { dirs, key } = await seed(t)
 
@@ -924,8 +872,9 @@ test('remap scenarios - without recovery peers configured the remap fails and ff
 
   const warnings = []
   const a = open(t, dirs.a, null)
-  await a.auto.ready()
+  // the first drain already warns
   a.auto.on('warning', (err) => warnings.push(err.message))
+  await a.auto.ready()
   t.ok(await until([a.auto], () => a.auto._remapFailed), 'the remap was not attempted')
   t.absent(a.auto._remapper, 'no remap was started')
   t.is(warnings.length, 1)
