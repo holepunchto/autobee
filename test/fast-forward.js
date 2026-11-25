@@ -14,7 +14,8 @@ const {
   decode,
   dump,
   moveTo,
-  apply
+  apply,
+  waitFor
 } = require('./helpers')
 
 // predates the moveTo removal
@@ -976,6 +977,37 @@ test('own writes applied but not flushed when a fast-forward lands are reapplied
     'reopened, still has all its own writes'
   )
   t.ok(await same(auto1, reopened), 'same view after reopen')
+})
+
+test('fast-forward - a head that does not decode closes its candidate', async function (t) {
+  const auto = await create(t)
+  await auto.append(encode({ hello: 'world' }))
+
+  const store = new Corestore(await t.tmp(), { manifestVersion: 2 })
+  t.teardown(() => store.close())
+
+  const bogus = store.get({ name: 'bogus-writer' })
+  await bogus.ready()
+  await bogus.append(b4a.from('not a valid oplog entry'))
+
+  const s1 = auto.replicate(false)
+  const s2 = store.replicate(true)
+
+  s1.pipe(s2).pipe(s1)
+  t.teardown(() => {
+    s1.destroy()
+    s2.destroy()
+  })
+
+  auto.moveTo({ key: bogus.key, length: 1 })
+
+  await waitFor(() => auto.writers.moving !== null && auto.writers.moving.isClosed)
+
+  t.ok(auto.writers.moving.isClosed, 'the candidate is closed')
+  t.is(auto.writers.moving.head, null, 'and has no head')
+
+  await auto.append(encode({ hello: 'again' }))
+  t.absent(auto.closing, 'the db goes on')
 })
 
 async function appliedFrom(auto, writer) {
