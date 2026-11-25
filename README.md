@@ -174,6 +174,14 @@ Rotate the local writer to a different key. The new writer takes over as the act
 
 Override acking, which is otherwise driven by `isTrusted`, see Acking. `options.threshold` defaults to the current threshold.
 
+#### `await db.holdAcks()`
+
+Stop appending acks to the local writer until `releaseAcks()`, so only your own appends land there meanwhile: the next ones go to `db.local.length`, `db.local.length + 1`, and so on. Holds nest. Resolves once an ack already being appended has landed, so `db.local.length` includes it.
+
+#### `db.releaseAcks()`
+
+Release a hold. When the last one is released, an ack that came due meanwhile is appended.
+
 #### `views = db.views()`
 
 Returns the current system and view core positions. Used for replication coordination.
@@ -304,6 +312,8 @@ Peers fast-forward onto the heads of writers they trust, so a trusted writer tha
 Acking does that: an empty node is appended whenever the local writer falls `ackThreshold` (default `32`) flushes behind the system.
 
 It is enabled for exactly the writers `isTrusted` accepts. The local key is judged when the db opens, after a fast-forward, and after the local writer rotates, so a writer that becomes trusted starts acking without being told to. `setAcking` overrides it until the next of those points.
+
+Acks are appended to the local writer between your own appends. `holdAcks` pauses them while you append nodes whose positions you need to know in advance.
 
 ### Encryption
 
