@@ -1121,6 +1121,33 @@ test('a run queued behind a cancelled one never reads once the candidate closes'
   auto2.writers.unrefFastForward(ff)
 })
 
+test('every candidate runs, the best two hanging do not hold a third up', async function (t) {
+  const auto = await create(t, { isTrusted: () => true })
+
+  const asked = []
+
+  for (const flushes of [300, 200, 100]) {
+    auto.writers.fastForwards.set('fake-' + flushes, {
+      head: { op: { views: { flushes } } },
+      inflating: null,
+      inflated: null,
+      cancel() {},
+      close() {},
+      inflateBackground() {
+        asked.push(flushes)
+      }
+    })
+  }
+
+  auto.writers.rankFastForwards()
+
+  t.alike(asked, [300, 200, 100], 'all three were started')
+  t.is(auto.writers.fastForward.head.op.views.flushes, 300, 'the best one is still the best')
+
+  auto.writers.fastForwards.clear()
+  auto.writers.fastForward = null
+})
+
 async function appliedFrom(auto, writer) {
   const prefix = b4a.toString(writer.local.key, 'hex') + '.'
   const lengths = new Set()
