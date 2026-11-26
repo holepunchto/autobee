@@ -1196,7 +1196,7 @@ module.exports = class Autobee extends ReadyResource {
 
     try {
       for (const batch of this._catchupMigratedNodes) {
-        const weight = await resolveWeight(this, batch[0])
+        const weight = await resolveWeight(this, batch[0], true)
         for (const node of batch) node.weight = weight
       }
 
@@ -1381,15 +1381,15 @@ module.exports = class Autobee extends ReadyResource {
     return !local
   }
 
-  async _resolveWeight(batch) {
-    const weight = await resolveWeight(this, batch[0])
+  async _resolveWeight(batch, wait) {
+    const weight = await resolveWeight(this, batch[0], wait)
     for (const n of batch) n.weight = weight
   }
 
   async prepareBatch(batch) {
     const node = batch[0]
     // recomputed on every application, converges because prefixes converge
-    await this._resolveWeight(batch)
+    await this._resolveWeight(batch, true)
 
     if (
       node.hash &&
@@ -1433,9 +1433,10 @@ module.exports = class Autobee extends ReadyResource {
         this._needsUpdate = true
 
         // what is still to come is sorted into what we undid, so that is undone once.
-        // a guess: every batch is still sorted on its own when its turn comes
+        // a guess: every batch is still sorted on its own when its turn comes, so it
+        // never waits on the network, and a weight an earlier batch raises costs an undo
         const pending = stack.reverse()
-        for (const b of pending) await this._resolveWeight(b)
+        for (const b of pending) await this._resolveWeight(b, false)
 
         const order = topo.merge(t.tip, pending)
         stack.length = 0
