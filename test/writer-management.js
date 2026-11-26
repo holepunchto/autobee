@@ -281,7 +281,7 @@ test('writer-management - indexer flag', async function (t) {
   const writerInfo = await auto1.system.get(auto2.local.key)
 
   t.ok(writerInfo, 'writer info exists')
-  // Check if isIndexer flag is present and has expected value
+  // the granted indexer capability lives in maxWeight
   t.is(writerInfo.maxWeight, 2, 'weight has been updated')
 })
 
@@ -800,9 +800,7 @@ test('writer-management - unadded local writer with oplog at genesis does not li
   await b.local.download({ start: 0, end: a.local.length }).done()
   t.is(b.local.length, a.local.length, 'local oplog replicated')
 
-  // first update ends with a refresh that puts the local writer back in pending
   await b.update()
-  t.ok(b.writers.localWriter.isPending, 'local writer is pending')
   t.absent(b.writers.localWriter.isAdded, 'local writer is not added')
 
   let timer = null

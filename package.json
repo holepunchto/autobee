@@ -37,17 +37,17 @@
     "test:generate": "brittle -r test/all.js test/*.js"
   },
   "dependencies": {
-    "autobee-wakeup": "^1.1.3",
     "b4a": "^1.8.0",
     "compact-encoding": "^3.4.0",
+    "core-coupler": "^2.0.0",
     "hyperbee2": "^2.21.2",
     "hypercore": "^11.37.0",
     "hypercore-id-encoding": "^1.3.0",
     "hyperschema": "^1.26.2",
+    "protomux-wakeup": "^2.9.0",
     "read-write-mutexify": "^2.1.0",
     "ready-guard": "^1.0.0",
     "ready-resource": "^1.2.0",
-    "resolve-reject-promise": "^1.1.0",
     "safety-catch": "^1.0.3",
     "signal-promise": "^1.0.3",
     "sodium-native": "^5.1.0"
@@ -57,14 +57,12 @@
     "bare-os": "^3.9.3",
     "bare-path": "^3.1.2",
     "brittle": "^4.1.0",
-    "corestore": "^7.12.2",
+    "corestore": "^7.14.0",
     "hypercore-crypto": "^3.6.1",
     "lunte": "^1.6.0",
     "prettier": "^3.8.1",
     "prettier-config-holepunch": "^2.0.0",
-    "protomux-wakeup": "^2.9.0",
     "replication-simulator": "^3.0.0",
-    "streamx": "^2.28.1",
     "uncaughts": "^1.1.3"
   }
 }

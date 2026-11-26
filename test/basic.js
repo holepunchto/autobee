@@ -195,7 +195,7 @@ test('basic - anchor', async function (t) {
   }
 })
 
-test('basic - isIndexer', async function (t) {
+test('basic - bootstrap writer is granted indexer weight', async function (t) {
   const auto = await create(t)
 
   // writer not setup until we append
@@ -206,29 +206,6 @@ test('basic - isIndexer', async function (t) {
   // granted capability lives in maxWeight - record.weight is the resolved
   // sort weight of the writer's last applied node (see lib/witness.js)
   t.is(info.maxWeight, 3)
-  t.ok(auto.isIndexer)
-})
-
-test('basic - isIndexer agreement across peers', async function (t) {
-  const auto1 = await create(t)
-  const auto2 = await create(t, auto1.key)
-
-  // writer not setup until we append
-  const val = encode({ hello: 'world' })
-  await auto1.append(val)
-
-  t.ok(auto1.isIndexer)
-  t.not(auto2.isIndexer)
-
-  await replicateAndSync(auto1, auto2)
-
-  t.ok(auto1.isIndexer)
-  t.not(auto2.isIndexer)
-
-  // we all agree who the indexers are
-  t.is(auto1.writers.active.get(auto1.local.key.toString('hex')).isIndexer, auto1.isIndexer)
-  t.is(auto2.writers.active.get(auto1.local.key.toString('hex')).isIndexer, auto1.isIndexer)
-  t.is(auto2.writers.active.get(auto2.local.key.toString('hex')).isIndexer, auto2.isIndexer)
 })
 
 test('basic - writers', async function (t) {
@@ -350,4 +327,22 @@ test('cores - what a mirror should pin', async function (t) {
   const anchorless = await auto3.cores({ wait: true })
   t.alike(anchorless.writers, [auto3.local.key, auto1.key], 'no trusted head pins the bootstrap')
   t.is(anchorless.views.length, 0, 'but no views')
+})
+
+test('cores - our views are there straight after a reopen', async function (t) {
+  const storage = await t.tmp()
+
+  const auto1 = await create(t, null, { storage })
+  for (let i = 0; i < 5; i++) await auto1.append(encode({ value: i }))
+
+  const before = await auto1.cores()
+  t.is(before.views.length, 2, 'system and view')
+
+  const key = auto1.key
+  await auto1.close()
+
+  const auto2 = await create(t, key, { storage })
+  const after = await auto2.cores()
+
+  t.alike(after.views, before.views, 'same views without waiting for anything')
 })

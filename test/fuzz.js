@@ -162,6 +162,60 @@ test('fuzz - random writer weights, optimistic self-adds, eventual consistency',
   t.pass(`fuzz completed ${STEPS} steps across ${state.pool.length} writers (seed=${SEED})`)
 })
 
+// a peer that fast-forwarded holds its views sparse, so applying a node reads
+// blocks it has to fetch. the harness only connects peers while syncing, and a
+// pair sync may connect it to a peer that is sparse too, so a sparse peer gets
+// the whole pool to read from, or it waits on those blocks forever
+function connectSparse(state, entries) {
+  const done = []
+
+  let sparse = false
+  for (const entry of entries) {
+    if (entry.auto.stats.fastForwards > 0) sparse = true
+  }
+
+  // whoever syncs with a sparse peer cannot get the history from it either
+  if (sparse) {
+    for (const entry of entries) {
+      for (const other of state.pool) {
+        if (other !== entry) done.push(replicate(entry.auto, other.auto))
+      }
+    }
+  }
+
+  return async function () {
+    for (const fn of done) await fn()
+  }
+}
+
+// connects the sparse peers among entries for as long as the returned function
+// is not called, including ones that fast-forward meanwhile: a landing that
+// was already inflating makes a peer sparse from then on
+function keepConnected(state, entries) {
+  const done = [connectSparse(state, entries)]
+
+  const onmove = function () {
+    done.push(connectSparse(state, entries))
+  }
+
+  for (const entry of entries) entry.auto.on('move-to', onmove)
+
+  return async function () {
+    for (const entry of entries) entry.auto.off('move-to', onmove)
+    for (const fn of done) await fn()
+  }
+}
+
+async function append(state, entry, value, opts) {
+  const done = keepConnected(state, [entry])
+
+  try {
+    await entry.auto.append(value, opts)
+  } finally {
+    await done()
+  }
+}
+
 // ---- actions --------------------------------------------------------
 
 async function spawnCandidate(state) {
@@ -188,7 +242,7 @@ async function appendNormal(state) {
     values.push(encode({ msg: `m${state.seq}`, from: from.name }))
   }
 
-  await from.auto.append(count === 1 ? values[0] : values)
+  await append(state, from, count === 1 ? values[0] : values)
   state.dirty.add(keyHex(from.auto))
   state.log(`${from.name} appends ${count} message(s) up to #${state.seq}`)
   return true
@@ -206,7 +260,7 @@ async function addWriterByPeer(state) {
   const hex = keyHex(target.auto)
   const weight = randWeightAtLeast(state, currentWeight(state, hex))
 
-  await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
+  await append(state, granter, encode({ addWriter: target.auto.local.id, weight }))
   state.granted.add(hex)
   state.weights.set(hex, weight)
   state.dirty.add(keyHex(granter.auto))
@@ -223,7 +277,7 @@ async function changeWeight(state) {
   const hex = keyHex(target.auto)
   const weight = randWeightAtLeast(state, currentWeight(state, hex))
 
-  await granter.auto.append(encode({ addWriter: target.auto.local.id, weight }))
+  await append(state, granter, encode({ addWriter: target.auto.local.id, weight }))
   state.weights.set(hex, weight)
   state.dirty.add(keyHex(granter.auto))
   state.log(`${granter.name} changes ${target.name} weight -> ${weight}`)
@@ -238,7 +292,7 @@ async function optimisticSelfAdd(state) {
   const hex = keyHex(self.auto)
   const weight = randWeightAtLeast(state, Math.max(1, currentWeight(state, hex)))
 
-  await self.auto.append(encode({ addWriter: self.auto.local.id, weight }), { optimistic: true })
+  await append(state, self, encode({ addWriter: self.auto.local.id, weight }), { optimistic: true })
   state.granted.add(hex)
   state.weights.set(hex, weight)
   state.pendingOptimistic.add(hex)
@@ -272,8 +326,8 @@ async function concurrentConflictingGrant(state) {
   const weight1 = randWeightAtLeast(state, floor)
   const weight2 = randWeightAtLeast(state, floor)
 
-  await granter1.auto.append(encode({ addWriter: target.auto.local.id, weight: weight1 }))
-  await granter2.auto.append(encode({ addWriter: target.auto.local.id, weight: weight2 }))
+  await append(state, granter1, encode({ addWriter: target.auto.local.id, weight: weight1 }))
+  await append(state, granter2, encode({ addWriter: target.auto.local.id, weight: weight2 }))
 
   state.granted.add(hex)
   // whichever grant "wins" in the replicated system, it'll be at least this -
@@ -313,7 +367,7 @@ async function removeWriterAction(state) {
   if (removers.length < 2) return false
   const remover = state.rng.pick(removers)
 
-  await remover.auto.append(encode({ removeWriter: target.auto.local.id }))
+  await append(state, remover, encode({ removeWriter: target.auto.local.id }))
   state.retired.add(hex)
   state.granted.delete(hex)
   state.dirty.add(keyHex(remover.auto))
@@ -330,6 +384,7 @@ async function pairSync(state) {
   const b = state.rng.pick(rest)
 
   const done = replicate(a.auto, b.auto)
+  const doneSparse = keepConnected(state, [a, b])
 
   // same optimistic nudge as the full round, scoped to the pair
   for (const hex of state.pendingOptimistic) {
@@ -350,6 +405,7 @@ async function pairSync(state) {
     `pair sync ${a.name}<->${b.name} did not converge within ${SYNC_TIMEOUT}ms`
   )
   await done()
+  await doneSparse()
 
   // NOT clearing state.dirty: these writers' appends are still unsynced
   // relative to everyone outside the pair

@@ -17,7 +17,6 @@ test('close settles while a drain waits on unavailable blocks', async function (
   // boot a member from auto1's head without any replication - the first drain
   // fast-forwards towards the head and fetches blocks that can never arrive
   const to = { key: auto1.local.key, length: auto1.local.length }
-  const auto2 = await create(t, auto1.key, { fastForward: { boot: to } })
 
   // wait for the drain to actually reach its "awaiting an unavailable block"
   // state before racing close() against it. A fixed number of event-loop
@@ -27,8 +26,8 @@ test('close settles while a drain waits on unavailable blocks', async function (
   // is actually stuck. Hook onwait on every core any store opens from here
   // on instead, and wait for the first one to actually fire - patched on the
   // prototype since the view/system bees open through their own namespaced
-  // session, not auto2.store directly.
-  const Corestore = auto2.store.constructor
+  // session, not auto2.store directly. In place before the boot, which may
+  // already be the one that waits.
   const get = Corestore.prototype.get
   const waiting = new Promise((resolve) => {
     Corestore.prototype.get = function (...args) {
@@ -41,8 +40,12 @@ test('close settles while a drain waits on unavailable blocks', async function (
     if (Corestore.prototype.get !== get) Corestore.prototype.get = get
   })
 
+  const auto2 = await create(t, auto1.key, { fastForward: { boot: { head: to } } })
+
   auto2.update().catch(() => {})
-  await waiting
+
+  // a hinted length is only downloaded, not read: give the drain a moment if nothing waits
+  await Promise.race([waiting, new Promise((resolve) => setTimeout(resolve, 200))])
   Corestore.prototype.get = get
 
   let timer = null

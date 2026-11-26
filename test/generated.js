@@ -9,6 +9,11 @@ const { create, replicate, sync, encode } = require('./helpers')
 // mining tooling after a fix attempt to check whether it closes these and/or finds fresh
 // ones.
 
+// replay() marks what it cannot reach with nulls, what follows the last one is held
+function knownTail(nodes) {
+  return nodes.slice(nodes.lastIndexOf(null) + 1)
+}
+
 function nodeRef(n) {
   if (!n) return '<missing>'
   return `${b4a.toString(n.key, 'hex').slice(0, 8)}:${n.length}`
@@ -37,6 +42,31 @@ async function checkReplayAgreement(t, pool, label) {
     for (let j = i + 1; j < replays.length; j++) {
       const a = replays[i]
       const b = replays[j]
+
+      // a peer that fast-forwarded only reaches back to where it landed, so
+      // compare what both hold, aligned from the tip
+      const ta = knownTail(a.nodes)
+      const tb = knownTail(b.nodes)
+
+      if (ta.length !== a.nodes.length || tb.length !== b.nodes.length) {
+        const n = Math.min(ta.length, tb.length)
+
+        for (let x = 1; x <= n; x++) {
+          const na = ta[ta.length - x]
+          const nb = tb[tb.length - x]
+
+          if (nodeRef(na) !== nodeRef(nb) || na.weight !== nb.weight) {
+            t.fail(
+              `${label}: ${a.name} and ${b.name} diverge in the shared replay tail, ${x} from the tip: ` +
+                `${nodeRef(na)} weight=${na.weight} vs ${nodeRef(nb)} weight=${nb.weight}`
+            )
+            return
+          }
+        }
+
+        continue
+      }
+
       const refsA = a.nodes.map(nodeRef)
       const refsB = b.nodes.map(nodeRef)
 

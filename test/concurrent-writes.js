@@ -106,3 +106,28 @@ test('sequential fork and merge - multiple rounds', async function (t) {
   t.is(auto1.local.length, 5, 'auto1 wrote 5 entries total')
   t.is(auto2.local.length, 3, 'auto2 wrote 3 entries total')
 })
+
+test('appends landing while a flush is in flight get their own position', async function (t) {
+  const auto = await create(t)
+
+  const lengths = []
+  auto.on('appending', function (nodes) {
+    for (const node of nodes) lengths.push(node.length)
+  })
+
+  const pad = 'x'.repeat(2000)
+  const appends = []
+
+  for (let i = 0; i < 400; i++) {
+    appends.push(delay(Math.random() * 1000).then(() => auto.append(encode({ i, pad }))))
+  }
+
+  await Promise.all(appends)
+
+  t.is(auto.local.length, 400, 'every append landed')
+  t.is(new Set(lengths).size, 400, 'each at its own position')
+})
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}

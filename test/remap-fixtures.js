@@ -13,7 +13,8 @@ const {
   replicateAsRecovery,
   sync,
   recoveryPeers,
-  remapped: settled
+  remapped: settled,
+  moveTo
 } = require('./helpers/index.js')
 
 const MOCK_REMAPPER = {
@@ -451,7 +452,7 @@ test(
     t.teardown(() => done())
 
     // a landing of its own may already be on the way, so only the outcome is checked
-    await b.auto.moveTo({ key: a.auto.local.key, length: a.auto.local.length })
+    await moveTo(b.auto, { key: a.auto.local.key, length: a.auto.local.length })
     await sync(a.auto, b.auto)
     t.is(b.events.remap, 0, 'and had nothing left to remap')
     t.alike(b.auto.system.bee.head(), a.auto.system.bee.head(), 'the peer is on the writer')
@@ -658,7 +659,7 @@ test(
     Remapper.prototype.run = () => new Promise(() => {})
 
     try {
-      t.ok(await first.auto.moveTo({ key: local, length: before }), 'landed on the old head')
+      t.ok(await moveTo(first.auto, { key: local, length: before }), 'landed on the old head')
       t.is(first.auto.system.version, 3)
       t.absent(first.auto.remapped, 'and does not count as remapped')
       t.ok(first.auto._remapper !== null, 'a remap was started right away')
@@ -714,7 +715,7 @@ test(
 
     const old = { key: local, length: before }
     Remapper.prototype.run = () => new Promise(() => {})
-    t.ok(await f.auto.moveTo(old), 'landed')
+    t.ok(await moveTo(f.auto, old), 'landed')
     t.absent(f.auto._remapFailed, 'the landing clears the failure')
     t.ok(f.auto._remapper !== null, 'and starts a new remap')
   }
@@ -935,12 +936,16 @@ test(
 
     const head = f.auto.system.bee.head()
     const old = {
-      system: { flushes: f.auto.system.flushes + 16, version: 3 },
-      run: async () => ({ head: { key: head.key, length: head.length }, migrate: null }),
-      close: async () => {}
+      inflated: {
+        head: { key: head.key, length: head.length },
+        length: 1,
+        flushes: f.auto.system.flushes + 16,
+        version: 3
+      }
     }
-    t.absent(await f.auto._runFastForward(old), 'an old head is refused')
-    t.absent(f.auto.fastForwardTo)
+    f.auto.writers.fastForwards.set('old', old)
+    t.absent(f.auto._nextFastForward(), 'an old head is refused')
+    f.auto.writers.fastForwards.delete('old')
 
     release()
     await driver
@@ -1018,9 +1023,9 @@ test(
     Remapper.prototype.run = () => new Promise(() => {})
     t.teardown(() => (Remapper.prototype.run = run))
 
-    const moved = f.auto.moveTo({ key: local, length: before })
+    const moved = moveTo(f.auto, { key: local, length: before })
     t.ok(await poll(() => remapper.destroyed), 'the move destroyed the finishing remap')
-    t.ok(f.auto.fastForwardTo !== null, 'and is scheduled')
+    t.ok(f.auto._moveTo !== null, 'and is scheduled')
 
     release()
     await driver
@@ -1092,9 +1097,9 @@ test(
     Remapper.prototype.run = () => new Promise(() => {})
     t.teardown(() => (Remapper.prototype.run = run))
 
-    const moved = f.auto.moveTo({ key: local, length: before })
+    const moved = moveTo(f.auto, { key: local, length: before })
     t.ok(await drive(f.auto, () => remapper.destroyed), 'the committing remap was destroyed')
-    t.ok(await drive(f.auto, () => f.auto.fastForwardTo === null), 'the move applied')
+    t.ok(await drive(f.auto, () => f.auto.writers.moving === null), 'the move applied')
     t.ok(await moved, 'moved')
 
     release()
@@ -1205,17 +1210,12 @@ test(
     const [bView, bSystem] = coresOf(meta.b)
     const hex = (keys) => keys.map((k) => b4a.toString(k, 'hex')).sort()
 
-    // a user boots onto a's head, with a copy of a's store as its recovery peer
+    // a user moves onto a's head, with a copy of a's store as its recovery peer
     const user = await openFixture(t, {
       fixture: WRITERS,
       dir: await t.tmp(),
       peer: false,
-      flush: false,
-      opts: {
-        fastForward: {
-          boot: { head: { key: b4a.from(meta.a.localKey, 'hex'), length: meta.a.localLength } }
-        }
-      }
+      flush: false
     })
     t.teardown(() => closeFixture(user))
 
@@ -1230,7 +1230,8 @@ test(
     }
     t.teardown(leaveA)
 
-    t.ok(await drive(user.auto, () => user.auto.stats.fastForwards > 0), 'the user landed on a')
+    const aHead = { key: b4a.from(meta.a.localKey, 'hex'), length: meta.a.localLength }
+    t.ok(await moveTo(user.auto, aHead), 'the user landed on a')
     const remapper = user.auto._remapper
     t.ok(remapper, 'and started remapping')
     stall(remapper, '_download')
@@ -1261,6 +1262,9 @@ test(
       await b.auto.append(b4a.from(JSON.stringify({ puts: [['b-later' + i, 'x']] })))
       await sync(a.auto, b.auto)
     }
+    // b writes last, so its head holds all of it and landing on it leaves nothing to apply
+    await b.auto.append(b4a.from(JSON.stringify({ puts: [['b-last', 'x']] })))
+    await sync(a.auto, b.auto)
     t.ok(b.auto.system.flushes - user.auto.system.flushes > FastForward.MIN_GAP, 'far ahead')
     t.is(b.auto.system.version, 3, 'still on the old generation')
     const head = { key: b.auto.local.key, length: b.auto.local.length }
@@ -1294,7 +1298,7 @@ test(
     })
 
     // the user lands on b's head: the walk is restarted from there
-    t.ok(await user.auto.moveTo(head), 'the user moved onto b')
+    t.ok(await moveTo(user.auto, head), 'the user moved onto b')
     t.is(user.auto._remapper, remapper, 'the remap was restarted, not replaced')
     t.absent(remapper.destroyed)
 

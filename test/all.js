@@ -19,7 +19,6 @@ async function runTests() {
   await import('./gated-grants.js')
   await import('./encryption.js')
   await import('./fast-forward.js')
-  await import('./head-barrier.js')
   await import('./links.js')
   await import('./migration.js')
   await import('./optimistic-race.js')

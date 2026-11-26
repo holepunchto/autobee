@@ -2,7 +2,6 @@ const test = require('brittle')
 const b4a = require('b4a')
 const Corestore = require('corestore')
 
-const FastForward = require('../lib/fast-forward.js')
 const encoding = require('../lib/encoding.js')
 
 const {
@@ -14,7 +13,9 @@ const {
   encode,
   decode,
   dump,
-  apply
+  moveTo,
+  apply,
+  waitFor
 } = require('./helpers')
 
 // predates the moveTo removal
@@ -28,7 +29,7 @@ test.skip('fast-forward - simple', async function (t) {
 
   const to = auto1.system.bee.head()
 
-  const ff = auto2.moveTo(to)
+  const ff = moveTo(auto2, to)
 
   t.teardown(replicate(auto1, auto2))
 
@@ -59,12 +60,9 @@ test('conservative ff skips a view nobody holds whole', async function (t) {
   t.teardown(await sparseViewMirror(t, auto1, auto2))
 
   const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = await FastForward.fromHead(auto2, head, null)
 
-  t.ok(ff, 'the oplog head is not gated')
-  t.ok(ff.conservative, 'the ff carries the conservative flag')
-
-  t.absent(await ff.run(), 'the fast-forward was skipped at the final check')
+  t.absent(await inflate(auto2, head), 'the fast-forward was skipped at the final check')
+  t.is(auto2.stats.fastForwards, 0, 'and nothing landed')
 })
 
 test('conservative: false lands on the sparse view', async function (t) {
@@ -82,12 +80,8 @@ test('conservative: false lands on the sparse view', async function (t) {
   t.teardown(await sparseViewMirror(t, auto1, auto2))
 
   const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = await FastForward.fromHead(auto2, head, null)
 
-  t.ok(ff, 'the ff was attempted')
-  t.absent(ff.conservative, 'the ff is not conservative')
-
-  const result = await ff.run()
+  const result = await inflate(auto2, head, { force: true })
   t.ok(result, 'the ff landed despite the hole in the view')
   t.alike(result.head, auto1.system.bee.head())
 })
@@ -287,13 +281,13 @@ test('boot from a head behind the local system never moves backwards', async fun
 
   t.is(auto3.system.flushes, flushes, 'flushes did not go down')
   t.alike(auto3.system.bee.head(), head, 'still on the system head we had')
-  t.absent(auto3.fastForwardTo, 'no fast-forward scheduled')
+  t.is(auto3.stats.fastForwards, 0, 'no fast-forward happened')
 
   auto3.removeAllListeners('move-to')
   t.teardown(replicate(early, auto3))
 
   // an explicit move is the caller's call, it may go backwards
-  t.ok(await auto3.moveTo(behind), 'an explicit move behind us still lands')
+  t.ok(await moveTo(auto3, behind), 'an explicit move behind us still lands')
   t.ok(auto3.system.flushes < flushes, 'moveTo went backwards on purpose')
 })
 
@@ -412,45 +406,6 @@ test('candidate views are opened and closed through the handlers', async functio
   t.comment('after ff: opens=' + opens + ' closes=' + closes)
   t.ok(opens > 2, 'candidate views were opened as well as the main and working views')
   t.is(opens - closes, 2, 'no candidate view was left open')
-})
-
-test('boot from a legacy pointer', async function (t) {
-  const auto1 = await create(t)
-  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
-
-  // legacy pointers carry no length, which the boot resolves itself
-  const { key } = auto1.system.bee.head()
-
-  // isTrusted rules out the wakeup path, so only the boot can move us
-  const auto2 = await create(t, auto1.key, {
-    isTrusted: () => false,
-    fastForward: { boot: { legacy: { key, length: 0 } } }
-  })
-
-  t.teardown(replicate(auto1, auto2))
-
-  await new Promise((resolve) => auto2.once('move-to', resolve))
-  t.pass('booted from the legacy pointer')
-
-  await replicateAndSync(auto1, auto2)
-  t.ok(await same(auto1, auto2), 'converged')
-})
-
-test('a bare key boots as a legacy pointer', async function (t) {
-  const auto1 = await create(t)
-  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
-
-  const { key } = auto1.system.bee.head()
-
-  const auto2 = await create(t, auto1.key, {
-    isTrusted: () => false,
-    fastForward: { boot: { key, length: 0 } }
-  })
-
-  t.teardown(replicate(auto1, auto2))
-
-  await new Promise((resolve) => auto2.once('move-to', resolve))
-  t.pass('the oldest shape still boots')
 })
 
 test('boot from an unservable head gives up after the timeout', async function (t) {
@@ -709,80 +664,31 @@ test('cancelling a fast-forward cancels the warmup reads', async function (t) {
   await oplog.close()
 
   const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = await FastForward.fromHead(auto2, head, null, { force: true, timeout: 5000 })
-  t.ok(ff, 'the fast-forward candidate was accepted')
+  const ff = auto2.writers.refFastForward(head.key)
+  t.teardown(() => auto2.writers.unrefFastForward(ff))
 
-  const running = ff.run()
+  ff.hint(head.length)
+  await ff.wait(head.length)
+
+  const running = ff.inflate({ force: true })
 
   await started
   await new Promise((resolve) => setTimeout(resolve, 500))
   t.is(state, 'pending', 'the warmup read is in flight and cannot be served')
 
   const started_at = Date.now()
-  await ff.close()
+  ff.cancel()
+  const result = await running
+
+  // the run does not wait for the hook, give its rejected read a tick to land
+  await new Promise((resolve) => setImmediate(resolve))
   const elapsed = Date.now() - started_at
 
-  t.comment('ff.close() took ' + elapsed + 'ms')
-  t.ok(elapsed < 3000, 'close did not wait out the blocked warmup')
+  t.comment('cancel took ' + elapsed + 'ms')
+  t.ok(elapsed < 3000, 'cancel did not wait out the blocked warmup')
   t.is(state, 'rejected:REQUEST_CANCELLED', 'closing the view cancelled the warmup read')
 
-  t.absent(await running, 'the cancelled fast-forward produced no result')
-})
-
-test('warmup reads time out with the fast-forward timeout', async function (t) {
-  t.timeout(60000)
-
-  const auto1 = await create(t)
-  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
-
-  let state = 'pending'
-  let readStarted = 0
-
-  const auto2 = await create(t, auto1.key, {
-    fastForward: false,
-    isTrusted: () => true,
-    async warmup(view) {
-      readStarted = Date.now()
-      try {
-        // written once in an early batch and never rewritten, so it lives in a block nobody serves
-        await view.get(b4a.from('#000001'))
-        state = 'resolved'
-      } catch (err) {
-        state = 'rejected:' + err.code
-        throw err
-      }
-    }
-  })
-
-  // fetch everything the fast-forward itself reads, then cut the transport before it starts
-  // so the warmup read is the only thing left that needs the network
-  const unreplicate = replicate(auto1, auto2)
-
-  const oplog = auto2.openCore(auto1.local.key)
-  await oplog.get(auto1.local.length - 1)
-  await oplog.close()
-
-  const system = auto2.store.get({ key: auto1.system.bee.core.key })
-  await system.download({ start: 0, end: auto1.system.bee.core.length }).done()
-  await system.close()
-
-  const view = auto2.store.get({ key: auto1.view.core.key })
-  await view.get(auto1.view.core.length - 1)
-  await view.close()
-
-  await unreplicate()
-
-  const head = { key: auto1.local.key, length: auto1.local.length }
-  const ff = await FastForward.fromHead(auto2, head, null, { force: true, timeout: 1000 })
-  t.ok(ff, 'the fast-forward candidate was accepted')
-
-  t.absent(await ff.run(), 'the fast-forward produced no result')
-  t.ok(ff.failed, 'the fast-forward failed')
-
-  const elapsed = Date.now() - readStarted
-  t.comment('warmup read took ' + elapsed + 'ms')
-  t.is(state, 'rejected:REQUEST_TIMEOUT', 'the warmup read timed out instead of hanging')
-  t.ok(elapsed >= 900, 'the read waited out the fast-forward timeout')
+  t.absent(result, 'the cancelled fast-forward produced no result')
 })
 
 // a corestore that holds the oplog and system whole, and the view minus its
@@ -826,23 +732,184 @@ async function sparseViewMirror(t, auto1, auto2) {
   }
 }
 
-test('an explicit move cancels a fast-forward that is still running', async function (t) {
+test('an explicit move lands past a fast-forward stuck in flight, and cancels it', async function (t) {
   const auto1 = await create(t)
   for (let i = 0; i < 40; i++) await auto1.append(encode({ value: 'a' + i }))
 
   const auto2 = await create(t, auto1.key)
   await auto2.ready()
 
-  const stuck = new FastForward(auto2, { key: b4a.alloc(32, 1), length: 10 }, { timeout: 0 })
-  const background = auto2._runFastForward(stuck)
-  t.is(auto2.fastForwarding, stuck, 'a fast-forward is in flight')
+  // a head whose system nobody serves: the run boots and waits forever
+  const bogus = b4a.alloc(32, 1)
+  const stuck = auto2.writers.refFastForward(bogus)
+  stuck.head = {
+    key: bogus,
+    length: 10,
+    op: {
+      views: {
+        flushes: 5,
+        system: { key: bogus, start: 0, length: 10 },
+        view: { key: bogus, start: 0, length: 10 }
+      }
+    }
+  }
+  const background = stuck.inflate({ force: true })
+  t.ok(stuck.inflating !== null, 'a fast-forward is in flight')
 
   t.teardown(replicate(auto1, auto2))
 
-  const moved = await auto2.moveTo({ key: auto1.local.key, length: auto1.local.length })
+  const moved = await moveTo(auto2, { key: auto1.local.key, length: auto1.local.length })
   t.ok(moved, 'the explicit move landed')
-  t.is(await background, false, 'the one in flight was cancelled')
   t.alike(auto2.system.bee.head(), auto1.system.bee.head(), 'on the head it was pointed at')
+
+  // the landing passed the stuck head, so the move cancelled its run
+  t.is(await background, null, 'the one in flight was cancelled')
+  t.is(stuck.inflating, null, 'nothing left in flight')
+
+  auto2.writers.unrefFastForward(stuck)
+})
+
+// the head in hand, then the dance onto it, the way a writer vouching for it would
+async function inflate(auto, head, opts) {
+  const ff = auto.writers.refFastForward(head.key)
+
+  try {
+    ff.hint(head.length)
+    await ff.wait(head.length)
+    return await ff.inflate(opts)
+  } finally {
+    auto.writers.unrefFastForward(ff)
+  }
+}
+
+test('a move requested while a drain is running still lands', async function (t) {
+  const admin = await create(t)
+  for (let i = 0; i < 30; i++) await admin.append(encode({ value: 'old ' + i }))
+
+  let armed = false
+
+  const mirror = await create(t, admin.key, {
+    isTrusted: () => false,
+    update() {
+      if (!armed) return
+      armed = false
+      mirror.moveTo({ key: admin.local.key, length: admin.local.length })
+    }
+  })
+
+  const done = replicate(admin, mirror)
+  await sync(admin, mirror)
+
+  const moved = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('the move stayed parked')), 5000)
+    mirror.once('move-to', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+
+  // the update handler runs inside the drain that applies this
+  armed = true
+  await admin.append(encode({ value: 'last' }))
+
+  await t.execution(moved, 'the move landed')
+
+  await done()
+})
+
+test('a newer head closes the view the trusted head hook was reading', async function (t) {
+  const admin = await create(t)
+  const writer = await create(t, admin.key)
+
+  await admin.append(encode({ addWriter: writer.local.id }))
+  await replicateAndSync(admin, writer)
+
+  await writer.append(encode({ value: 'first' }))
+  await replicateAndSync(admin, writer)
+
+  let reading = 0
+
+  // the writer's views are only on the writer, which the mirror never meets
+  const mirror = await create(t, admin.key, {
+    isTrusted: () => false,
+    async mostRecentTrusted(target, reference) {
+      if (reference === null) return null
+
+      reading++
+
+      try {
+        await target.get(b4a.from('anything'))
+      } finally {
+        reading--
+      }
+
+      return null
+    }
+  })
+
+  const done = replicate(admin, mirror)
+  await sync(admin, mirror)
+  await eventually(() => reading === 1)
+
+  t.is(reading, 1, 'the hook waits on the view nobody serves')
+
+  await writer.append(encode({ value: 'second' }))
+  await replicateAndSync(admin, writer)
+  await sync(admin, mirror)
+  await eventually(() => false, 500)
+
+  t.is(reading, 1, 'the read on the replaced head was let go')
+
+  await done()
+})
+
+async function eventually(fn, ms = 2000) {
+  const end = Date.now() + ms
+
+  while (!fn() && Date.now() < end) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
+test('a second move for the same key replaces the first, it does not land on it', async function (t) {
+  const admin = await create(t)
+  for (let i = 0; i < 40; i++) await admin.append(encode({ value: 'old ' + i }))
+
+  // holds the first run in flight
+  let release = null
+  let warmups = 0
+
+  const mirror = await create(t, admin.key, {
+    isTrusted: () => false,
+    fastForward: false,
+    warmup() {
+      if (warmups++ > 0) return
+      return new Promise((resolve) => {
+        release = resolve
+      })
+    }
+  })
+
+  const landings = []
+  mirror.on('move-to', () => landings.push(mirror.system.flushes))
+
+  const done = replicate(admin, mirror)
+
+  mirror.moveTo({ key: admin.local.key, length: admin.local.length })
+  await eventually(() => release !== null)
+  t.ok(release !== null, 'the first move is in flight')
+
+  for (let i = 0; i < 60; i++) await admin.append(encode({ value: 'new ' + i }))
+
+  mirror.moveTo({ key: admin.local.key, length: admin.local.length })
+  await eventually(() => mirror.writers.moving !== null && mirror.writers.moving.length === 100)
+
+  release()
+  await eventually(() => landings.length > 0)
+
+  t.is(landings[0], admin.system.flushes, 'landed on the second head')
+
+  await done()
 })
 
 test('own writes applied but not flushed when a fast-forward lands are reapplied', async function (t) {
@@ -881,8 +948,8 @@ test('own writes applied but not flushed when a fast-forward lands are reapplied
   writes.push(auto2.append(encode({ value: 'b2' })), auto2.append(encode({ value: 'b3' })))
 
   t.teardown(replicate(auto1, auto2))
-  const moved = auto2.moveTo({ key: auto1.local.key, length: auto1.local.length })
-  while (auto2.fastForwardTo === null) await new Promise((resolve) => setTimeout(resolve, 10))
+  // requested while apply is held, the drain picks it up with writes still unflushed
+  const moved = moveTo(auto2, { key: auto1.local.key, length: auto1.local.length })
   hold = null
   release()
 
@@ -910,6 +977,175 @@ test('own writes applied but not flushed when a fast-forward lands are reapplied
     'reopened, still has all its own writes'
   )
   t.ok(await same(auto1, reopened), 'same view after reopen')
+})
+
+test('fast-forward - a head that does not decode closes its candidate', async function (t) {
+  const auto = await create(t)
+  await auto.append(encode({ hello: 'world' }))
+
+  const store = new Corestore(await t.tmp(), { manifestVersion: 2 })
+  t.teardown(() => store.close())
+
+  const bogus = store.get({ name: 'bogus-writer' })
+  await bogus.ready()
+  await bogus.append(b4a.from('not a valid oplog entry'))
+
+  const s1 = auto.replicate(false)
+  const s2 = store.replicate(true)
+
+  s1.pipe(s2).pipe(s1)
+  t.teardown(() => {
+    s1.destroy()
+    s2.destroy()
+  })
+
+  auto.moveTo({ key: bogus.key, length: 1 })
+
+  await waitFor(() => auto.writers.moving !== null && auto.writers.moving.isClosed)
+
+  t.ok(auto.writers.moving.isClosed, 'the candidate is closed')
+  t.is(auto.writers.moving.head, null, 'and has no head')
+
+  await auto.append(encode({ hello: 'again' }))
+  t.absent(auto.closing, 'the db goes on')
+})
+
+test('a move lands on the head it names, not the newest of that writer', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 50; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const flushes = auto1.system.flushes
+
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'b' + i }))
+
+  const auto2 = await create(t, auto1.key, { fastForward: false })
+  t.teardown(replicate(auto1, auto2))
+
+  let landed = -1
+  auto2.once('move-to', () => {
+    landed = auto2.system.flushes
+  })
+
+  await moveTo(auto2, head)
+
+  t.ok(landed > 0 && landed <= flushes, 'landed on the older head')
+
+  await sync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'and applies on from there')
+})
+
+test('a queued move is the only fast-forward that runs', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const store = new Corestore(await t.tmp(), { manifestVersion: 2 })
+  t.teardown(() => store.close())
+
+  // a head nobody serves, the move onto it never lands
+  const unserved = store.get({ name: 'unserved' })
+  await unserved.ready()
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
+
+  auto2.moveTo({ key: unserved.key, length: 1 })
+  t.teardown(replicate(auto1, auto2))
+
+  await sync(auto1, auto2)
+
+  t.is(auto2.stats.fastForwards, 0, 'nothing landed while the move is queued')
+  t.ok(auto2.writers.moving !== null, 'the move is still queued')
+  t.ok(await same(auto1, auto2), 'the db caught up by applying')
+})
+
+test('a cancelled run is not joined, the head gets a new one', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true, fastForward: false })
+  t.teardown(replicate(auto1, auto2))
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = auto2.writers.refFastForward(head.key)
+  t.teardown(() => auto2.writers.unrefFastForward(ff))
+
+  ff.hint(head.length)
+  await ff.wait(head.length)
+
+  const cancelled = ff.inflate({ force: true })
+  ff.cancel()
+
+  const again = ff.inflate({ force: true })
+
+  t.absent(await cancelled, 'the cancelled run gives nothing')
+  t.ok(await again, 'the next request ran on its own')
+})
+
+test('a run queued behind a cancelled one never reads once the candidate closes', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true, fastForward: false })
+  const unreplicate = replicate(auto1, auto2)
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = auto2.writers.refFastForward(head.key)
+
+  ff.hint(head.length)
+  await ff.wait(head.length)
+
+  // the head is in hand, nobody serves the system it names
+  await unreplicate()
+
+  const first = ff.inflate({ force: true })
+  ff.cancel()
+
+  const queued = ff.inflate({ force: true })
+  t.not(queued, first, 'the cancelled run is not joined')
+
+  const closing = ff.close()
+  const closed = await Promise.race([
+    closing.then(() => true),
+    new Promise((resolve) => setTimeout(resolve, 2000, false))
+  ])
+
+  t.ok(closed, 'the close is not held up by reads nobody serves')
+  t.absent(await first, 'the cancelled run gives nothing')
+  t.absent(await queued, 'nor does the one behind it')
+  t.is(ff.inflating, null, 'nothing left in flight')
+
+  auto2.writers.unrefFastForward(ff)
+})
+
+test('every candidate runs, the best two hanging do not hold a third up', async function (t) {
+  const auto = await create(t, { isTrusted: () => true })
+
+  const asked = []
+
+  for (const flushes of [300, 200, 100]) {
+    auto.writers.fastForwards.set('fake-' + flushes, {
+      head: { op: { views: { flushes } } },
+      inflating: null,
+      inflated: null,
+      cancel() {},
+      close() {},
+      inflateBackground() {
+        asked.push(flushes)
+      }
+    })
+  }
+
+  auto.writers.rankFastForwards()
+
+  t.alike(asked, [300, 200, 100], 'all three were started')
+  t.is(auto.writers.fastForward.head.op.views.flushes, 300, 'the best one is still the best')
+
+  auto.writers.fastForwards.clear()
+  auto.writers.fastForward = null
 })
 
 async function appliedFrom(auto, writer) {

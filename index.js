@@ -4,9 +4,8 @@ const b4a = require('b4a')
 const safetyCatch = require('safety-catch')
 const Hyperbee = require('hyperbee2')
 const ID = require('hypercore-id-encoding')
-const rrp = require('resolve-reject-promise')
 const Signal = require('signal-promise')
-const AutobeeWakeup = require('autobee-wakeup')
+const Wakeup = require('./lib/wakeup.js')
 const Hypercore = require('hypercore')
 const crypto = require('hypercore-crypto')
 const c = require('compact-encoding')
@@ -21,12 +20,10 @@ const {
 const { resolveWeight, currentWeight } = require('./lib/witness.js')
 const encoding = require('./lib/encoding.js')
 const { AutobeeEncryption, WriterEncryption, ViewEncryption } = require('./lib/encryption.js')
-const FastForward = require('./lib/fast-forward.js')
 const System = require('./lib/system.js')
 const ApplyCalls = require('./lib/apply-calls.js')
 const topo = require('./lib/topo.js')
 const { ActiveWriters } = require('./lib/writers.js')
-const BatchGate = require('./lib/batch-gate.js')
 const TrustedPeers = require('./lib/trusted.js')
 const { Remapper, recoveryPeersConfigured } = require('./lib/remap.js')
 const ApplyView = require('./lib/apply-view.js')
@@ -122,11 +119,7 @@ module.exports = class Autobee extends ReadyResource {
 
     this.trusted = new TrustedPeers(this, handlers)
 
-    this.ff = null
-    this.fastForwarding = null
-    this.fastForwardTo = null
-    this._ffCandidates = new Map()
-    this._ffSearching = null
+    this._moveTo = null
     this._bumpSignal = new Signal()
 
     this._workingBee = bee
@@ -142,7 +135,6 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
 
     this._draining = null
-    this._updating = null
 
     this.legacyViews = handlers.legacyViews || []
 
@@ -162,13 +154,6 @@ module.exports = class Autobee extends ReadyResource {
     this._warmup = handlers.warmup || null
     this._hasApply = !!handlers.apply
     this._hasUpdate = !!handlers.update
-    // options kept so a fast-forward can replace the gate wholesale
-    this._gateOptions = {
-      enabled: handlers.headBarrier === true,
-      stallMs: handlers.headBarrierStallMs,
-      maxHoldMs: handlers.headBarrierMaxHoldMs
-    }
-    this.batchGate = new BatchGate(this, this._gateOptions)
     this._needsUpdate = false
     this._approvalCheck = true
     this._approvedPending = new Map()
@@ -184,7 +169,7 @@ module.exports = class Autobee extends ReadyResource {
     this._onGroupUpdateBound = this._onGroupUpdate.bind(this)
 
     this.wakeupCapability = null
-    this._wakeup = new AutobeeWakeup(this, handlers)
+    this._wakeup = new Wakeup(this, handlers)
     this.previousDrain = 0
     this._storedPreviousDrain = 0
 
@@ -199,10 +184,6 @@ module.exports = class Autobee extends ReadyResource {
 
   static isAutobee(auto) {
     return auto instanceof Autobee
-  }
-
-  get isIndexer() {
-    return this.writers ? this.writers.localWriter.isIndexer : false
   }
 
   get appending() {
@@ -233,7 +214,7 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   get busy() {
-    return !!(this._draining || this._updating)
+    return !!this._draining
   }
 
   async _getCorePreload(name) {
@@ -319,17 +300,16 @@ module.exports = class Autobee extends ReadyResource {
 
   getExternalWriters() {
     const keys = []
-    for (const w of this.writers.active.values()) {
+    for (const w of this.writers) {
       if (w === this.writers.localWriter) continue
-      keys.push(w.core.key)
+      keys.push(w.key)
     }
     return keys
   }
 
   getWriterViews(key) {
-    const id = b4a.toString(key, 'hex')
-    const w = this.writers.active.get(id)
-    if (!w) return []
+    const w = this.writers.get(key)
+    if (w === null) return []
     return w.views()
   }
 
@@ -346,8 +326,10 @@ module.exports = class Autobee extends ReadyResource {
       result.writers.push(this.local.key)
 
       if (await this.trusted.isTrusted(this.local.key, this._workingView.view)) {
-        const localViews = await this.writers.localWriter.views()
-        for (const { key } of localViews) {
+        // views() answers from the loaded head, after a reopen it is not loaded yet
+        await this.writers.getLatestLocalOplog()
+
+        for (const { key } of this.writers.localWriter.views()) {
           views.set(b4a.toString(key, 'hex'), key)
         }
       }
@@ -419,7 +401,6 @@ module.exports = class Autobee extends ReadyResource {
     this._interrupting = true
     this._bumpSignal.notify()
     if (this._remapper !== null) this._remapper.destroy()
-    this.batchGate.destroy()
 
     // the local core holds the exclusive lock but the local writer closes it
     // early in the teardown, so hand the lock to a detached session that
@@ -470,8 +451,6 @@ module.exports = class Autobee extends ReadyResource {
     // rugpull the rest
     await this.store.close()
 
-    if (this._ffSearching) await this._ffSearching
-    if (this._updating) await this._updating
     if (this._draining) await this._draining
 
     // let in-flight writer adds finish
@@ -633,13 +612,9 @@ module.exports = class Autobee extends ReadyResource {
     try {
       if (!this._bootGuard.opened) await this._bootGuard.ready()
 
-      for (const head of this.system.heads) {
-        await this.writers.add(head.key)
-      }
-
-      if (!this.system.heads.length) {
-        await this.writers.add(this.bootstrap.key)
-      }
+      // known heads count as announced
+      for (const head of this.system.heads) this.writers.wakeup(head.key, 0)
+      if (!this.system.heads.length) this.writers.wakeup(this.bootstrap.key, 0)
 
       await this._bump(true)
     } catch (err) {
@@ -866,82 +841,82 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _drain() {
-    if (this._updating) await this._updating
-
     await this._runPreApply()
 
     this.stats.drains++
 
     if (this.bootFrom) {
-      const { head = null, legacy = null } = this.bootFrom
+      const { head } = this.bootFrom
 
       this.bootFrom = null
 
-      if (legacy) {
-        await this._bootFromSystem(legacy)
-      } else if (head) {
-        this._wakeup.hint({ key: head.key, length: head.length || 0 })
-        await this._bootFromHead(head)
-      }
+      this.trusted.pin(head.key)
+      this._wakeup.hint({ key: head.key, length: head.length || 1 })
     }
 
     if (this._remapper !== null && this._remapper.mappings !== null && !this._remapFailed) {
       await this._finishRemap()
     }
-    if (!this.remapped && this._remapper === null && this.fastForwardTo === null) this._startRemap()
+    if (!this.remapped && this._remapper === null && this._nextFastForward() === null) {
+      this._startRemap()
+    }
 
-    const changes = this._hasUpdate ? new UpdateChanges(this) : null
-    if (changes) changes.track()
+    while (!this._interrupting) {
+      const changes = this._hasUpdate ? new UpdateChanges(this) : null
+      if (changes) changes.track()
 
-    // Anything expecting work to be done during bumpSoon should do it here
-    while (!this._interrupting && this.bumping > 0) {
-      if (this._interrupting) break
-
-      // Ensure we catch updates during the drain (i.e. setLocal will bump)
-      if (this._updateLocalCore !== null) {
-        await this._rotateLocalWriter(this._updateLocalCore)
-      }
-
-      try {
-        while (!this._interrupting) {
-          await this._flushWakeup()
-          if (this._interrupting) break
-
-          if (this.fastForwardTo !== null) {
-            await this._applyFastForward()
-            if (changes) changes.track()
-            this._needsUpdate = false
-            break // revaluate conditions...
-          }
-
-          if (await this._bumpPendingWriters()) continue
-
-          if (!(await this._appendAck())) break
-          this._needsUpdate = true
+      // Anything expecting work to be done during bumpSoon should do it here
+      while (!this._interrupting && this.bumping > 0) {
+        // Ensure we catch updates during the drain (i.e. setLocal will bump)
+        if (this._updateLocalCore !== null) {
+          await this._rotateLocalWriter(this._updateLocalCore)
         }
 
-        await this._flushLocal()
+        if (this._moveTo !== null) {
+          const head = this._moveTo
+          this._moveTo = null
+          this.writers.moveTo(head)
+        }
 
-        if (!this._interrupting) await this.writers.refresh()
-      } finally {
-        if (this.bumping === 1) this.bumping = 0
-        else this.bumping = 1
+        try {
+          while (!this._interrupting) {
+            await this._flushWakeup()
+            if (this._interrupting) break
+
+            const ff = this._nextFastForward()
+
+            if (ff !== null) {
+              await this._applyFastForward(ff)
+              if (changes) changes.track()
+              this._needsUpdate = false
+              break // revaluate conditions...
+            }
+
+            if (await this._bumpPendingWriters()) continue
+
+            if (!(await this._appendAck())) break
+            this._needsUpdate = true
+          }
+
+          await this._flushLocal()
+
+          if (!this._interrupting) await this.writers.refresh()
+        } finally {
+          if (this.bumping === 1) this.bumping = 0
+          else this.bumping = 1
+        }
       }
+
+      if (this._interrupting) break
+
+      if (this._needsUpdate) await this._update(changes, false)
+      await this._storeBoot()
+
+      // bumps that landed during update or storeBoot get one more pass
+      if (this.bumping === 0) break
     }
 
     this._draining = null
-    if (this._interrupting) return
-
-    const updating = rrp()
-    this._updating = updating.promise
-
-    try {
-      if (this._needsUpdate) await this._update(changes, false)
-      await this._storeBoot()
-    } finally {
-      this._updating = null
-      updating.resolve()
-    }
   }
 
   _onGroupUpdate({ key, length }) {
@@ -1019,88 +994,16 @@ module.exports = class Autobee extends ReadyResource {
   }
 
   async _flushWakeup() {
-    const hints = await this._applyWakeupHints()
-    if (!hints.length) return
-
-    this._queueFastForward(hints)
+    await this._applyWakeupHints()
   }
 
-  _queueFastForward(hints) {
-    if (!this._ffEnabled) return
-
-    for (const { key, length } of hints) {
-      if (length === 0) continue
-
-      const hex = b4a.toString(key, 'hex')
-      const previous = this._ffCandidates.get(hex)
-      if (previous === undefined || previous < length) this._ffCandidates.set(hex, length)
-    }
-
-    if (!this._ffCandidates.size || this._ffSearching !== null) return
-
-    // a scheduled fast-forward is applied by the drain before we look again
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) return
-    if (this._interrupting || this.closing || this.bootFrom) return
-
-    // the migrated legacy nodes have to land on the legacy system before we
-    // move off it - requeue the hints so the ff is retried once they applied
-    if (this._catchupMigratedNodes !== null) {
-      this._wakeup.hint(hints)
-      return
-    }
-
-    this._ffSearching = this._searchFastForward().finally(() => {
-      this._ffSearching = null
-    })
-  }
-
-  async _searchFastForward() {
-    try {
-      while (this._ffCandidates.size) {
-        if (this.fastForwardTo !== null || this.fastForwarding !== null) return
-        if (this._interrupting || this.closing || this.bootFrom) return
-
-        const hints = flushCandidates(this._ffCandidates)
-
-        const heads = await this._readCandidateHeads(hints, FastForward.DEFAULT_TIMEOUT)
-
-        const ff = await FastForward.fromHeads(this, heads, {
-          skipGap: !this.system.isGenesis() && this.system.version < MAPPED_AUTOBEE_VERSION,
-          timeout: FastForward.DEFAULT_TIMEOUT
-        })
-
-        if (ff === null) continue
-
-        if (this._interrupting || this.closing) {
-          await ff.close()
-          return
-        }
-
-        if (await this._runFastForward(ff)) return
-      }
-    } catch (err) {
-      safetyCatch(err)
-    }
-  }
-
-  async _readCandidateHeads(hints, timeout) {
-    const promises = []
-
-    for (const { key, length } of hints) {
-      if (length === 0) continue
-      promises.push(this._resolveOplogHint(key, length, { timeout }))
-    }
-
-    const ops = await Promise.all(promises)
-    const heads = []
-
-    for (const res of ops) {
-      if (res === null) continue
-
-      heads.push({ key: res.key, length: res.length })
-    }
-
-    return heads
+  // the writers inflate the heads they vouch for, the best landed one is ours
+  _nextFastForward() {
+    // the migrated legacy nodes have to land on the legacy system before we move off it
+    if (this._catchupMigratedNodes !== null) return null
+    // a queued move is the only fast-forward that runs
+    if (this._moveTo !== null) return null
+    return this.writers.nextFastForward()
   }
 
   async _resolveOplogHint(key, length, opts) {
@@ -1297,8 +1200,11 @@ module.exports = class Autobee extends ReadyResource {
         for (const node of batch) node.weight = weight
       }
 
-      for (const batch of topo.linearize(this._catchupMigratedNodes)) {
-        await this._processBatch(batch)
+      // linearize orders writers by their tail, the migrated batches stand in
+      const tails = this._catchupMigratedNodes.map((tail) => ({ tail }))
+
+      for (const { tail } of topo.linearize(tails)) {
+        await this._processBatch(tail)
         updated = true
       }
     } finally {
@@ -1404,7 +1310,7 @@ module.exports = class Autobee extends ReadyResource {
     if (!this._acking && !this._forceAck) return false
     if (!this.writers.writable) return false
 
-    if (this.writers.localWriter.pending !== null) return false
+    if (this.writers.localWriter.appending) return false
 
     if (!this._forceAck) {
       if ((await this._flushesBehind()) < this._ackThreshold) return false
@@ -1455,24 +1361,31 @@ module.exports = class Autobee extends ReadyResource {
       }
     }
 
-    // apply the best next node to keep the prefix stable
-    const next = await this.batchGate.next({ local })
-    if (next === null) return false
+    const batches = await this.writers.drain({ local })
+    if (batches.length === 0) return false
 
-    const { writer: w, batch } = next
+    let applied = 0
 
-    const optimistic = this.optimistic && batch[0].optimistic
+    try {
+      for (const batch of batches) {
+        // a ready fast-forward takes over
+        if (this._nextFastForward() !== null) break
 
-    if (optimistic || w.isAdded || (w.isRemoved && w.hasReferrals())) {
-      await this._processBatch(batch)
-    } else {
-      w.removePending()
-      return true
+        await this._processBatch(batch)
+        applied++
+      }
+    } finally {
+      // the unapplied rest is loaded again
+      if (applied < batches.length) this.writers.reset()
     }
 
-    w.notify(batch)
-    this._needsUpdate = true
-    return true
+    if (applied > 0) this._needsUpdate = true
+    if (applied === batches.length) return true
+
+    // the main round lands it on its way round, a local flush cannot, so it
+    // ends there and asks for one
+    if (local) this.bumpSoon()
+    return !local
   }
 
   async prepareBatch(batch) {
@@ -1496,6 +1409,8 @@ module.exports = class Autobee extends ReadyResource {
       this.stats.undos++
       this.trusted.clear()
       t.view = await this.system.undo(t.undo)
+
+      await this.writers.moved()
     }
 
     return t
@@ -1521,11 +1436,7 @@ module.exports = class Autobee extends ReadyResource {
 
       await this._applyBatch(batch, batch[0].optimistic)
 
-      // trigger any upstream writer waiting for this batch early
-      const id = b4a.toString(batch[0].key, 'hex')
-      const length = batch[batch.length - 1].length
-
-      this.writers.triggers.trigger(id, length)
+      this.writers.resolved(batch[0].key, batch[batch.length - 1].length)
     }
   }
 
@@ -1576,16 +1487,13 @@ module.exports = class Autobee extends ReadyResource {
       this._localFlushes = this.system.flushes
     }
 
-    for (const { key, added } of changed) {
-      if (added) await this.writers.add(key)
-      else await this.writers.remove(key)
-    }
+    for (const { key } of changed) this.writers.changed(key)
   }
 
   _hasUnappliedWriters() {
     for (const w of this.writers.active.values()) {
-      if (w === this.writers.localWriter || w.isFrozen) continue
-      if (w.systemLength < w.core.length) return true
+      if (w === this.writers.localWriter || w.isFrozen || w.core === null) continue
+      if (w.length < w.core.length) return true
     }
 
     return false
@@ -1637,6 +1545,7 @@ module.exports = class Autobee extends ReadyResource {
     await this._bump(false)
   }
 
+  // TODO: a mode that force appends now, a sparse offline peer waits on reads
   async append(values, { optimistic = false } = {}) {
     if (this.closing) throw new Error('Autobee closed')
 
@@ -1690,7 +1599,20 @@ module.exports = class Autobee extends ReadyResource {
       batch.push(node)
     }
 
-    return this._bump(false)
+    const last = batch[batch.length - 1]
+    let fastForwards = this.stats.fastForwards
+
+    await this._bump(false)
+
+    // a fast-forward can take a drain over before our nodes went in
+    while (
+      this.stats.fastForwards !== fastForwards &&
+      this.writers.localWriter.queue.includes(last) &&
+      !this.closing
+    ) {
+      fastForwards = this.stats.fastForwards
+      await this._bump(false)
+    }
   }
 
   async _flushLocal() {
@@ -1722,109 +1644,21 @@ module.exports = class Autobee extends ReadyResource {
     this._localViewLength = 0
   }
 
-  async moveTo(head, { timeout = 0 } = {}) {
-    if (!this._bootGuard.opened) await this._bootGuard.ready()
+  // lands from the drain once the head is in hand, 'move-to' says when
+  moveTo(head) {
     if (this.closing) throw new Error('Autobee closed')
 
-    // an explicit move goes wherever it is pointed, backwards included
-    const ff = await FastForward.fromHead(this, head, null, { force: true, rewind: true, timeout })
-    if (ff === null) return null
+    // a head we were handed is one we trust
+    this.trusted.pin(head.key)
 
-    while (this.fastForwardTo !== null && !this.closing) await this.ff.promise
-
-    const previous = this.fastForwarding
-    this.fastForwarding = null
-
-    const running = this._runFastForward(ff, { force: true, rewind: true })
-    if (previous !== null) await previous.close()
-
-    if (!(await running)) return null
-
-    return this.ff.promise
-  }
-
-  // legacy: ungated boot straight onto a system head
-  async _bootFromSystem(system) {
-    try {
-      const ff = new FastForward(this, system, {
-        timeout: FastForward.DEFAULT_TIMEOUT,
-        force: true
-      })
-      return await this._runFastForward(ff, { force: true })
-    } catch (err) {
-      safetyCatch(err)
-      return false
-    }
-  }
-
-  async _bootFromHead(head) {
-    const timeout = FastForward.DEFAULT_TIMEOUT
-
-    try {
-      const oplog = await this._resolveOplogHint(head.key, head.length || 0, { timeout })
-      if (oplog === null) return false
-
-      const ff = await FastForward.fromHead(this, oplog, null, { force: true, timeout })
-
-      return ff !== null && (await this._runFastForward(ff, { force: true }))
-    } catch (err) {
-      safetyCatch(err)
-      return false
-    }
-  }
-
-  async _runFastForward(ff, { force = false, rewind = false } = {}) {
-    if (this.fastForwardTo !== null || this.fastForwarding !== null) {
-      await ff.close()
-      return false
+    // a commit does not cover the head we move to
+    if (this._remapper !== null && this._remapper.committing) {
+      this._remapper.destroy()
+      this._remapper = null
     }
 
-    this.fastForwarding = ff
-
-    const result = await ff.run()
-    const flushes = ff.system.flushes
-    const version = ff.system.version
-    await ff.close()
-
-    if (this.fastForwarding !== ff) return false
-    this.fastForwarding = null
-
-    if (!result) return false
-
-    // a peer in lock step with the writer that remapped is never behind its claim
-    const isRemap =
-      this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
-    const slack = isRemap ? FastForward.MIN_GAP : 0
-
-    // never move backwards, a boot head can be older than what we already have
-    if (!rewind && flushes < this.system.flushes - slack) return false
-
-    // apply ran while we searched, only drop it if it no longer moves us forward enough
-    if (!force && !isRemap && flushes - this.system.flushes < FastForward.MIN_GAP) return false
-
-    // an old head is never accepted from the new generation or while committing
-    const old = version < MAPPED_AUTOBEE_VERSION
-    if (old && !force && !this.system.isGenesis() && (this.remapped || this.committing)) {
-      return false
-    }
-
-    this.fastForwardTo = result
-    this.ff = rrp()
-
-    // a remapped head replaces whatever we were about to remap ourselves, as
-    // does a forced move during the commit: its walk no longer covers the head
-    if (this._remapper !== null) {
-      if (isRemap || this._remapper.committing) {
-        this._remapper.destroy()
-        this._remapper = null
-      } else {
-        this._remapper.cancel()
-      }
-    }
-
+    this._moveTo = head
     this.bumpSoon()
-
-    return true
   }
 
   async _runMigration() {
@@ -1838,11 +1672,25 @@ module.exports = class Autobee extends ReadyResource {
     await this._handlers.migrate(migration.views, migration.head)
   }
 
-  async _applyFastForward() {
+  async _applyFastForward(ff) {
     const changes = this._hasUpdate ? new UpdateChanges(this) : null
     if (changes) changes.track()
 
-    const { head } = this.fastForwardTo
+    const { head, version } = ff.inflated
+
+    const isRemap =
+      this.system.version < MAPPED_AUTOBEE_VERSION && version >= MAPPED_AUTOBEE_VERSION
+
+    // a remapped head replaces whatever we were about to remap ourselves, as
+    // does a forced move during the commit: its walk no longer covers the head
+    if (this._remapper !== null) {
+      if (isRemap || this._remapper.committing) {
+        this._remapper.destroy()
+        this._remapper = null
+      } else {
+        this._remapper.cancel()
+      }
+    }
 
     const from = this.system.bee.head()
     const to = head
@@ -1862,15 +1710,11 @@ module.exports = class Autobee extends ReadyResource {
     if (!this.remapped && this._remapper === null) this._startRemap()
 
     this._approvalCheck = true
-    this.fastForwardTo = null
-
-    // every gate range and deadline predates the jump in applied state
-    this.batchGate.destroy()
-    this.batchGate = new BatchGate(this, this._gateOptions)
 
     // process any wakeup while fast-forward itself was in flight
-    this._queueFastForward(await this._applyWakeupHints())
-    await this.writers.refresh()
+    await this._applyWakeupHints()
+
+    await this.writers.fastForwarded(ff)
 
     // we moved, so ask our peers to tell us their heads again
     this._requestWakeup()
@@ -1880,15 +1724,14 @@ module.exports = class Autobee extends ReadyResource {
 
     await this._updateAcking()
 
-    // a landing accepted meanwhile cancelled the remap again: it restarts it.
-    // the guards _startRemap has are not needed here: a remap only exists once
-    // the boot migration is over, and a migration the landing brought along was
-    // run above, before the remap is touched
-    if (this._remapper !== null && this.fastForwardTo === null) this._remapper.restart()
+    // the landing cancelled the remap, it picks up from here unless another
+    // landing is ready. the guards _startRemap has are not needed: a remap only
+    // exists once the boot migration is over, and a migration the landing
+    // brought along was run above, before the remap is touched
+    if (this._remapper !== null && this._nextFastForward() === null) this._remapper.restart()
 
     this.stats.fastForwards++
     this.emit('move-to', to, from)
-    this.ff.resolve({ to, from })
   }
 
   replay() {
@@ -1903,24 +1746,9 @@ function isObject(o) {
 function getBootOption(boot) {
   if (!boot) return null
 
-  // oldest style, supported for now but will go away: a bare key is legacy
-  if (boot.key) return { legacy: boot, head: null }
-
-  asserts.assert(!(boot.head && boot.legacy), 'Boot from either a head or a legacy pointer')
+  asserts.assert(!!boot.head, 'Boot from an oplog head, the legacy system pointer is gone')
 
   return boot
-}
-
-function flushCandidates(candidates) {
-  const hints = []
-
-  for (const [hex, length] of candidates) {
-    hints.push({ key: b4a.from(hex, 'hex'), length })
-  }
-
-  candidates.clear()
-
-  return hints
 }
 
 function noop() {}
