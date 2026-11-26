@@ -1010,6 +1010,56 @@ test('fast-forward - a head that does not decode closes its candidate', async fu
   t.absent(auto.closing, 'the db goes on')
 })
 
+test('a move lands on the head it names, not the newest of that writer', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 50; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const flushes = auto1.system.flushes
+
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'b' + i }))
+
+  const auto2 = await create(t, auto1.key, { fastForward: false })
+  t.teardown(replicate(auto1, auto2))
+
+  let landed = -1
+  auto2.once('move-to', () => {
+    landed = auto2.system.flushes
+  })
+
+  await moveTo(auto2, head)
+
+  t.ok(landed > 0 && landed <= flushes, 'landed on the older head')
+
+  await sync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'and applies on from there')
+})
+
+test('a queued move is the only fast-forward that runs', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 200; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const store = new Corestore(await t.tmp(), { manifestVersion: 2 })
+  t.teardown(() => store.close())
+
+  // a head nobody serves, the move onto it never lands
+  const unserved = store.get({ name: 'unserved' })
+  await unserved.ready()
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true })
+
+  auto2.moveTo({ key: unserved.key, length: 1 })
+  t.teardown(replicate(auto1, auto2))
+
+  await sync(auto1, auto2)
+
+  t.is(auto2.stats.fastForwards, 0, 'nothing landed while the move is queued')
+  t.ok(auto2.writers.moving !== null, 'the move is still queued')
+  t.ok(await same(auto1, auto2), 'the db caught up by applying')
+})
+
 async function appliedFrom(auto, writer) {
   const prefix = b4a.toString(writer.local.key, 'hex') + '.'
   const lengths = new Set()

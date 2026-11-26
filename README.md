@@ -292,6 +292,8 @@ A node that landed via fast-forward holds its cores sparse, so it never satisfie
 
 Fast-forward onto an oplog head, ignoring the usual distance and conservative checks, backwards included. Returns straight away: the db lands once the head is in hand and emits `'move-to'` with `(to, from)` when it has. The reads wait for a peer for as long as it takes, closing the db ends them, and a later `moveTo` replaces one that has not landed.
 
+The db lands on the first head of that writer at or past `length`, not on its newest. While a move has not landed no other fast-forward runs.
+
 The head's key is trusted from then on.
 
 ### Acking

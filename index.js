@@ -1001,6 +1001,8 @@ module.exports = class Autobee extends ReadyResource {
   _nextFastForward() {
     // the migrated legacy nodes have to land on the legacy system before we move off it
     if (this._catchupMigratedNodes !== null) return null
+    // a queued move is the only fast-forward that runs
+    if (this._moveTo !== null) return null
     return this.writers.nextFastForward()
   }
 
