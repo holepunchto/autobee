@@ -1060,6 +1060,30 @@ test('a queued move is the only fast-forward that runs', async function (t) {
   t.ok(await same(auto1, auto2), 'the db caught up by applying')
 })
 
+test('a cancelled run is not joined, the head gets a new one', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true, fastForward: false })
+  t.teardown(replicate(auto1, auto2))
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = auto2.writers.refFastForward(head.key)
+  t.teardown(() => auto2.writers.unrefFastForward(ff))
+
+  ff.hint(head.length)
+  await ff.wait(head.length)
+
+  const cancelled = ff.inflate({ force: true })
+  ff.cancel()
+
+  const again = ff.inflate({ force: true })
+
+  t.absent(await cancelled, 'the cancelled run gives nothing')
+  t.ok(await again, 'the next request ran on its own')
+})
+
 async function appliedFrom(auto, writer) {
   const prefix = b4a.toString(writer.local.key, 'hex') + '.'
   const lengths = new Set()
