@@ -131,3 +131,27 @@ test('appends landing while a flush is in flight get their own position', async 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+test('a round that sorts below our tip undoes it once, not per batch', async function (t) {
+  const auto1 = await create(t)
+  const auto2 = await create(t, auto1.key)
+
+  await auto1.append(encode({ msg: 'initial', from: 1 }))
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  for (let i = 0; i < 10; i++) await auto1.append(encode({ msg: 'below', i }))
+  for (let i = 0; i < 5; i++) await auto2.append(encode({ msg: 'tip', i }))
+
+  const undos = auto2.stats.undos
+  const applies = auto2.stats.applies
+
+  await replicateAndSync(auto1, auto2)
+
+  t.ok(await same(auto1, auto2), 'same state')
+  // once per round, and how the ten are split into rounds is up to the network
+  const n = auto2.stats.undos - undos
+
+  t.ok(n > 0 && n < 10, 'the tip is not undone for every batch')
+  t.is(auto2.stats.applies - applies, 10 + 5 * n, 'and is applied again once per undo')
+})
