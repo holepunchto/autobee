@@ -1084,6 +1084,43 @@ test('a cancelled run is not joined, the head gets a new one', async function (t
   t.ok(await again, 'the next request ran on its own')
 })
 
+test('a run queued behind a cancelled one never reads once the candidate closes', async function (t) {
+  const auto1 = await create(t)
+
+  for (let i = 0; i < 100; i++) await auto1.append(encode({ value: 'a' + i }))
+
+  const auto2 = await create(t, auto1.key, { isTrusted: () => true, fastForward: false })
+  const unreplicate = replicate(auto1, auto2)
+
+  const head = { key: auto1.local.key, length: auto1.local.length }
+  const ff = auto2.writers.refFastForward(head.key)
+
+  ff.hint(head.length)
+  await ff.wait(head.length)
+
+  // the head is in hand, nobody serves the system it names
+  await unreplicate()
+
+  const first = ff.inflate({ force: true })
+  ff.cancel()
+
+  const queued = ff.inflate({ force: true })
+  t.not(queued, first, 'the cancelled run is not joined')
+
+  const closing = ff.close()
+  const closed = await Promise.race([
+    closing.then(() => true),
+    new Promise((resolve) => setTimeout(resolve, 2000, false))
+  ])
+
+  t.ok(closed, 'the close is not held up by reads nobody serves')
+  t.absent(await first, 'the cancelled run gives nothing')
+  t.absent(await queued, 'nor does the one behind it')
+  t.is(ff.inflating, null, 'nothing left in flight')
+
+  auto2.writers.unrefFastForward(ff)
+})
+
 async function appliedFrom(auto, writer) {
   const prefix = b4a.toString(writer.local.key, 'hex') + '.'
   const lengths = new Set()
