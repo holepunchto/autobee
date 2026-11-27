@@ -1196,7 +1196,7 @@ module.exports = class Autobee extends ReadyResource {
 
     try {
       for (const batch of this._catchupMigratedNodes) {
-        const weight = await resolveWeight(this, batch[0])
+        const weight = await resolveWeight(this, batch[0], true)
         for (const node of batch) node.weight = weight
       }
 
@@ -1364,23 +1364,16 @@ module.exports = class Autobee extends ReadyResource {
     const batches = await this.writers.drain({ local })
     if (batches.length === 0) return false
 
-    let applied = 0
+    let done = false
 
     try {
-      for (const batch of batches) {
-        // a ready fast-forward takes over
-        if (this._nextFastForward() !== null) break
-
-        await this._processBatch(batch)
-        applied++
-      }
+      done = await this._processBatches(batches, true)
     } finally {
       // the unapplied rest is loaded again
-      if (applied < batches.length) this.writers.reset()
+      if (!done) this.writers.reset()
     }
 
-    if (applied > 0) this._needsUpdate = true
-    if (applied === batches.length) return true
+    if (done) return true
 
     // the main round lands it on its way round, a local flush cannot, so it
     // ends there and asks for one
@@ -1388,11 +1381,15 @@ module.exports = class Autobee extends ReadyResource {
     return !local
   }
 
+  async _resolveWeight(batch, wait) {
+    const weight = await resolveWeight(this, batch[0], wait)
+    for (const n of batch) n.weight = weight
+  }
+
   async prepareBatch(batch) {
     const node = batch[0]
     // recomputed on every application, converges because prefixes converge
-    node.weight = await resolveWeight(this, node)
-    for (const n of batch) n.weight = node.weight
+    await this._resolveWeight(batch, true)
 
     if (
       node.hash &&
@@ -1416,17 +1413,34 @@ module.exports = class Autobee extends ReadyResource {
     return t
   }
 
-  async _processBatch(batch) {
-    // a stack: the tip is pushed in reverse so it pops in order
-    const stack = [batch]
+  _processBatch(batch) {
+    return this._processBatches([batch], false)
+  }
+
+  // false when a ready fast-forward took over before all of it was applied
+  async _processBatches(batches, interruptible) {
+    // a stack: reversed in place so it pops in order
+    const stack = batches.reverse()
 
     while (stack.length) {
+      if (interruptible && this._nextFastForward() !== null) return false
+
       const batch = stack.pop()
       const t = await this.prepareBatch(batch)
 
       if (t.view) {
         this._workingBee.move(t.view)
-        for (let i = t.tip.length - 1; i >= 0; i--) stack.push(t.tip[i])
+        this._needsUpdate = true
+
+        // what is still to come is sorted into what we undid, so that is undone once.
+        // a guess: every batch is still sorted on its own when its turn comes, so it
+        // never waits on the network, and a weight an earlier batch raises costs an undo
+        const pending = stack.reverse()
+        for (const b of pending) await this._resolveWeight(b, false)
+
+        const order = topo.merge(t.tip, pending)
+        stack.length = 0
+        for (let i = order.length - 1; i >= 0; i--) stack.push(order[i])
         continue
       }
 
@@ -1437,7 +1451,10 @@ module.exports = class Autobee extends ReadyResource {
       await this._applyBatch(batch, batch[0].optimistic)
 
       this.writers.resolved(batch[0].key, batch[batch.length - 1].length)
+      this._needsUpdate = true
     }
+
+    return true
   }
 
   async _applyBatch(batch, optimistic) {

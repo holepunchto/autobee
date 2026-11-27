@@ -1,5 +1,6 @@
 const test = require('brittle')
 const b4a = require('b4a')
+const Corestore = require('corestore')
 const { create, replicateAndSync, same, encode } = require('./helpers')
 
 test('three-way fork and merge', async function (t) {
@@ -131,3 +132,43 @@ test('appends landing while a flush is in flight get their own position', async 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+test('a round that sorts below our tip undoes it once, not per batch', async function (t) {
+  const storage = await t.tmp()
+
+  const auto1 = await create(t)
+  let auto2 = await create(t, auto1.key, { storage })
+
+  await auto1.append(encode({ msg: 'initial', from: 1 }))
+  await auto1.append(encode({ addWriter: auto2.local.id }))
+  await replicateAndSync(auto1, auto2)
+
+  for (let i = 0; i < 10; i++) await auto1.append(encode({ msg: 'below', i }))
+  for (let i = 0; i < 5; i++) await auto2.append(encode({ msg: 'tip', i }))
+
+  await auto2.close()
+
+  // all ten are on disk before the db sees any of them, so they are one round
+  const store = new Corestore(storage, { manifestVersion: 2 })
+  const core = store.get({ key: auto1.local.key })
+  await core.ready()
+
+  const s1 = auto1.replicate(true)
+  const s2 = store.replicate(false)
+  s1.pipe(s2).pipe(s1)
+
+  await core.download({ start: 0, end: auto1.local.length }).done()
+
+  s1.destroy()
+  s2.destroy()
+  await store.close()
+
+  auto2 = await create(t, auto1.key, { storage })
+  await auto2.update()
+
+  t.is(auto2.stats.undos, 1, 'the tip is undone once')
+  t.is(auto2.stats.applies, 15, 'and applied again once')
+
+  await replicateAndSync(auto1, auto2)
+  t.ok(await same(auto1, auto2), 'same state')
+})
