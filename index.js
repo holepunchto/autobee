@@ -616,6 +616,13 @@ module.exports = class Autobee extends ReadyResource {
       for (const head of this.system.heads) this.writers.wakeup(head.key, 0)
       if (!this.system.heads.length) this.writers.wakeup(this.bootstrap.key, 0)
 
+      // boot wakes every known head, but the cap leaves some without a session.
+      // after the admissions above only those heads are read from storage
+      await this.writers.restoreInactiveHeads()
+
+      // a peer active before the restore only heard the empty set
+      this._wakeup.announceReclaimed()
+
       await this._bump(true)
     } catch (err) {
       this._bootOnlineGuard.destroy(err)
