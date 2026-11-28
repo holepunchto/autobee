@@ -4,6 +4,10 @@ const ID = require('hypercore-id-encoding')
 const b4a = require('b4a')
 const encoding = require('../lib/encoding.js')
 const WriterFastForward = require('../lib/fast-forward.js')
+const Wakeup = require('../lib/wakeup.js')
+const ProtomuxWakeup = require('protomux-wakeup')
+const ReadyGuard = require('ready-guard')
+const { ActiveWriters } = require('../lib/writers.js')
 const { MAPPED_AUTOBEE_VERSION } = require('../lib/constants.js')
 const { WriterEncryption } = require('../lib/encryption.js')
 const {
@@ -76,7 +80,7 @@ function connect(t, ...autos) {
 // held in head discovery, so the only safe slot is busy when the refusal lands
 async function idleHeadRoom(
   t,
-  { trustResident = false, delayDiscovery = false, delayTrust = false } = {}
+  { trustResident = false, delayDiscovery = false, delayTrust = false, watcher = false } = {}
 ) {
   const admin = await create(t)
   const head = await create(t, admin.key)
@@ -89,6 +93,15 @@ async function idleHeadRoom(
     await admin.append(encode({ addWriter: ID.encode(w.local.key) }))
   }
   await replicateAndSync(admin, ...writers)
+
+  // at the shared history: knows the membership, never the branches below.
+  // the cap keeps it from opening a branch while it learns who the writers are
+  const peer = watcher ? await create(t, admin.key, { isTrusted: () => false }) : null
+  if (peer !== null) {
+    peer.writers.maxUntrustedWriters = 2
+    await replicateAndSync(admin, peer)
+    peer.writers.maxUntrustedWriters = 8
+  }
 
   // isolated branches, so the head is still a logical head when the resident moves on
   await head.append(encode({ from: 'head', n: 1 }))
@@ -170,6 +183,8 @@ async function idleHeadRoom(
     source,
     target,
     reader,
+    storage,
+    watcher: peer,
     pending,
     trustStarted,
     armTrust() {
@@ -199,11 +214,55 @@ function aheadHead(reader) {
   return null
 }
 
+// what a lookup would answer with, right now
+function advertisedHeads(auto) {
+  return [...auto._wakeup._getWakeupWriters()]
+}
+
+function advertisedIds(auto) {
+  return advertisedHeads(auto).map(({ key }) => b4a.toHex(key))
+}
+
+// reopen with the cap already set when boot decides what it may rehydrate.
+// the instance exists before ready, so a peer may connect while it boots
+function reopenAtCap(t, storage, key, cap) {
+  let auto = null
+
+  const ready = create(t, key, {
+    storage,
+    isTrusted() {
+      if (auto !== null && auto.writers !== null) auto.writers.maxUntrustedWriters = cap
+      return false
+    },
+    open(view, instance) {
+      auto = instance
+      return view
+    }
+  })
+
+  return { auto, ready }
+}
+
+// did replication and the drain get the writer applied, or did the peer never
+// hear of it
+async function applied(auto, key, target) {
+  try {
+    await waitFor(async () => (await length(auto, key)) === target, {
+      timeout: 5000,
+      interval: 25
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // the idle head has no progress to lose, so a refused dependency takes its slot
 // once no fast-forward can carry us past the cap. no update() polling: the
 // reader has to get there from replication and its own drain
 async function starveIdleHead(t, opts) {
-  const { admin, head, resident, source, reader, pending, release } = await idleHeadRoom(t, opts)
+  const { admin, head, resident, source, reader, storage, watcher, pending, release } =
+    await idleHeadRoom(t, opts)
   const cap = reader.writers.maxUntrustedWriters
   const headKey = head.local.key
   const residentKey = resident.local.key
@@ -266,6 +325,7 @@ async function starveIdleHead(t, opts) {
   )
   t.is(await length(reader, headKey), 1, 'the idle head stayed applied')
   t.ok(reader.system.isHead(headKey), 'the idle head is still a logical head')
+  t.absent(reader.writers.get(headKey), 'the reclaimed head has no Writer session')
   t.ok(reader.writers.size <= cap, 'the cap is respected')
   t.is(reader.stats.fastForwards, 0, 'no fast-forward landed')
   t.is(await reader.isLocalTrusted(), false, 'the reader stayed untrusted')
@@ -275,6 +335,8 @@ async function starveIdleHead(t, opts) {
   }
 
   await stop()
+
+  return { admin, head, resident, source, reader, storage, watcher, pending }
 }
 
 // an untrusted mirror at its cap: a filler holds the last slot, and the
@@ -470,6 +532,285 @@ test('untrusted-writers - a small-gap head and a slow discovery do not starve th
   await starveIdleHead(t, { trustResident: true, delayDiscovery: true })
 })
 
+// the reader reclaimed its only copy of an independent branch and kept it
+// applied, so it has to be able to say the head exists without holding a
+// session for it - every remote is disconnected now and the watcher only
+// stopped at the shared history before the branches
+test('untrusted-writers - a new peer applies a reclaimed head', async function (t) {
+  const { head, reader, watcher } = await starveIdleHead(t, {
+    trustResident: false,
+    delayDiscovery: true,
+    watcher: true
+  })
+
+  const cap = reader.writers.maxUntrustedWriters
+  const headKey = head.local.key
+  const headId = b4a.toHex(headKey)
+  const headLength = head.local.length
+
+  t.is(await length(reader, headKey), headLength, 'the reader kept the reclaimed branch')
+  t.ok(reader.system.isHead(headKey), 'the branch is still a logical head')
+  t.absent(reader.writers.get(headKey), 'the reader holds no session for it')
+  t.ok(reader.writers.size <= cap, 'the reader is within its cap')
+
+  const advertised = advertisedHeads(reader).find(({ key }) => b4a.toHex(key) === headId)
+  t.is(advertised && advertised.length, headLength, 'a lookup names the head at its applied length')
+
+  // the watcher stopped at the shared history: the membership and nothing of
+  // the branches, and no session left to find one with
+  t.is(await length(watcher, headKey), 0, 'the watcher has no branch yet')
+  t.absent(watcher.store.cores.map.has(headId), 'the watcher never opened the branch')
+
+  const stop = connect(t, reader, watcher)
+
+  // the only peer left is the reader, so whatever the watcher gets it serves
+  t.ok(await applied(watcher, headKey, headLength), 'the watcher found the reclaimed head')
+  t.ok(watcher.system.isHead(headKey), 'the watcher applied the reclaimed head')
+  t.ok(watcher.writers.get(headKey), 'the watcher downloaded it')
+  t.absent(reader.writers.get(headKey), 'the reader still has no session for it')
+  t.ok(reader.writers.size <= cap, 'the reader stayed within its cap')
+  t.is(
+    advertisedIds(reader).filter((id) => id === headId).length,
+    1,
+    'the reclaimed head is advertised once'
+  )
+
+  await stop()
+})
+
+// a restart leaves the reclaimed map empty. boot wakes every known head, but
+// the cap refuses most of them, so a head only storage holds has no session to
+// announce it. a peer connected before ready still has to apply it from this
+// sole copy, without a later hint or lookup
+test('untrusted-writers - a peer connected before boot applies a reclaimed head', async function (t) {
+  const { admin, head, reader, storage } = await starveIdleHead(t, {
+    trustResident: false,
+    delayDiscovery: true
+  })
+
+  const headKey = head.local.key
+  const headLength = head.local.length
+  const headId = b4a.toHex(headKey)
+  const cap = 1
+
+  t.absent(reader.writers.get(headKey), 'the head was reclaimed before the restart')
+  await reader.close()
+
+  // a fresh observer with the shared history and none of the branches
+  const observer = await create(t, admin.key, { isTrusted: () => false })
+  observer.writers.maxUntrustedWriters = 2
+  await replicateAndSync(admin, observer)
+  observer.writers.maxUntrustedWriters = 8
+
+  t.is(await length(observer, headKey), 0, 'the observer never saw the branch')
+  t.absent(observer.store.cores.map.has(headId), 'the observer never opened it')
+
+  const { auto: reopened, ready } = reopenAtCap(t, storage, admin.key, cap)
+
+  // hold the storage read that restores the sessionless heads so the observer
+  // is active, and has heard the peer-active bump, before boot restores them
+  let release
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const getInfos = reopened.store.storage.getInfos.bind(reopened.store.storage)
+  reopened.store.storage.getInfos = async (...args) => {
+    await held
+    return getInfos(...args)
+  }
+
+  const stop = connect(t, reopened, observer)
+
+  await waitFor(() => {
+    const session = reopened._wakeup._session
+    return session !== null && session.peers.some((peer) => peer.active)
+  })
+
+  t.absent(reopened._bootOnlineGuard.opened, 'boot has not finished advertising yet')
+  t.is(await length(observer, headKey), 0, 'the active observer has no branch before the restore')
+
+  release()
+  await ready
+  await reopened.flush()
+
+  t.is(reopened.writers.maxUntrustedWriters, cap, 'the cap was set before boot')
+  t.is(reopened.writers.size, 1, 'boot only opened the local writer')
+  t.absent(reopened.writers.get(headKey), 'boot did not reopen the reclaimed head')
+  t.ok(reopened.system.isHead(headKey), 'the reclaimed head is still applied')
+  t.is(await length(reopened, headKey), headLength, 'at its applied length')
+
+  const advertised = advertisedHeads(reopened).find(({ key }) => b4a.toHex(key) === headId)
+  t.is(advertised && advertised.length, headLength, 'the restarted reader advertises it')
+
+  // no manual hint or lookup: the peer connected before boot has to hear it
+  t.ok(await applied(observer, headKey, headLength), 'the observer applies it from the sole copy')
+  t.ok(observer.system.isHead(headKey), 'the observer applied the head')
+  t.absent(reopened.writers.get(headKey), 'the restarted reader still has no session')
+  t.is(reopened.writers.size, 1, 'the cap is enforced')
+
+  await stop()
+})
+
+// boot may only speak for a head it can serve: whole contiguous local blocks,
+// not a length the core merely knows about
+test('untrusted-writers - boot restores only locally held heads', async function (t) {
+  const held = crypto.keyPair().publicKey
+  const partial = crypto.keyPair().publicKey
+  const missing = crypto.keyPair().publicKey
+  const calls = []
+
+  const auto = {
+    local: { key: crypto.keyPair().publicKey },
+    system: {
+      heads: [
+        { key: held, length: 2 },
+        { key: partial, length: 2 },
+        { key: missing, length: 1 }
+      ]
+    },
+    store: {
+      storage: {
+        getInfos(keys) {
+          calls.push(keys)
+          return [{ hints: { contiguousLength: 2 } }, { hints: { contiguousLength: 1 } }, null]
+        }
+      }
+    },
+    emit() {}
+  }
+
+  const writers = new ActiveWriters(auto)
+  await writers.restoreInactiveHeads()
+
+  t.is(calls.length, 1, 'one storage query')
+  t.is(calls[0].length, 3, 'every inactive head was asked about')
+  t.alike([...writers.reclaimedHeads()], [{ key: held, length: 2 }], 'only the whole local head')
+})
+
+test('untrusted-writers - announce frames stay bounded', function (t) {
+  const heads = []
+  for (let i = 0; i < 10_000; i++) heads.push({ key: crypto.keyPair().publicKey, length: i + 1 })
+
+  const frames = []
+  const wakeup = Object.create(Wakeup.prototype)
+  wakeup._session = {
+    announce(peer, frame) {
+      frames.push(frame)
+    },
+    announceByStream(stream, frame) {
+      frames.push(frame)
+    }
+  }
+
+  const lengths = heads.map((head) => head.length)
+
+  wakeup._announce(wakeup._session, {}, heads)
+  t.alike(
+    frames.flat().map((head) => head.length),
+    lengths,
+    'a lookup delivers every head in order'
+  )
+  t.ok(
+    frames.every((frame) => frame.length <= 128),
+    'lookup frames are bounded'
+  )
+
+  frames.length = 0
+  wakeup._announceByStream(wakeup._session, {}, heads)
+  t.alike(
+    frames.flat().map((head) => head.length),
+    lengths,
+    'a push delivers every head in order'
+  )
+  t.ok(
+    frames.every((frame) => frame.length <= 128),
+    'push frames are bounded'
+  )
+})
+
+// a peer that is already connected and inactive gets no peer-active announce:
+// the lookup handler alone has to answer for a reclaimed head
+test('untrusted-writers - a lookup advertises a reclaimed head', async function (t) {
+  const { head, resident, reader, watcher } = await starveIdleHead(t, {
+    trustResident: false,
+    delayDiscovery: true,
+    watcher: true
+  })
+
+  const headKey = head.local.key
+  const headLength = head.local.length
+  const residentKey = resident.local.key
+
+  t.is(await length(watcher, headKey), 0, 'the watcher has no branch yet')
+  t.absent(watcher.store.cores.map.has(b4a.toHex(headKey)), 'the watcher never opened the branch')
+
+  // inactive when the stream opens, so the reader never fires onpeeractive
+  watcher._wakeup._session.inactive()
+
+  const stop = connect(t, reader, watcher)
+
+  await waitFor(async () => (await length(watcher, residentKey)) === 2, {
+    timeout: 5000,
+    interval: 25
+  })
+
+  t.is(await length(watcher, headKey), 0, 'no peer-active announce revealed it')
+
+  // the real lookup a peer sends after it moves
+  watcher._requestWakeup()
+
+  t.ok(await applied(watcher, headKey, headLength), 'the lookup led to the reclaimed head')
+  t.ok(watcher.system.isHead(headKey), 'the lookup produced the head')
+
+  watcher._wakeup._session.active()
+  await stop()
+})
+
+// once a newer node links the branch the head is no longer current: its
+// coordinates must stop being offered even though the reader still holds it
+test('untrusted-writers - a merged reclaimed head is not advertised', async function (t) {
+  const { head, resident, reader } = await starveIdleHead(t, {
+    trustResident: false,
+    delayDiscovery: true
+  })
+
+  const headKey = head.local.key
+  const headId = b4a.toHex(headKey)
+  const headLength = head.local.length
+  const residentKey = resident.local.key
+
+  t.ok(advertisedIds(reader).includes(headId), 'the reclaimed head is advertised')
+
+  // the resident catches up on the branch, then links it: one head remains
+  let stop = connect(t, resident, head)
+  await waitFor(async () => (await length(resident, headKey)) === headLength, {
+    timeout: 5000,
+    interval: 25
+  })
+  await resident.append(encode({ from: 'resident', n: 3 }))
+  await stop()
+
+  stop = connect(t, resident, reader)
+  await waitFor(async () => (await length(reader, residentKey)) === 3, {
+    timeout: 5000,
+    interval: 25
+  })
+  await stop()
+
+  t.absent(reader.system.isHead(headKey), 'the head merged into the resident')
+  t.is(await length(reader, headKey), headLength, 'the reader still holds the branch')
+
+  await reader.updated()
+  t.absent(
+    reader.writers.reclaimed?.has(headId),
+    'the merged head is dropped from the retained heads'
+  )
+  t.absent(advertisedIds(reader).includes(headId), 'the merged head is discarded')
+
+  const ids = advertisedIds(reader)
+  t.is(new Set(ids).size, ids.length, 'no head is advertised twice')
+})
+
 test('untrusted-writers - a delayed trusted lookup protects the head vouching for it', async function (t) {
   const room = await idleHeadRoom(t, { delayTrust: true })
   const { admin, head, resident, source, target, reader, pending } = room
@@ -657,4 +998,130 @@ test('untrusted-writers - reclaim protects the local writer and hinted heads', a
   writers.triggers.remove(entry)
   await reader.updated()
   if (admitted !== null) await admitted.close()
+})
+
+// a lookup deferred on boot keeps its session and peer. if either is gone by
+// the time boot resolves, the shared protocol must not speak from it
+test('untrusted-writers - a deferred lookup does not outlive its session', async function (t) {
+  const settle = () => new Promise((resolve) => setImmediate(resolve))
+  const key = crypto.keyPair().publicKey
+  const protocol = new ProtomuxWakeup()
+  t.teardown(() => protocol.destroy())
+
+  function deferred() {
+    const guard = new ReadyGuard()
+    const head = { key, length: 1 }
+    const auto = {
+      _bootOnlineGuard: guard,
+      writers: {
+        heads: () => [head],
+        reclaimedHeads: () => []
+      }
+    }
+
+    const wakeup = new Wakeup(auto, { wakeup: protocol })
+    wakeup.setCapability(key, null)
+
+    const session = wakeup._session
+    const sent = []
+    session.announce = (peer, frame) => sent.push(...frame)
+
+    const peer = {
+      active: true,
+      removed: false,
+      topic: session.topic,
+      wireInfo: { send() {} },
+      channel: {
+        closed: false,
+        destroyed: false,
+        close() {
+          this.closed = true
+        }
+      }
+    }
+    session.peers.push(peer)
+    session.handlers.onlookup({}, peer, session)
+
+    return { wakeup, guard, session, peer, sent }
+  }
+
+  // boot resolves while the lookup is still live: it has to be answered
+  {
+    const { wakeup, guard, sent } = deferred()
+    guard.exit()
+    await settle()
+    t.is(sent.length, 1, 'a live deferred lookup answers')
+    await wakeup.close()
+  }
+
+  // the owner closed while the lookup waited on boot
+  {
+    const { wakeup, guard, session, sent } = deferred()
+    await wakeup.close()
+    guard.exit()
+    await settle()
+    t.ok(session.destroyed, 'the close destroyed the session')
+    t.is(sent.length, 0, 'the closed wakeup did not answer')
+  }
+
+  // the capability session was replaced while the lookup waited on boot
+  {
+    const { wakeup, guard, session, sent } = deferred()
+    wakeup.setCapability(key, null)
+    guard.exit()
+    await settle()
+    t.ok(session.destroyed, 'the replacement destroyed the session')
+    t.is(sent.length, 0, 'the replaced session did not answer')
+    await wakeup.close()
+  }
+
+  // the peer disconnected while the lookup waited on boot
+  {
+    const { wakeup, guard, peer, sent } = deferred()
+    peer.channel.closed = true
+    guard.exit()
+    await settle()
+    t.is(sent.length, 0, 'the disconnected peer did not get an answer')
+    await wakeup.close()
+  }
+})
+
+test('untrusted-writers - a closed wakeup does not push restored heads', async function (t) {
+  const key = crypto.keyPair().publicKey
+  const protocol = new ProtomuxWakeup()
+  t.teardown(() => protocol.destroy())
+
+  const head = { key, length: 1 }
+  const auto = {
+    _bootOnlineGuard: new ReadyGuard(),
+    writers: {
+      heads: () => [head],
+      reclaimedHeads: () => [head]
+    }
+  }
+
+  const wakeup = new Wakeup(auto, { wakeup: protocol })
+  wakeup.setCapability(key, null)
+
+  const session = wakeup._session
+  const sent = []
+  session.announce = (peer, frame) => sent.push(...frame)
+  session.peers.push({
+    active: true,
+    removed: false,
+    topic: session.topic,
+    wireInfo: { send() {} },
+    channel: {
+      closed: false,
+      destroyed: false,
+      close() {
+        this.closed = true
+      }
+    }
+  })
+
+  await wakeup.close()
+  wakeup.announceReclaimed()
+
+  t.is(sent.length, 0, 'the closed wakeup pushed nothing')
 })
